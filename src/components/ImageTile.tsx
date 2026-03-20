@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Rnd } from 'react-rnd'
 import { useCanvasStore } from '../store/canvasStore'
 import { imageDrawUndoRegistry } from '../utils/imageDrawUndoRegistry'
+import { imageExportRegistry } from '../utils/imageExportRegistry'
+import { tileDomRegistry } from '../utils/tileDomRegistry'
 import type { ImageItem } from '../types'
 
 // ── Types & constants ─────────────────────────────────────────────────────────
@@ -38,6 +40,8 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const areaRef   = useRef<HTMLDivElement>(null)
+  const rootRef   = useRef<HTMLDivElement>(null)
+  const baseImgRef = useRef<HTMLImageElement>(null)
   const dragOriginsRef = useRef<Map<string, { x: number; y: number }> | null>(null)
 
   const [tool,  setTool]  = useState<DrawTool>('pencil')
@@ -70,6 +74,37 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
     imageDrawUndoRegistry.set(item.id, undoLastStroke)
     return () => { imageDrawUndoRegistry.delete(item.id) }
   }, [item.id, undoLastStroke])
+
+  const exportAnnotatedDataUrl = useCallback((): string => {
+    const canvas = canvasRef.current
+    const img = baseImgRef.current
+    if (!canvas || !img) return item.dataUrl
+    try {
+      const off = document.createElement('canvas')
+      off.width = canvas.width
+      off.height = canvas.height
+      const ctx = off.getContext('2d')
+      if (!ctx) return item.dataUrl
+      ctx.drawImage(img, 0, 0, off.width, off.height)
+      ctx.drawImage(canvas, 0, 0)
+      return off.toDataURL('image/png')
+    } catch {
+      return item.dataUrl
+    }
+  }, [item.dataUrl])
+
+  useEffect(() => {
+    imageExportRegistry.set(item.id, exportAnnotatedDataUrl)
+    return () => { imageExportRegistry.delete(item.id) }
+  }, [item.id, exportAnnotatedDataUrl])
+
+  useEffect(() => {
+    const el = rootRef.current
+    if (el) tileDomRegistry.set(item.id, el)
+    return () => {
+      tileDomRegistry.delete(item.id)
+    }
+  }, [item.id])
 
   // ── Keep canvas pixel dimensions in sync with CSS container ─────────────
   useEffect(() => {
@@ -229,6 +264,19 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
         }
         dragOriginsRef.current = origins
       }}
+      onDrag={(_, d) => {
+        const origins = dragOriginsRef.current
+        if (!origins || origins.size <= 1) return
+        const start = origins.get(item.id)
+        if (!start) return
+        const dx = d.x - start.x
+        const dy = d.y - start.y
+        for (const [id] of origins) {
+          if (id === item.id) continue
+          const el = tileDomRegistry.get(id)
+          if (el) el.style.transform = `translate(${dx}px, ${dy}px)`
+        }
+      }}
       onDragStop={(_, d) => {
         const origins = dragOriginsRef.current
         if (!origins || origins.size <= 1) {
@@ -246,6 +294,13 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
           updateItem(id, { x: pos.x + dx, y: pos.y + dy })
         }
         dragOriginsRef.current = null
+        requestAnimationFrame(() => {
+          for (const id of origins.keys()) {
+            if (id === item.id) continue
+            const el = tileDomRegistry.get(id)
+            if (el) el.style.transform = ''
+          }
+        })
       }}
       onResizeStop={(_, __, ref, ___, pos) =>
         updateItem(item.id, {
@@ -263,6 +318,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
       }}
     >
       <div
+        ref={rootRef}
         className={[
           'w-full h-full flex flex-col rounded-lg overflow-hidden shadow-2xl bg-zinc-900 border',
           isSelected ? 'border-emerald-500' : 'border-zinc-700/60',
@@ -342,6 +398,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
         {/* ── Image + drawing canvas ─────────────────────────────────── */}
         <div ref={areaRef} className="flex-1 relative overflow-hidden bg-black">
           <img
+            ref={baseImgRef}
             src={item.dataUrl}
             className="absolute inset-0 w-full h-full object-contain pointer-events-none select-none"
             draggable={false}

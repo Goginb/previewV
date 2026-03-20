@@ -6,6 +6,7 @@ import { NoteTile } from './NoteTile'
 import { ImageTile } from './ImageTile'
 import { videoRegistry } from '../utils/videoRegistry'
 import { imageDrawUndoRegistry } from '../utils/imageDrawUndoRegistry'
+import { imageExportRegistry } from '../utils/imageExportRegistry'
 import type { CanvasItem, ImageItem, NoteItem, VideoItem } from '../types'
 
 // ── File helpers ──────────────────────────────────────────────────────────────
@@ -199,19 +200,33 @@ export const Canvas: React.FC = () => {
       }
 
       if (e.ctrlKey && e.code === 'KeyC' && !isTypingTarget(e)) {
-        const ids = useCanvasStore.getState().selectedIds
+        const state = useCanvasStore.getState()
+        const ids = state.selectedIds
         if (ids.length) {
           e.preventDefault()
-          useCanvasStore.getState().copyItem(ids[0])
+          const selected = state.items.filter((i) => ids.includes(i.id))
+          const copies: CanvasItem[] = selected.map((item) => {
+            if (item.type === 'image') {
+              const exporter = imageExportRegistry.get(item.id)
+              const dataUrl = exporter ? exporter() : item.dataUrl
+              return { ...item, dataUrl }
+            }
+            return { ...item }
+          })
+          state.setClipboard(copies)
         }
         return
       }
 
       if (e.ctrlKey && e.code === 'KeyV' && !isTypingTarget(e)) {
-        const { clipboard } = useCanvasStore.getState()
-        if (clipboard) {
+        const state = useCanvasStore.getState()
+        if (state.clipboard.length) {
           e.preventDefault()
-          useCanvasStore.getState().pasteItem()
+          const { x: sx, y: sy } = lastMouseScreen.current
+          const { x: vx, y: vy, scale } = state.viewport
+          const worldX = (sx - vx) / scale
+          const worldY = (sy - vy) / scale
+          state.pasteClipboard(worldX, worldY)
         }
         return
       }

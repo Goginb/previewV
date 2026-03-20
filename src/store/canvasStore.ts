@@ -20,7 +20,7 @@ interface CanvasState {
   items: CanvasItem[]
   selectedIds: string[]
   viewport: Viewport
-  clipboard: CanvasItem | null
+  clipboard: CanvasItem[]
 
   _past: CanvasItem[][]
 
@@ -40,16 +40,17 @@ interface CanvasState {
   /** Align selected video + image tiles in a horizontal row (left → right) */
   layoutMediaRow: () => void
 
-  undo:     () => void
-  copyItem: (id: string) => void
-  pasteItem: (offsetX?: number, offsetY?: number) => void
+  undo: () => void
+
+  setClipboard: (items: CanvasItem[]) => void
+  pasteClipboard: (atX: number, atY: number, offsetX?: number, offsetY?: number) => void
 }
 
 export const useCanvasStore = create<CanvasState>((set, get) => ({
   items:        [],
   selectedIds:  [],
   viewport:     DEFAULT_VIEWPORT,
-  clipboard:    null,
+  clipboard:    [],
   _past:        [],
 
   addItem: (item) =>
@@ -138,21 +139,32 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       }
     }),
 
-  copyItem: (id) =>
-    set((state) => ({
-      clipboard: state.items.find((i) => i.id === id) ?? state.clipboard,
-    })),
+  setClipboard: (items) => set({ clipboard: items }),
 
-  pasteItem: (offsetX = 30, offsetY = 30) => {
+  pasteClipboard: (atX, atY, offsetX = 30, offsetY = 30) => {
     const { clipboard } = get()
-    if (!clipboard) return
-    const pasted: CanvasItem = {
-      ...clipboard,
-      id: `${clipboard.type}-paste-${Date.now()}`,
-      x:  clipboard.x + offsetX,
-      y:  clipboard.y + offsetY,
-    }
-    get().addItem(pasted)
-    get().selectOne(pasted.id)
+    if (!clipboard.length) return
+
+    const originX = Math.min(...clipboard.map((i) => i.x))
+    const originY = Math.min(...clipboard.map((i) => i.y))
+    const pasteIdPrefix = `paste-${Date.now()}`
+
+    const pastedIds: string[] = []
+    const pastedItems: CanvasItem[] = clipboard.map((src, idx) => {
+      const newId = `${src.type}-${pasteIdPrefix}-${idx}`
+      pastedIds.push(newId)
+      return {
+        ...src,
+        id: newId,
+        x: atX + offsetX + (src.x - originX),
+        y: atY + offsetY + (src.y - originY),
+      } as CanvasItem
+    })
+
+    set((state) => ({
+      _past: [...state._past.slice(-(MAX_HISTORY - 1)), [...state.items]],
+      items: [...state.items, ...pastedItems],
+      selectedIds: pastedIds,
+    }))
   },
 }))

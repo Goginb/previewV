@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef } from 'react'
 import { Rnd } from 'react-rnd'
 import { useCanvasStore } from '../store/canvasStore'
 import { videoRegistry } from '../utils/videoRegistry'
+import { tileDomRegistry } from '../utils/tileDomRegistry'
 import type { VideoItem } from '../types'
 
 interface VideoTileProps {
@@ -12,6 +13,7 @@ interface VideoTileProps {
 
 export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected }) => {
   const videoRef = useRef<HTMLVideoElement>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
   const updateItem = useCanvasStore((s) => s.updateItem)
   const selectOne   = useCanvasStore((s) => s.selectOne)
   const toggleSelect = useCanvasStore((s) => s.toggleSelect)
@@ -22,6 +24,14 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected })
     const video = videoRef.current
     if (video) videoRegistry.set(tile.id, video)
     return () => { videoRegistry.delete(tile.id) }
+  }, [tile.id])
+
+  useEffect(() => {
+    const el = rootRef.current
+    if (el) tileDomRegistry.set(tile.id, el)
+    return () => {
+      tileDomRegistry.delete(tile.id)
+    }
   }, [tile.id])
 
   const handleCanPlay = useCallback(() => {
@@ -49,6 +59,20 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected })
         }
         dragOriginsRef.current = origins
       }}
+      onDrag={(_, d) => {
+        const origins = dragOriginsRef.current
+        if (!origins || origins.size <= 1) return
+        const start = origins.get(tile.id)
+        if (!start) return
+        const dx = d.x - start.x
+        const dy = d.y - start.y
+
+        for (const [id] of origins) {
+          if (id === tile.id) continue
+          const el = tileDomRegistry.get(id)
+          if (el) el.style.transform = `translate(${dx}px, ${dy}px)`
+        }
+      }}
       onDragStop={(_, d) => {
         const origins = dragOriginsRef.current
         if (!origins || origins.size <= 1) {
@@ -66,6 +90,15 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected })
           updateItem(id, { x: pos.x + dx, y: pos.y + dy })
         }
         dragOriginsRef.current = null
+
+        // Remove temporary transforms after store update applied.
+        requestAnimationFrame(() => {
+          for (const id of origins.keys()) {
+            if (id === tile.id) continue
+            const el = tileDomRegistry.get(id)
+            if (el) el.style.transform = ''
+          }
+        })
       }}
       onResizeStop={(_, __, ref, ___, position) => {
         updateItem(tile.id, {
@@ -84,6 +117,7 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected })
       }}
     >
       <div
+        ref={rootRef}
         className={[
           'w-full h-full flex flex-col rounded-lg overflow-hidden shadow-2xl bg-zinc-900 border',
           isSelected ? 'border-indigo-500' : 'border-zinc-700/60',

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react'
 import { Rnd } from 'react-rnd'
 import { useCanvasStore } from '../store/canvasStore'
+import { tileDomRegistry } from '../utils/tileDomRegistry'
 import type { NoteItem } from '../types'
 
 interface NoteTileProps {
@@ -14,6 +15,7 @@ export const NoteTile: React.FC<NoteTileProps> = ({ note, scale, isSelected }) =
   const selectOne    = useCanvasStore((s) => s.selectOne)
   const toggleSelect = useCanvasStore((s) => s.toggleSelect)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
   const dragOriginsRef = useRef<Map<string, { x: number; y: number }> | null>(null)
 
   // Auto-focus the textarea when the note is first created (empty text)
@@ -22,6 +24,14 @@ export const NoteTile: React.FC<NoteTileProps> = ({ note, scale, isSelected }) =
       textareaRef.current?.focus()
     }
   }, [note.text])
+
+  useEffect(() => {
+    const el = rootRef.current
+    if (el) tileDomRegistry.set(note.id, el)
+    return () => {
+      tileDomRegistry.delete(note.id)
+    }
+  }, [note.id])
 
   return (
     <Rnd
@@ -44,6 +54,19 @@ export const NoteTile: React.FC<NoteTileProps> = ({ note, scale, isSelected }) =
         }
         dragOriginsRef.current = origins
       }}
+      onDrag={(_, d) => {
+        const origins = dragOriginsRef.current
+        if (!origins || origins.size <= 1) return
+        const start = origins.get(note.id)
+        if (!start) return
+        const dx = d.x - start.x
+        const dy = d.y - start.y
+        for (const [id] of origins) {
+          if (id === note.id) continue
+          const el = tileDomRegistry.get(id)
+          if (el) el.style.transform = `translate(${dx}px, ${dy}px)`
+        }
+      }}
       onDragStop={(_, d) => {
         const origins = dragOriginsRef.current
         if (!origins || origins.size <= 1) {
@@ -61,6 +84,14 @@ export const NoteTile: React.FC<NoteTileProps> = ({ note, scale, isSelected }) =
           updateItem(id, { x: pos.x + dx, y: pos.y + dy })
         }
         dragOriginsRef.current = null
+
+        requestAnimationFrame(() => {
+          for (const id of origins.keys()) {
+            if (id === note.id) continue
+            const el = tileDomRegistry.get(id)
+            if (el) el.style.transform = ''
+          }
+        })
       }}
       onResizeStop={(_, __, ref, ___, position) => {
         updateItem(note.id, {
@@ -79,6 +110,7 @@ export const NoteTile: React.FC<NoteTileProps> = ({ note, scale, isSelected }) =
       }}
     >
       <div
+        ref={rootRef}
         className={[
           'w-full h-full flex flex-col rounded-lg overflow-hidden shadow-2xl',
           'bg-amber-950/80 border',
