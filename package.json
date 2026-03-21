@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "clean": "node -e \"try{require('fs').rmSync('out',{recursive:true,force:true})}catch(e){}\"",
     "preview": "electron-vite preview",
     "build:win": "npm run build && electron-builder build --win"
   },
@@ -39,6 +40,13 @@
     },
     "files": [
       "out/**/*"
+    ],
+    "fileAssociations": [
+      {
+        "ext": "previewv",
+        "name": "PreviewV project",
+        "role": "Viewer"
+      }
     ],
     "win": {
       "target": [

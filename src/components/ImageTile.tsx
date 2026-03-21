@@ -4,6 +4,7 @@ import { useCanvasStore } from '../store/canvasStore'
 import { imageDrawUndoRegistry } from '../utils/imageDrawUndoRegistry'
 import { imageExportRegistry } from '../utils/imageExportRegistry'
 import { tileDomRegistry } from '../utils/tileDomRegistry'
+import { imageDrawRedoRegistry } from '../utils/imageDrawRedoRegistry'
 import type { ImageItem } from '../types'
 
 // ── Types & constants ─────────────────────────────────────────────────────────
@@ -56,6 +57,8 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
 
   // Per-stroke undo: each entry is the canvas state BEFORE that stroke
   const undoStack = useRef<ImageData[]>([])
+  // Per-stroke redo: each entry is the canvas state AFTER an undo (i.e. the state to restore on redo)
+  const redoStack = useRef<ImageData[]>([])
 
   // ── Drawing undo (exposed via registry) ─────────────────────────────────
   const undoLastStroke = useCallback((): boolean => {
@@ -63,7 +66,24 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
     const canvas = canvasRef.current
     const prev   = undoStack.current.pop()
     if (ctx && canvas && prev) {
+      // For redo we need the current state (before applying `prev`)
+      const cur = ctx.getImageData(0, 0, canvas.width, canvas.height)
+      redoStack.current.push(cur)
       ctx.putImageData(prev, 0, 0)
+      return true
+    }
+    return false
+  }, [])
+
+  const redoLastStroke = useCallback((): boolean => {
+    const ctx    = canvasRef.current?.getContext('2d')
+    const canvas = canvasRef.current
+    const next   = redoStack.current.pop()
+    if (ctx && canvas && next) {
+      // For undo we need current state (before applying redo snapshot)
+      const cur = ctx.getImageData(0, 0, canvas.width, canvas.height)
+      undoStack.current.push(cur)
+      ctx.putImageData(next, 0, 0)
       return true
     }
     return false
@@ -72,7 +92,11 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
   // Register / unregister when mounted / unmounted or id changes
   useEffect(() => {
     imageDrawUndoRegistry.set(item.id, undoLastStroke)
-    return () => { imageDrawUndoRegistry.delete(item.id) }
+    imageDrawRedoRegistry.set(item.id, redoLastStroke)
+    return () => {
+      imageDrawUndoRegistry.delete(item.id)
+      imageDrawRedoRegistry.delete(item.id)
+    }
   }, [item.id, undoLastStroke])
 
   const exportAnnotatedDataUrl = useCallback((): string => {
@@ -153,6 +177,9 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
     const canvas = canvasRef.current
     const ctx    = canvas?.getContext('2d')
     if (!canvas || !ctx) return
+
+    // New stroke: clear redo branch
+    redoStack.current = []
 
     // Snapshot the canvas state BEFORE this stroke (for undo)
     const snap = ctx.getImageData(0, 0, canvas.width, canvas.height)
@@ -238,6 +265,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
       updateItem(item.id, { dataUrl: off.toDataURL('image/png') })
       canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height)
       undoStack.current = []
+      redoStack.current = []
     }
     img.src = item.dataUrl
   }, [item.id, item.dataUrl, updateItem])

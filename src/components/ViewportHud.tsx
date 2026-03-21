@@ -1,22 +1,52 @@
 import React from 'react'
 import { useCanvasStore } from '../store/canvasStore'
 
+/** Visible proof that the renderer bundle is the one Vite is serving / you rebuilt. */
+const RENDERER_BUILD_ID = 'pv-2025-03-20-help-shortcuts'
+
 export const ViewportHud: React.FC = () => {
   const scale = useCanvasStore((s) => s.viewport.scale)
   const resetViewport = useCanvasStore((s) => s.resetViewport)
+  const frameAllItemsInViewport = useCanvasStore((s) => s.frameAllItemsInViewport)
+
+  const runFrameAll = () => {
+    const el = document.getElementById('previewv-canvas-root')
+    if (!el) return
+    const { width, height } = el.getBoundingClientRect()
+    frameAllItemsInViewport(width, height)
+  }
+
+  const modeLabel = import.meta.env.DEV ? 'DEV' : 'PROD'
 
   return (
-    <div className="absolute bottom-4 right-4 flex items-center gap-2 pointer-events-auto select-none z-50">
-      <span className="text-xs text-zinc-500 tabular-nums">
-        {Math.round(scale * 100)}%
-      </span>
-      <button
-        onClick={resetViewport}
-        title="Reset view  (double-click canvas)"
-        className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors px-2 py-1 rounded bg-zinc-900/80 border border-zinc-700/50 hover:border-zinc-600"
-      >
-        Reset view
-      </button>
+    <div className="fixed bottom-4 right-4 flex flex-col items-end gap-1 pointer-events-auto select-none z-[1000] max-w-[min(100vw-2rem,22rem)]">
+      <div className="flex items-center gap-2 flex-wrap justify-end">
+        <span
+          className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-zinc-700/80 bg-zinc-900/90 text-zinc-400"
+          title="If this line never changes after edits, you are not running this source tree / fresh build."
+        >
+          <span className={import.meta.env.DEV ? 'text-emerald-400' : 'text-amber-400'}>{modeLabel}</span>
+          <span className="text-zinc-500"> · </span>
+          <span className="text-zinc-500">{RENDERER_BUILD_ID}</span>
+        </span>
+        <span className="text-xs text-zinc-500 tabular-nums">{Math.round(scale * 100)}%</span>
+        <button
+          type="button"
+          onClick={runFrameAll}
+          title="Fit all tiles in view (A)"
+          className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors px-2 py-1 rounded bg-zinc-900/80 border border-zinc-700/50 hover:border-zinc-600"
+        >
+          Fit all (A)
+        </button>
+        <button
+          type="button"
+          onClick={resetViewport}
+          title="Reset view (double-click canvas)"
+          className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors px-2 py-1 rounded bg-zinc-900/80 border border-zinc-700/50 hover:border-zinc-600"
+        >
+          Reset view
+        </button>
+      </div>
     </div>
   )
 }

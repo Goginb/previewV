@@ -1,12 +1,15 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useCanvasStore } from '../store/canvasStore'
 import { useCanvasPanZoom, spacePanActiveRef } from '../hooks/useCanvasPanZoom'
+import { useVideoPlaybackManager } from '../hooks/useVideoPlaybackManager'
 import { VideoTile } from './VideoTile'
 import { NoteTile } from './NoteTile'
 import { ImageTile } from './ImageTile'
 import { videoRegistry } from '../utils/videoRegistry'
 import { imageDrawUndoRegistry } from '../utils/imageDrawUndoRegistry'
+import { imageDrawRedoRegistry } from '../utils/imageDrawRedoRegistry'
 import { imageExportRegistry } from '../utils/imageExportRegistry'
+import { flushImageAnnotations } from '../utils/flushImageAnnotations'
 import type { CanvasItem, ImageItem, NoteItem, VideoItem } from '../types'
 
 // ── File helpers ──────────────────────────────────────────────────────────────
@@ -42,8 +45,30 @@ const NOTE_H  = 160
 const MARQUEE_CLICK_THRESHOLD = 4
 
 function isTypingTarget(e: KeyboardEvent): boolean {
-  const tag = (e.target as HTMLElement)?.tagName
-  return tag === 'TEXTAREA' || tag === 'INPUT'
+  const el = e.target as HTMLElement | null
+  if (!el) return false
+  if (el.isContentEditable) return true
+  const tag = el.tagName
+  if (tag === 'TEXTAREA') return true
+  if (tag === 'SELECT') return true
+  if (tag === 'INPUT') {
+    const type = (el as HTMLInputElement).type
+    // Sliders / toggles are not text fields — canvas shortcuts must still work
+    if (
+      type === 'range' ||
+      type === 'checkbox' ||
+      type === 'radio' ||
+      type === 'button' ||
+      type === 'submit' ||
+      type === 'reset' ||
+      type === 'file' ||
+      type === 'color'
+    ) {
+      return false
+    }
+    return true
+  }
+  return false
 }
 
 function captureVideoFrame(video: HTMLVideoElement): string {
@@ -82,9 +107,22 @@ export const Canvas: React.FC = () => {
   const setSelection    = useCanvasStore((s) => s.setSelection)
   const layoutMediaRow  = useCanvasStore((s) => s.layoutMediaRow)
   const resetViewport   = useCanvasStore((s) => s.resetViewport)
+  const frameAllItemsInViewport = useCanvasStore((s) => s.frameAllItemsInViewport)
 
   const containerRef    = useRef<HTMLDivElement>(null)
   const lastMouseScreen = useRef({ x: 0, y: 0 })
+
+  // Ensure paste has a sane default position even if the user hasn't moved
+  // the mouse after selecting items.
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    lastMouseScreen.current = {
+      x: rect.width / 2,
+      y: rect.height / 2,
+    }
+  }, [])
 
   /** Screen-space marquee: relative to container top-left */
   const [marquee, setMarquee] = useState<{ ax: number; ay: number; bx: number; by: number } | null>(null)
@@ -96,6 +134,7 @@ export const Canvas: React.FC = () => {
   } | null>(null)
 
   useCanvasPanZoom(containerRef)
+  useVideoPlaybackManager(containerRef)
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const rect = containerRef.current?.getBoundingClientRect()
@@ -103,6 +142,91 @@ export const Canvas: React.FC = () => {
       x: e.clientX - (rect?.left ?? 0),
       y: e.clientY - (rect?.top  ?? 0),
     }
+  }, [])
+
+  // ── Edit menu commands ────────────────────────────────────────────────
+  useEffect(() => {
+    const onEditCommand = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { command: string }
+      const state = useCanvasStore.getState()
+
+      if (detail.command === 'undo') {
+        const ids = state.selectedIds
+        for (const id of ids) {
+          const drawUndo = imageDrawUndoRegistry.get(id)
+          if (drawUndo && drawUndo()) return
+        }
+        state.undo()
+        return
+      }
+
+      if (detail.command === 'redo') {
+        const ids = state.selectedIds
+        for (const id of ids) {
+          const drawRedo = imageDrawRedoRegistry.get(id)
+          if (drawRedo && drawRedo()) return
+        }
+        state.redo()
+        return
+      }
+
+      if (detail.command === 'delete') {
+        if (state.selectedIds.length) state.removeItems(state.selectedIds)
+        return
+      }
+
+      if (detail.command === 'copy') {
+        const ids = state.selectedIds
+        if (!ids.length) return
+        const selected = state.items.filter((i) => ids.includes(i.id))
+        const copies: CanvasItem[] = selected.map((item) => {
+          if (item.type === 'image') {
+            const exporter = imageExportRegistry.get(item.id)
+            const dataUrl = exporter ? exporter() : item.dataUrl
+            return { ...item, dataUrl }
+          }
+          return { ...item }
+        })
+        state.setClipboard(copies)
+        return
+      }
+
+      if (detail.command === 'paste') {
+        if (!state.clipboard.length) return
+        const { x: sx, y: sy } = lastMouseScreen.current
+        const { x: vx, y: vy, scale } = state.viewport
+        const worldX = (sx - vx) / scale
+        const worldY = (sy - vy) / scale
+        state.pasteClipboard(worldX, worldY)
+        return
+      }
+
+      if (detail.command === 'select-all') {
+        const ae = document.activeElement as HTMLElement | null
+        if (ae) {
+          if (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT') {
+            const inp = ae as HTMLInputElement | HTMLTextAreaElement
+            inp.focus()
+            inp.select()
+            return
+          }
+          if (ae.isContentEditable) {
+            try {
+              document.execCommand('selectAll')
+            } catch {
+              /* ignore */
+            }
+            return
+          }
+        }
+        const { items, setSelection } = useCanvasStore.getState()
+        setSelection(items.map((i) => i.id))
+        return
+      }
+    }
+
+    window.addEventListener('app-edit-command', onEditCommand)
+    return () => window.removeEventListener('app-edit-command', onEditCommand)
   }, [])
 
   // ── Marquee: window listeners while dragging ─────────────────────────────
@@ -182,13 +306,73 @@ export const Canvas: React.FC = () => {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
 
+      // ── Project hotkeys ──────────────────────────────────────────────
+      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyO' && !e.shiftKey && !isTypingTarget(e)) {
+        e.preventDefault()
+        window.dispatchEvent(
+          new CustomEvent('project-menu-action', { detail: { action: 'open' } }),
+        )
+        return
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyS' && e.shiftKey && !isTypingTarget(e)) {
+        e.preventDefault()
+        const projectAPI = (window as any).electronAPI?.projectAPI
+        if (!projectAPI) return
+        const state = useCanvasStore.getState()
+        flushImageAnnotations()
+        const projectData = state.getProjectDataForSave()
+        projectAPI
+          .saveProjectAs({ projectData })
+          .then((res: any) => {
+            if (!res) return
+            state.markSaved(res.path)
+          })
+          .catch((err: any) => alert(err?.message ?? String(err)))
+        return
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyS' && !e.shiftKey && !isTypingTarget(e)) {
+        e.preventDefault()
+        const projectAPI = (window as any).electronAPI?.projectAPI
+        if (!projectAPI) return
+        const state = useCanvasStore.getState()
+        flushImageAnnotations()
+        const projectData = state.getProjectDataForSave()
+        projectAPI
+          .saveProject({ projectData, path: state.currentProjectPath })
+          .then((res: any) => {
+            if (!res) return
+            state.markSaved(res.path)
+          })
+          .catch((err: any) => alert(err?.message ?? String(err)))
+        return
+      }
+
       if (e.code === 'Delete' && !isTypingTarget(e)) {
         const ids = useCanvasStore.getState().selectedIds
         if (ids.length) removeItems(ids)
         return
       }
 
-      if (e.ctrlKey && e.code === 'KeyZ' && !isTypingTarget(e)) {
+      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyA' && !e.shiftKey && !isTypingTarget(e)) {
+        e.preventDefault()
+        const { items, setSelection } = useCanvasStore.getState()
+        setSelection(items.map((i) => i.id))
+        return
+      }
+
+      // A — zoom/pan to show every tile in the canvas area
+      if (e.code === 'KeyA' && !e.ctrlKey && !e.metaKey && !e.altKey && !isTypingTarget(e)) {
+        e.preventDefault()
+        const el = containerRef.current
+        if (!el) return
+        const { width, height } = el.getBoundingClientRect()
+        frameAllItemsInViewport(width, height)
+        return
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ' && !e.shiftKey && !isTypingTarget(e)) {
         e.preventDefault()
         const ids = useCanvasStore.getState().selectedIds
         for (const id of ids) {
@@ -199,11 +383,22 @@ export const Canvas: React.FC = () => {
         return
       }
 
-      if (e.ctrlKey && e.code === 'KeyC' && !isTypingTarget(e)) {
+      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ' && e.shiftKey && !isTypingTarget(e)) {
+        e.preventDefault()
+        const ids = useCanvasStore.getState().selectedIds
+        for (const id of ids) {
+          const drawRedo = imageDrawRedoRegistry.get(id)
+          if (drawRedo && drawRedo()) return
+        }
+        useCanvasStore.getState().redo()
+        return
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyC' && !isTypingTarget(e)) {
         const state = useCanvasStore.getState()
         const ids = state.selectedIds
+        e.preventDefault()
         if (ids.length) {
-          e.preventDefault()
           const selected = state.items.filter((i) => ids.includes(i.id))
           const copies: CanvasItem[] = selected.map((item) => {
             if (item.type === 'image') {
@@ -218,16 +413,23 @@ export const Canvas: React.FC = () => {
         return
       }
 
-      if (e.ctrlKey && e.code === 'KeyV' && !isTypingTarget(e)) {
+      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyV' && !isTypingTarget(e)) {
         const state = useCanvasStore.getState()
+        e.preventDefault()
         if (state.clipboard.length) {
-          e.preventDefault()
           const { x: sx, y: sy } = lastMouseScreen.current
           const { x: vx, y: vy, scale } = state.viewport
           const worldX = (sx - vx) / scale
           const worldY = (sy - vy) / scale
           state.pasteClipboard(worldX, worldY)
         }
+        return
+      }
+
+      // Shift+D — duplicate selection (offset copy, new ids)
+      if (e.shiftKey && e.code === 'KeyD' && !e.ctrlKey && !e.metaKey && !isTypingTarget(e)) {
+        e.preventDefault()
+        useCanvasStore.getState().duplicateSelection()
         return
       }
 
@@ -238,7 +440,7 @@ export const Canvas: React.FC = () => {
         return
       }
 
-      if (e.ctrlKey && e.code === 'KeyN' && !isTypingTarget(e)) {
+      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyN' && !isTypingTarget(e)) {
         e.preventDefault()
         const { x: sx, y: sy } = lastMouseScreen.current
         const { x: vx, y: vy, scale } = useCanvasStore.getState().viewport
@@ -294,9 +496,9 @@ export const Canvas: React.FC = () => {
       }
     }
 
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [addItem, removeItems, selectOne, layoutMediaRow])
+    window.addEventListener('keydown', handleKeyDown, true)
+    return () => window.removeEventListener('keydown', handleKeyDown, true)
+  }, [addItem, removeItems, selectOne, layoutMediaRow, frameAllItemsInViewport])
 
   const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault()
@@ -374,6 +576,7 @@ export const Canvas: React.FC = () => {
 
   return (
     <div
+      id="previewv-canvas-root"
       ref={containerRef}
       data-canvas-bg="true"
       className="relative w-full h-full overflow-hidden bg-zinc-950 outline-none"
@@ -407,11 +610,8 @@ export const Canvas: React.FC = () => {
       )}
 
       <div
-        className="pointer-events-none"
+        className="pointer-events-none absolute inset-0 overflow-visible"
         style={{
-          position:       'absolute',
-          top: 0, left: 0,
-          width: 0, height: 0,
           transformOrigin: '0 0',
           transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`,
         }}
@@ -438,7 +638,7 @@ export const Canvas: React.FC = () => {
             <p className="text-base font-medium tracking-wide">Drop video files here</p>
             <p className="text-sm mt-1 opacity-60">MP4 · WebM · MOV · MKV and more</p>
             <p className="text-xs mt-3 opacity-40">
-              Drag to select · Ctrl+drag add · L — row · Ctrl+N / F3
+              Ctrl+A — all · A — fit all · Ctrl+O — open · Drag · L — row · Ctrl+N / F3
             </p>
           </div>
         </div>
