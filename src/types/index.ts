@@ -21,8 +21,13 @@ export interface ImageItem extends BaseItem {
   type: 'image'
   /** Base image as data URL (updated in-place when baking) */
   dataUrl: string
-  /** ID of the source video tile, for reference */
+  /** ID плитки-видео для кадра F3; пустая строка — импорт из файла */
   sourceVideoId: string
+  /** Исходный размер пикселей (для пропорций плитки) */
+  naturalWidth?: number
+  naturalHeight?: number
+  /** Имя файла при импорте */
+  fileName?: string
 }
 
 export type CanvasItem = VideoItem | NoteItem | ImageItem
@@ -37,6 +42,10 @@ export type ItemUpdate = {
   text?: string
   // ImageItem
   dataUrl?: string
+  naturalWidth?: number
+  naturalHeight?: number
+  fileName?: string
+  sourceVideoId?: string
 }
 
 // Backward-compat alias

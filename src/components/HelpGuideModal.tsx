@@ -2,41 +2,43 @@ import React from 'react'
 
 const SECTIONS: { title: string; body: string[] }[] = [
   {
-    title: 'Проекты',
+    title: 'Projects',
     body: [
-      'Файл проекта — с расширением .previewv (JSON). В нём сохраняются плитки на холсте, масштаб и панорамирование.',
-      'Открыть: меню «Файл → Открыть…» или Ctrl+O. Недавние проекты — в том же меню.',
-      'Сохранить: Ctrl+S; «Сохранить как…» — Ctrl+Shift+S. При первом сохранении укажите имя файла.',
-      'Закрыть проект без выхода из приложения: «Файл → Закрыть проект» (Ctrl+W).',
-      'При закрытии окна или смене проекта, если есть несохранённые изменения, будет запрос.',
+      'Project files use the .previewv extension (JSON): tiles, pan/zoom, and viewport.',
+      'Open: File → Open… or Ctrl+O. Recent files are under File.',
+      'Save: Ctrl+S; Save As: Ctrl+Shift+S. Pick a filename on first save.',
+      'Close project without quitting: File → Close project (Ctrl+W).',
+      'When closing the window or switching projects, unsaved changes prompt Save / Don’t save / Cancel.',
     ],
   },
   {
-    title: 'Видео и изображения',
+    title: 'Video & images',
     body: [
-      'Перетащите видеофайлы (например .mp4) на холст или используйте системный диалог выбора файла.',
-      'Кадр из видео: выберите плитку видео и нажмите F3 — рядом появится снимок (изображение).',
-      'Рисование по изображению: откройте плитку, рисуйте; отмена штриха — Ctrl+Z в контексте плитки.',
+      'Drop video or images on the canvas: JPEG, PNG, TIFF in-app; EXR/DPX via ffmpeg (needs a local file path when dragging).',
+      'Tile sizes follow the aspect ratio of the source video or image.',
+      'Video frame: select a video tile and press F3 to create an image tile.',
+      'Drawing: select an image tile and press F4 (edit mode). The tile expands to the drawing area; F4 again or Done exits. Without F4, drawing is off.',
     ],
   },
   {
-    title: 'Холст и выделение',
+    title: 'Canvas & selection',
     body: [
-      'Панорамирование: зажмите пробел и тяните мышью, или колёсико/тачпад.',
-      'Масштаб: колесо с Ctrl (или жесты тачпада).',
-      'Выделить все плитки: Ctrl+A (в полях ввода заметки Ctrl+A выделяет текст).',
-      'Рамка выделения: тяните мышью по пустому месту. Shift+клик — добавить к выделению.',
-      'Подогнать все плитки в кадр: клавиша A (без Ctrl) или кнопка «Fit all».',
+      'Pan: hold Space and drag, or scroll / trackpad.',
+      'Zoom: mouse wheel with Ctrl (or trackpad gestures).',
+      'Select all tiles: Ctrl+A (in a note field, Ctrl+A selects text).',
+      'Marquee: drag on empty canvas. Shift+click to add to selection.',
+      'Fit everything: A (without Ctrl) or the Fit all button.',
     ],
   },
   {
-    title: 'Горячие клавиши (кратко)',
+    title: 'Shortcuts',
     body: [
-      'Ctrl+O — открыть проект · Ctrl+S — сохранить · Ctrl+Shift+S — сохранить как',
-      'Ctrl+W — закрыть проект · Ctrl+A — выделить всё на холсте',
-      'Ctrl+Z / Ctrl+Shift+Z — отмена / повтор · Ctrl+C / Ctrl+V — копировать / вставить плитки',
-      'Delete — удалить выделенное · Shift+D — дублировать выделение · L — выровнять выбранные видео/картинки в ряд',
-      'Ctrl+N — новая заметка · F3 — кадр из выбранного видео',
+      'Ctrl+O — open · Ctrl+S — save · Ctrl+Shift+S — save as',
+      'Ctrl+W — close project · Ctrl+A — select all tiles',
+      'Ctrl+Z / Ctrl+Shift+Z — undo / redo · Ctrl+C / Ctrl+V — copy / paste tiles',
+      'Delete — remove selection · Shift+D — duplicate · L — row layout for video/image tiles',
+      'Ctrl+N — new note · F3 — frame from video · F4 — draw on selected image',
+      'Alt+Shift+A — pin window (always on top) · Alt+Shift+B — unpin (also View menu)',
     ],
   },
 ]
@@ -55,14 +57,14 @@ export const HelpGuideModal: React.FC<{ onClose: () => void }> = ({ onClose }) =
       <div className="w-full max-w-lg max-h-[min(85vh,36rem)] flex flex-col rounded-xl border border-zinc-700 bg-zinc-950 shadow-2xl">
         <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-zinc-800 shrink-0">
           <h2 id="help-guide-title" className="text-base font-semibold text-zinc-100">
-            Справка — PreviewV
+            Help — PreviewV
           </h2>
           <button
             type="button"
             onClick={onClose}
             className="text-sm px-3 py-1.5 rounded-lg bg-zinc-800 text-zinc-200 hover:bg-zinc-700 border border-zinc-600"
           >
-            Закрыть
+            Close
           </button>
         </div>
         <div className="overflow-y-auto px-4 py-3 text-sm text-zinc-300 space-y-5">

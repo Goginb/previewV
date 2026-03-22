@@ -72,7 +72,7 @@ npm install
 npm run build:win
 ```
 
-Результат: **`release\PreviewV Setup 0.1.0.exe`** (номер версии берётся из `package.json`).
+Результат: **`release\PreviewV Setup 0.2.0.exe`** (номер версии берётся из `package.json`).
 
 ### Portable (без установки)
 

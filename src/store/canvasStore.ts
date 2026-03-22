@@ -29,6 +29,10 @@ interface CanvasState {
   isDirty: boolean
   projectMeta: ProjectMeta | null
 
+  /** Режим рисования на плитке-картинке (F4) */
+  imageEditModeId: string | null
+  setImageEditModeId: (id: string | null) => void
+
   _past: CanvasItem[][]
   _future: CanvasItem[][]
 
@@ -74,6 +78,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   currentProjectPath: null,
   isDirty: false,
   projectMeta: null,
+  imageEditModeId: null,
+
+  setImageEditModeId: (id) => set({ imageEditModeId: id }),
+
   _past:        [],
   _future:      [],
 
@@ -98,6 +106,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       _past:      [...state._past.slice(-(MAX_HISTORY - 1)), [...state.items]],
       items:      state.items.filter((item) => item.id !== id),
       selectedIds: state.selectedIds.filter((sid) => sid !== id),
+      imageEditModeId: state.imageEditModeId === id ? null : state.imageEditModeId,
       isDirty: true,
       _future: [],
     })),
@@ -109,6 +118,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       _past:      [...state._past.slice(-(MAX_HISTORY - 1)), [...state.items]],
       items:      state.items.filter((item) => !idSet.has(item.id)),
       selectedIds: state.selectedIds.filter((sid) => !idSet.has(sid)),
+      imageEditModeId:
+        state.imageEditModeId && idSet.has(state.imageEditModeId) ? null : state.imageEditModeId,
       isDirty: true,
       _future: [],
     }))
@@ -314,6 +325,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       _future: [],
       currentProjectPath: projectPath,
       projectMeta: project.meta,
+      imageEditModeId: null,
       isDirty: false,
     })
   },

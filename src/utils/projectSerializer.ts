@@ -32,6 +32,20 @@ function mustBeString(v: unknown, field: string): string {
   return v
 }
 
+function optionalNumber(v: unknown, field: string): number | undefined {
+  if (v === undefined) return undefined
+  if (typeof v !== 'number' || Number.isNaN(v)) {
+    throw new Error(`Invalid project: field "${field}" must be a number`)
+  }
+  return v
+}
+
+function optionalString(v: unknown, _field: string): string | undefined {
+  if (v === undefined) return undefined
+  if (typeof v !== 'string') return undefined
+  return v
+}
+
 function normalizeToForwardSlashes(path: string): string {
   return path.replace(/\\/g, '/')
 }
@@ -89,8 +103,26 @@ function validateItem(raw: unknown): ProjectCanvasItem {
 
   if (type === 'image') {
     const dataUrl = mustBeString(raw.dataUrl, 'item.dataUrl')
-    const sourceVideoId = mustBeString(raw.sourceVideoId, 'item.sourceVideoId')
-    return { type: 'image', id, x, y, width, height, dataUrl, sourceVideoId }
+    const sourceVideoId =
+      raw.sourceVideoId === undefined
+        ? ''
+        : mustBeString(raw.sourceVideoId, 'item.sourceVideoId')
+    const naturalWidth = optionalNumber(raw.naturalWidth, 'item.naturalWidth')
+    const naturalHeight = optionalNumber(raw.naturalHeight, 'item.naturalHeight')
+    const fileName = optionalString(raw.fileName, 'item.fileName')
+    return {
+      type: 'image',
+      id,
+      x,
+      y,
+      width,
+      height,
+      dataUrl,
+      sourceVideoId,
+      ...(naturalWidth !== undefined ? { naturalWidth } : {}),
+      ...(naturalHeight !== undefined ? { naturalHeight } : {}),
+      ...(fileName !== undefined ? { fileName } : {}),
+    }
   }
 
   if (type === 'note') {
@@ -144,6 +176,9 @@ export function serializeProject(params: {
         height: item.height,
         dataUrl: item.dataUrl,
         sourceVideoId: item.sourceVideoId,
+        ...(item.naturalWidth !== undefined ? { naturalWidth: item.naturalWidth } : {}),
+        ...(item.naturalHeight !== undefined ? { naturalHeight: item.naturalHeight } : {}),
+        ...(item.fileName !== undefined ? { fileName: item.fileName } : {}),
       }
       return v
     }
@@ -206,6 +241,9 @@ export function deserializeProject(raw: unknown): DeserializedProject {
         height: validated.height,
         dataUrl: validated.dataUrl,
         sourceVideoId: validated.sourceVideoId,
+        ...(validated.naturalWidth !== undefined ? { naturalWidth: validated.naturalWidth } : {}),
+        ...(validated.naturalHeight !== undefined ? { naturalHeight: validated.naturalHeight } : {}),
+        ...(validated.fileName !== undefined ? { fileName: validated.fileName } : {}),
       }
       return img
     }

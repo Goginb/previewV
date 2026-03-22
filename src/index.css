@@ -15,6 +15,9 @@ body,
   padding: 0;
   width: 100%;
   height: 100%;
+  /* В Electron иногда цепочка % даёт 0 — fallback на вьюпорт */
+  min-height: 100vh;
+  min-height: 100dvh;
   overflow: hidden;
   user-select: none;
 }

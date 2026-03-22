@@ -1,8 +1,13 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 import { useCanvasStore } from '../store/canvasStore'
+import {
+  getVideoPlaybackSuspended,
+  setVideoPlaybackSuspended,
+  subscribeVideoPlaybackSuspended,
+} from '../utils/videoGlobalPlayback'
 
 /** Visible proof that the renderer bundle is the one Vite is serving / you rebuilt. */
-const RENDERER_BUILD_ID = 'pv-2025-03-20-help-shortcuts'
+const RENDERER_BUILD_ID = 'pv-0.2.0-en-ui'
 
 export const ViewportHud: React.FC = () => {
   const scale = useCanvasStore((s) => s.viewport.scale)
@@ -15,6 +20,13 @@ export const ViewportHud: React.FC = () => {
     const { width, height } = el.getBoundingClientRect()
     frameAllItemsInViewport(width, height)
   }
+
+  const [playbackSuspended, setPlaybackSuspended] = useState(getVideoPlaybackSuspended)
+  useEffect(() => {
+    return subscribeVideoPlaybackSuspended(() => {
+      setPlaybackSuspended(getVideoPlaybackSuspended())
+    })
+  }, [])
 
   const modeLabel = import.meta.env.DEV ? 'DEV' : 'PROD'
 
@@ -30,6 +42,23 @@ export const ViewportHud: React.FC = () => {
           <span className="text-zinc-500">{RENDERER_BUILD_ID}</span>
         </span>
         <span className="text-xs text-zinc-500 tabular-nums">{Math.round(scale * 100)}%</span>
+        <button
+          type="button"
+          onClick={() => setVideoPlaybackSuspended(!getVideoPlaybackSuspended())}
+          title={
+            playbackSuspended
+              ? 'Resume auto-playback for visible videos'
+              : 'Stop all videos (global pause)'
+          }
+          className={[
+            'text-xs px-2 py-1 rounded border transition-colors',
+            playbackSuspended
+              ? 'text-amber-300 bg-amber-950/80 border-amber-700/60 hover:border-amber-500'
+              : 'text-zinc-500 hover:text-zinc-300 bg-zinc-900/80 border-zinc-700/50 hover:border-zinc-600',
+          ].join(' ')}
+        >
+          {playbackSuspended ? '▶ Play all' : '⏹ Stop all'}
+        </button>
         <button
           type="button"
           onClick={runFrameAll}

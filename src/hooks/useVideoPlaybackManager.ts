@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useCanvasStore } from '../store/canvasStore'
 import { videoRegistry } from '../utils/videoRegistry'
 import { videoUserPausedIds } from '../utils/videoUserPausedRegistry'
+import { getVideoPlaybackSuspended } from '../utils/videoGlobalPlayback'
 import type { VideoItem } from '../types'
 
 const UPDATE_MS = 400
@@ -101,6 +102,18 @@ export function useVideoPlaybackManager(containerRef: React.RefObject<HTMLElemen
       const w = Math.max(1, Math.floor(rect.width))
       const h = Math.max(1, Math.floor(rect.height))
       if (w <= 0 || h <= 0) return
+
+      if (getVideoPlaybackSuspended()) {
+        for (const [, video] of videoRegistry) {
+          try {
+            video.pause()
+          } catch {
+            // ignore
+          }
+        }
+        playingRef.current = new Set()
+        return
+      }
 
       const state = useCanvasStore.getState()
       const desiredIds = computeDesiredPlayback({

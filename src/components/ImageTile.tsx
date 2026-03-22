@@ -5,6 +5,7 @@ import { imageDrawUndoRegistry } from '../utils/imageDrawUndoRegistry'
 import { imageExportRegistry } from '../utils/imageExportRegistry'
 import { tileDomRegistry } from '../utils/tileDomRegistry'
 import { imageDrawRedoRegistry } from '../utils/imageDrawRedoRegistry'
+import { imageTileEditSize, imageTileViewSize } from '../utils/tileSizing'
 import type { ImageItem } from '../types'
 
 // ── Types & constants ─────────────────────────────────────────────────────────
@@ -38,6 +39,9 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
   const updateItem   = useCanvasStore((s) => s.updateItem)
   const selectOne    = useCanvasStore((s) => s.selectOne)
   const toggleSelect = useCanvasStore((s) => s.toggleSelect)
+  const imageEditModeId = useCanvasStore((s) => s.imageEditModeId)
+  const setImageEditModeId = useCanvasStore((s) => s.setImageEditModeId)
+  const isEditing = imageEditModeId === item.id
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const areaRef   = useRef<HTMLDivElement>(null)
@@ -130,6 +134,46 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
     }
   }, [item.id])
 
+  const prevEditingRef = useRef(false)
+  useEffect(() => {
+    const nw = item.naturalWidth
+    const nh = item.naturalHeight
+    if (!nw || !nh) return
+    if (isEditing && !prevEditingRef.current) {
+      const box = imageTileEditSize(nw, nh)
+      updateItem(item.id, { width: box.width, height: box.height })
+    }
+    if (!isEditing && prevEditingRef.current) {
+      const box = imageTileViewSize(nw, nh)
+      updateItem(item.id, { width: box.width, height: box.height })
+    }
+    prevEditingRef.current = isEditing
+  }, [isEditing, item.id, item.naturalWidth, item.naturalHeight, updateItem])
+
+  const naturalSyncRef = useRef(false)
+  useEffect(() => {
+    naturalSyncRef.current = false
+  }, [item.id, item.dataUrl])
+
+  const onBaseImageLoad = useCallback(
+    (ev: React.SyntheticEvent<HTMLImageElement>) => {
+      if (item.naturalWidth && item.naturalHeight) return
+      const img = ev.currentTarget
+      const w = img.naturalWidth
+      const h = img.naturalHeight
+      if (!w || !h || naturalSyncRef.current) return
+      naturalSyncRef.current = true
+      const box = isEditing ? imageTileEditSize(w, h) : imageTileViewSize(w, h)
+      updateItem(item.id, {
+        naturalWidth: w,
+        naturalHeight: h,
+        width: box.width,
+        height: box.height,
+      })
+    },
+    [item.id, item.naturalWidth, item.naturalHeight, isEditing, updateItem],
+  )
+
   // ── Keep canvas pixel dimensions in sync with CSS container ─────────────
   useEffect(() => {
     const area   = areaRef.current
@@ -173,6 +217,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
     e.stopPropagation()
     if (e.ctrlKey || e.metaKey) toggleSelect(item.id)
     else selectOne(item.id)
+    if (!isEditing) return
 
     const canvas = canvasRef.current
     const ctx    = canvas?.getContext('2d')
@@ -194,10 +239,10 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
       lineStart.current = pt
       lineSnap.current  = snap
     }
-  }, [item.id, selectOne, toggleSelect, tool, toCanvas])
+  }, [item.id, selectOne, toggleSelect, tool, toCanvas, isEditing])
 
   const onMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!drawing.current) return
+    if (!isEditing || !drawing.current) return
     const ctx = canvasRef.current?.getContext('2d')
     if (!ctx) return
     const pt = toCanvas(e)
@@ -239,7 +284,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
       ctx.stroke()
       lastPt.current = pt
     }
-  }, [tool, color, size, toCanvas])
+  }, [tool, color, size, toCanvas, isEditing])
 
   const onUp = useCallback(() => {
     drawing.current   = false
@@ -276,8 +321,8 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
       position={{ x: item.x, y: item.y }}
       size={{ width: item.width, height: item.height }}
       scale={scale}
-      minWidth={200}
-      minHeight={140}
+      minWidth={isEditing ? 200 : 120}
+      minHeight={isEditing ? 160 : 100}
       onDragStart={() => {
         const state = useCanvasStore.getState()
         if (!isSelected || state.selectedIds.length <= 1) {
@@ -337,7 +382,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
           height: parseInt(ref.style.height, 10),
         })
       }
-      style={{ zIndex: 15, pointerEvents: 'auto' }}
+      style={{ zIndex: isEditing ? 30 : 15, pointerEvents: 'auto' }}
       dragHandleClassName="img-drag-handle"
       onMouseDown={(e) => {
         e.stopPropagation()
@@ -359,8 +404,16 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
           <span className="text-[10px] font-semibold text-emerald-500 shrink-0">IMG</span>
           <div className="w-px h-4 bg-zinc-700 mx-0.5 shrink-0" />
 
-          {/* Draw tools */}
-          {(['pencil', 'line', 'eraser'] as DrawTool[]).map((t) => (
+          {!isEditing && (
+            <>
+              <span className="text-[10px] text-zinc-400 truncate flex-1 min-w-0" title={item.fileName ?? 'Image'}>
+                {item.fileName ?? (item.sourceVideoId ? 'Frame' : 'Image')}
+              </span>
+              <span className="text-[9px] text-zinc-500 shrink-0">F4 — draw</span>
+            </>
+          )}
+
+          {isEditing && (['pencil', 'line', 'eraser'] as DrawTool[]).map((t) => (
             <button
               key={t}
               title={{ pencil: 'Pencil  (draw)', line: 'Line', eraser: 'Eraser' }[t]}
@@ -374,6 +427,8 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
             </button>
           ))}
 
+          {isEditing && (
+          <>
           <div className="w-px h-4 bg-zinc-700 mx-0.5 shrink-0" />
 
           {/* Colour palette */}
@@ -421,6 +476,17 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
           >
             Bake
           </button>
+
+          <button
+            type="button"
+            title="Exit edit mode (F4)"
+            onMouseDown={(e) => { e.stopPropagation(); setImageEditModeId(null) }}
+            className="h-6 px-2 rounded text-[10px] font-semibold bg-zinc-700 text-zinc-200 hover:bg-zinc-600 shrink-0"
+          >
+            Done
+          </button>
+          </>
+          )}
         </div>
 
         {/* ── Image + drawing canvas ─────────────────────────────────── */}
@@ -428,14 +494,16 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
           <img
             ref={baseImgRef}
             src={item.dataUrl}
-            className="absolute inset-0 w-full h-full object-contain pointer-events-none select-none"
+            onLoad={onBaseImageLoad}
+            className="absolute inset-0 w-full h-full object-contain select-none"
+            style={{ pointerEvents: isEditing ? 'none' : 'auto' }}
             draggable={false}
-            alt="screenshot"
+            alt=""
           />
           <canvas
             ref={canvasRef}
-            className="absolute inset-0 w-full h-full"
-            style={{ cursor: CURSOR[tool] }}
+            className={['absolute inset-0 w-full h-full', !isEditing && 'pointer-events-none opacity-0'].filter(Boolean).join(' ')}
+            style={{ cursor: isEditing ? CURSOR[tool] : 'default' }}
             onMouseDown={onDown}
             onMouseMove={onMove}
             onMouseUp={onUp}

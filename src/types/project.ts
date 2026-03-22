@@ -39,6 +39,9 @@ export type ProjectCanvasItem =
       height: number
       dataUrl: string
       sourceVideoId: string
+      naturalWidth?: number
+      naturalHeight?: number
+      fileName?: string
     }
   | {
       type: 'note'

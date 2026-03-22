@@ -2,6 +2,9 @@ import { contextBridge, ipcRenderer } from 'electron'
 
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
+  windowAPI: {
+    getAlwaysOnTop: () => ipcRenderer.invoke('window:get-always-on-top'),
+  },
   projectAPI: {
     openProjectDialog: () => ipcRenderer.invoke('open-project-dialog'),
     openProjectByPath: (path: string) =>
@@ -14,6 +17,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     showUnsavedDialog: (opts?: { fileLabel?: string }) =>
       ipcRenderer.invoke('show-unsaved-dialog', opts ?? {}),
     confirmCloseWindow: () => ipcRenderer.invoke('window:confirm-close'),
+    decodeRasterImagePath: (path: string) =>
+      ipcRenderer.invoke('decode-raster-image-path', path),
   },
 })
 
@@ -36,6 +41,14 @@ ipcRenderer.on('app:edit-command', (_event, payload: { command: string }) => {
 
 ipcRenderer.on('app:show-help', () => {
   window.dispatchEvent(new CustomEvent('app-show-help'))
+})
+
+ipcRenderer.on('window:always-on-top-changed', (_event, payload: { value: boolean }) => {
+  window.dispatchEvent(
+    new CustomEvent('previewv-always-on-top', {
+      detail: payload,
+    }),
+  )
 })
 
 // Open a project by file path (Windows double click / file association)

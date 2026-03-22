@@ -1,8 +1,9 @@
 import React from 'react'
 import { useCanvasStore } from '../store/canvasStore'
+import { useUiStore } from '../store/uiStore'
 
 function fileNameFromPath(path: string | null): string {
-  if (!path) return 'Без названия'
+  if (!path) return 'Untitled'
   const seg = path.split(/[/\\]/).filter(Boolean)
   return seg[seg.length - 1] ?? path
 }
@@ -10,6 +11,7 @@ function fileNameFromPath(path: string | null): string {
 export const ProjectTitleBar: React.FC = () => {
   const path = useCanvasStore((s) => s.currentProjectPath)
   const isDirty = useCanvasStore((s) => s.isDirty)
+  const alwaysOnTop = useUiStore((s) => s.alwaysOnTop)
   const name = fileNameFromPath(path)
 
   return (
@@ -20,12 +22,20 @@ export const ProjectTitleBar: React.FC = () => {
       <div className="flex items-center justify-center px-4 py-2 bg-zinc-950/85 backdrop-blur-sm border-b border-zinc-800/80">
         <div
           className="text-xs sm:text-sm text-zinc-300 font-medium truncate max-w-[min(90vw,42rem)] text-center"
-          title={path ?? 'Проект не сохранён на диск'}
+          title={path ?? 'Project not saved to disk'}
         >
-          <span className="text-zinc-500 font-normal mr-2">Проект:</span>
+          <span className="text-zinc-500 font-normal mr-2">Project:</span>
           <span className="font-mono text-zinc-100">{name}</span>
+          {alwaysOnTop && (
+            <span
+              className="text-sky-400 ml-2 text-[10px] uppercase tracking-wide border border-sky-500/50 rounded px-1 py-0.5"
+              title="Window pinned (always on top). Alt+Shift+B to unpin."
+            >
+              Pinned
+            </span>
+          )}
           {isDirty && (
-            <span className="text-amber-400 ml-1.5" title="Есть несохранённые изменения">
+            <span className="text-amber-400 ml-1.5" title="Unsaved changes">
               •
             </span>
           )}

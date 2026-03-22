@@ -4,6 +4,7 @@ import { ViewportHud } from './components/ViewportHud'
 import { ProjectTitleBar } from './components/ProjectTitleBar'
 import { HelpGuideModal } from './components/HelpGuideModal'
 import { useCanvasStore } from './store/canvasStore'
+import { useUiStore } from './store/uiStore'
 import { flushImageAnnotations } from './utils/flushImageAnnotations'
 import { createEmptyProject } from './utils/emptyProject'
 import type { ElectronProjectAPI } from './electron-api'
@@ -12,12 +13,12 @@ type ProjectAPI = ElectronProjectAPI
 
 function fileLabelFromStore(): string {
   const { currentProjectPath } = useCanvasStore.getState()
-  if (!currentProjectPath) return 'Без названия'
+  if (!currentProjectPath) return 'Untitled'
   const seg = currentProjectPath.split(/[/\\]/).filter(Boolean)
   return seg[seg.length - 1] ?? currentProjectPath
 }
 
-/** Перед сменой проекта: сохранить / не сохранять / отмена. false = остаёмся. */
+/** Before switching project: save / discard / cancel. false = stay. */
 async function ensureCanLeaveProject(projectAPI: ProjectAPI): Promise<boolean> {
   const { isDirty } = useCanvasStore.getState()
   if (!isDirty) return true
@@ -63,6 +64,18 @@ const App: React.FC = () => {
     const onHelp = () => setHelpOpen(true)
     window.addEventListener('app-show-help', onHelp)
     return () => window.removeEventListener('app-show-help', onHelp)
+  }, [])
+
+  useEffect(() => {
+    const wa = window.electronAPI?.windowAPI
+    if (!wa) return
+    void wa.getAlwaysOnTop().then((v) => useUiStore.getState().setAlwaysOnTop(v))
+    const onChange = (e: Event) => {
+      const d = (e as CustomEvent).detail as { value: boolean }
+      useUiStore.getState().setAlwaysOnTop(d.value)
+    }
+    window.addEventListener('previewv-always-on-top', onChange)
+    return () => window.removeEventListener('previewv-always-on-top', onChange)
   }, [])
 
   useEffect(() => {
@@ -176,7 +189,7 @@ const App: React.FC = () => {
   }, [loadProjectState])
 
   return (
-    <div className="relative w-full h-full bg-zinc-950">
+    <div className="relative w-full h-full min-h-[100dvh] bg-zinc-950">
       {helpOpen && <HelpGuideModal onClose={() => setHelpOpen(false)} />}
       <ProjectTitleBar />
       <div className="absolute inset-x-0 top-11 bottom-0 min-h-0">

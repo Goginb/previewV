@@ -12,5 +12,6 @@ interface Window {
   electronAPI?: {
     platform: string
     projectAPI: import('./electron-api').ElectronProjectAPI
+    windowAPI?: import('./electron-api').ElectronWindowAPI
   }
 }

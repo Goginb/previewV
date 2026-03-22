@@ -10,6 +10,8 @@ import { imageDrawUndoRegistry } from '../utils/imageDrawUndoRegistry'
 import { imageDrawRedoRegistry } from '../utils/imageDrawRedoRegistry'
 import { imageExportRegistry } from '../utils/imageExportRegistry'
 import { flushImageAnnotations } from '../utils/flushImageAnnotations'
+import { importImageFile, isRasterImportFile } from '../utils/imageImport'
+import { imageTileViewSize } from '../utils/tileSizing'
 import type { CanvasItem, ImageItem, NoteItem, VideoItem } from '../types'
 
 // ── File helpers ──────────────────────────────────────────────────────────────
@@ -71,19 +73,19 @@ function isTypingTarget(e: KeyboardEvent): boolean {
   return false
 }
 
-function captureVideoFrame(video: HTMLVideoElement): string {
+function captureVideoFrame(video: HTMLVideoElement): { dataUrl: string; width: number; height: number } {
   const maxDim = 1920
-  const vw = video.videoWidth  || 640
+  const vw = video.videoWidth || 640
   const vh = video.videoHeight || 360
   const ratio = Math.min(1, maxDim / Math.max(vw, vh))
   const w = Math.round(vw * ratio)
   const h = Math.round(vh * ratio)
 
   const off = document.createElement('canvas')
-  off.width  = w
+  off.width = w
   off.height = h
   off.getContext('2d')?.drawImage(video, 0, 0, w, h)
-  return off.toDataURL('image/png')
+  return { dataUrl: off.toDataURL('image/png'), width: w, height: h }
 }
 
 /** AABB intersection in world space */
@@ -108,6 +110,8 @@ export const Canvas: React.FC = () => {
   const layoutMediaRow  = useCanvasStore((s) => s.layoutMediaRow)
   const resetViewport   = useCanvasStore((s) => s.resetViewport)
   const frameAllItemsInViewport = useCanvasStore((s) => s.frameAllItemsInViewport)
+  const imageEditModeId = useCanvasStore((s) => s.imageEditModeId)
+  const setImageEditModeId = useCanvasStore((s) => s.setImageEditModeId)
 
   const containerRef    = useRef<HTMLDivElement>(null)
   const lastMouseScreen = useRef({ x: 0, y: 0 })
@@ -123,6 +127,12 @@ export const Canvas: React.FC = () => {
       y: rect.height / 2,
     }
   }, [])
+
+  useEffect(() => {
+    if (imageEditModeId && !selectedIds.includes(imageEditModeId)) {
+      setImageEditModeId(null)
+    }
+  }, [selectedIds, imageEditModeId, setImageEditModeId])
 
   /** Screen-space marquee: relative to container top-left */
   const [marquee, setMarquee] = useState<{ ax: number; ay: number; bx: number; by: number } | null>(null)
@@ -470,7 +480,8 @@ export const Canvas: React.FC = () => {
         const video = videoRegistry.get(selected.id)
         if (!video) return
 
-        const dataUrl = captureVideoFrame(video)
+        const cap = captureVideoFrame(video)
+        const box = imageTileViewSize(cap.width, cap.height)
 
         const siblings = state.items.filter(
           (i): i is ImageItem =>
@@ -482,17 +493,29 @@ export const Canvas: React.FC = () => {
           : selected
 
         const img: ImageItem = {
-          type:          'image',
-          id:            `img-${Date.now()}`,
-          dataUrl,
+          type: 'image',
+          id: `img-${Date.now()}`,
+          dataUrl: cap.dataUrl,
           sourceVideoId: selected.id,
-          x:      anchor.x + anchor.width + 24,
-          y:      anchor.y,
-          width:  selected.width,
-          height: selected.height,
+          naturalWidth: cap.width,
+          naturalHeight: cap.height,
+          x: anchor.x + anchor.width + 24,
+          y: anchor.y,
+          width: box.width,
+          height: box.height,
         }
         addItem(img)
         selectOne(img.id)
+      }
+
+      if (e.code === 'F4' && !isTypingTarget(e)) {
+        e.preventDefault()
+        const state = useCanvasStore.getState()
+        if (state.selectedIds.length !== 1) return
+        const sid = state.selectedIds[0]
+        const it = state.items.find((i) => i.id === sid)
+        if (!it || it.type !== 'image') return
+        state.setImageEditModeId(state.imageEditModeId === sid ? null : sid)
       }
     }
 
@@ -506,7 +529,7 @@ export const Canvas: React.FC = () => {
   }, [])
 
   const handleDrop = useCallback(
-    (e: React.DragEvent<HTMLDivElement>) => {
+    async (e: React.DragEvent<HTMLDivElement>) => {
       e.preventDefault()
       const rect = containerRef.current?.getBoundingClientRect()
       const sx   = e.clientX - (rect?.left ?? 0)
@@ -514,10 +537,12 @@ export const Canvas: React.FC = () => {
       const wx   = (sx - viewport.x) / viewport.scale
       const wy   = (sy - viewport.y) / viewport.scale
 
-      const videoFiles = Array.from(e.dataTransfer.files).filter(isVideoFile)
-      if (!videoFiles.length) return
+      const files = Array.from(e.dataTransfer.files)
+      const videoFiles = files.filter(isVideoFile)
+      const rasterFiles = files.filter(isRasterImportFile)
 
-      videoFiles.forEach((file, i) => {
+      let i = 0
+      for (const file of videoFiles) {
         const tile: VideoItem = {
           type:     'video',
           id:       `tile-${Date.now()}-${i}`,
@@ -529,7 +554,32 @@ export const Canvas: React.FC = () => {
           height:   TILE_H,
         }
         addItem(tile)
-      })
+        i++
+      }
+
+      for (const file of rasterFiles) {
+        if (isVideoFile(file)) continue
+        try {
+          const payload = await importImageFile(file)
+          const img: ImageItem = {
+            type: 'image',
+            id: `img-${Date.now()}-${i}`,
+            dataUrl: payload.dataUrl,
+            sourceVideoId: '',
+            fileName: file.name,
+            naturalWidth: payload.naturalWidth,
+            naturalHeight: payload.naturalHeight,
+            x: wx - payload.width / 2 + i * 24,
+            y: wy - payload.height / 2 + i * 24,
+            width: payload.width,
+            height: payload.height,
+          }
+          addItem(img)
+        } catch (err: any) {
+          alert(err?.message ?? String(err))
+        }
+        i++
+      }
     },
     [addItem, viewport],
   )
@@ -635,10 +685,12 @@ export const Canvas: React.FC = () => {
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none">
           <div className="text-center text-zinc-600">
             <div className="text-5xl mb-4 opacity-40">▶</div>
-            <p className="text-base font-medium tracking-wide">Drop video files here</p>
-            <p className="text-sm mt-1 opacity-60">MP4 · WebM · MOV · MKV and more</p>
+            <p className="text-base font-medium tracking-wide">Drop video or image files here</p>
+            <p className="text-sm mt-1 opacity-60">
+              Video: MP4, WebM, MOV… · Images: JPEG, PNG, TIFF, EXR, DPX…
+            </p>
             <p className="text-xs mt-3 opacity-40">
-              Ctrl+A — all · A — fit all · Ctrl+O — open · Drag · L — row · Ctrl+N / F3
+              Ctrl+A · A · Ctrl+O · L · Ctrl+N / F3 · F4 image edit
             </p>
           </div>
         </div>

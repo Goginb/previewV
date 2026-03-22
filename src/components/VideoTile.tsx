@@ -4,6 +4,7 @@ import { useCanvasStore } from '../store/canvasStore'
 import { videoRegistry } from '../utils/videoRegistry'
 import { tileDomRegistry } from '../utils/tileDomRegistry'
 import { setVideoUserPausedByUser } from '../utils/videoUserPausedRegistry'
+import { videoTileSizeFromVideo } from '../utils/tileSizing'
 import type { VideoItem } from '../types'
 
 interface VideoTileProps {
@@ -50,6 +51,34 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected })
   useEffect(() => {
     durationRef.current = duration
   }, [duration])
+
+  const aspectAppliedRef = useRef(false)
+  useEffect(() => {
+    aspectAppliedRef.current = false
+  }, [tile.id])
+
+  useEffect(() => {
+    const v = videoRef.current
+    if (!v) return
+    const applyAspect = () => {
+      if (aspectAppliedRef.current) return
+      const vw = v.videoWidth
+      const vh = v.videoHeight
+      if (!vw || !vh) return
+      aspectAppliedRef.current = true
+      const next = videoTileSizeFromVideo(vw, vh)
+      if (Math.abs(tile.width - next.width) > 2 || Math.abs(tile.height - next.height) > 2) {
+        updateItem(tile.id, { width: next.width, height: next.height })
+      }
+    }
+    v.addEventListener('loadedmetadata', applyAspect)
+    v.addEventListener('loadeddata', applyAspect)
+    applyAspect()
+    return () => {
+      v.removeEventListener('loadedmetadata', applyAspect)
+      v.removeEventListener('loadeddata', applyAspect)
+    }
+  }, [tile.id, updateItem])
 
   const syncFromVideo = useCallback(() => {
     const v = videoRef.current

@@ -6,7 +6,11 @@ import {
   dialog,
   ipcMain,
   Menu,
+  nativeImage,
 } from 'electron'
+import { spawn } from 'child_process'
+import { tmpdir } from 'os'
+import ffmpegStatic from 'ffmpeg-static'
 import { join, basename, extname, normalize } from 'path'
 import { createReadStream } from 'fs'
 import { promises as fs } from 'fs'
@@ -190,6 +194,21 @@ async function writeProjectToDisk(projectPath: string, project: ProjectFile) {
 
 let activeWindow: BrowserWindow | null = null
 
+/** Mirrors BrowserWindow always-on-top; used for menu checkbox + IPC (avoids relying on platform-specific getters). */
+let alwaysOnTopEnabled = false
+
+function applyAlwaysOnTop(win: BrowserWindow, enabled: boolean): void {
+  alwaysOnTopEnabled = enabled
+  // 'floating' is a good default on Windows/Linux; macOS accepts the same level names in Electron.
+  if (enabled) {
+    win.setAlwaysOnTop(true, 'floating')
+  } else {
+    win.setAlwaysOnTop(false)
+  }
+  win.webContents.send('window:always-on-top-changed', { value: enabled })
+  void refreshApplicationMenu()
+}
+
 /** When true, skip unsaved prompt on BrowserWindow.close() */
 const allowWindowClose = new WeakMap<BrowserWindow, boolean>()
 
@@ -211,14 +230,14 @@ function setupWindowCloseGuard(win: BrowserWindow): void {
       win.close()
       return
     }
-    const fileLabel = state.path ? basename(state.path) : 'Без названия'
+    const fileLabel = state.path ? basename(state.path) : 'Untitled'
     const { response } = await dialog.showMessageBox(win, {
       type: 'warning',
-      buttons: ['Сохранить', 'Не сохранять', 'Отмена'],
+      buttons: ['Save', 'Don’t save', 'Cancel'],
       defaultId: 0,
       cancelId: 2,
       title: 'PreviewV',
-      message: 'Сохранить изменения в проекте?',
+      message: 'Save changes to the project?',
       detail: fileLabel,
     })
     if (response === 2) return
@@ -351,10 +370,39 @@ async function refreshApplicationMenu() {
       ],
     },
     {
-      label: 'Справка',
+      label: 'View',
       submenu: [
         {
-          label: 'Инструкция по использованию',
+          label: 'Always on top',
+          type: 'checkbox',
+          checked: alwaysOnTopEnabled,
+          click: (menuItem) => {
+            if (!activeWindow) return
+            applyAlwaysOnTop(activeWindow, menuItem.checked)
+          },
+        },
+        { type: 'separator' },
+        {
+          label: 'Pin window (Alt+Shift+A)',
+          click: () => {
+            if (!activeWindow) return
+            applyAlwaysOnTop(activeWindow, true)
+          },
+        },
+        {
+          label: 'Unpin window (Alt+Shift+B)',
+          click: () => {
+            if (!activeWindow) return
+            applyAlwaysOnTop(activeWindow, false)
+          },
+        },
+      ],
+    },
+    {
+      label: 'Help',
+      submenu: [
+        {
+          label: 'User guide',
           accelerator: 'F1',
           click: () => activeWindow?.webContents.send('app:show-help'),
         },
@@ -367,6 +415,8 @@ async function refreshApplicationMenu() {
 }
 
 function createWindow(): void {
+  alwaysOnTopEnabled = false
+
   const mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -387,6 +437,25 @@ function createWindow(): void {
   activeWindow = mainWindow
   setupWindowCloseGuard(mainWindow)
   refreshApplicationMenu().catch(() => {})
+
+  // Alt+Shift+A / Alt+Shift+B: handled in main so they work over the canvas/video and aren’t eaten by Chromium shortcuts.
+  // Uses physical KeyA/KeyB (stable on common layouts). Ignores auto-repeat.
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return
+    if (input.isAutoRepeat) return
+    if (!input.alt || !input.shift) return
+    if (input.control || input.meta) return
+
+    if (input.code === 'KeyA') {
+      event.preventDefault()
+      applyAlwaysOnTop(mainWindow, true)
+      return
+    }
+    if (input.code === 'KeyB') {
+      event.preventDefault()
+      applyAlwaysOnTop(mainWindow, false)
+    }
+  })
 
   mainWindow.webContents.once('did-finish-load', () => {
     if (pendingOpenPath) {
@@ -418,6 +487,13 @@ app.whenReady().then(() => {
   // URL example: media:///C:/Users/user/video.mp4
   protocol.handle('media', (request) => serveMediaProtocolRequest(request))
 
+  ipcMain.handle('window:get-always-on-top', () => alwaysOnTopEnabled)
+
+  ipcMain.handle('window:set-always-on-top', (_e, enabled: unknown) => {
+    if (!activeWindow) return
+    applyAlwaysOnTop(activeWindow, Boolean(enabled))
+  })
+
   // ── Project IPC ──────────────────────────────────────────────────────────
   ipcMain.handle('get-recent-projects', async () => {
     return readRecentProjects(app.getPath('userData'))
@@ -426,14 +502,14 @@ app.whenReady().then(() => {
   ipcMain.handle('show-unsaved-dialog', async (event, payload: { fileLabel?: string }) => {
     const win = BrowserWindow.fromWebContents(event.sender)
     if (!win) return 'cancel'
-    const label = typeof payload?.fileLabel === 'string' ? payload.fileLabel : 'Без названия'
+    const label = typeof payload?.fileLabel === 'string' ? payload.fileLabel : 'Untitled'
     const { response } = await dialog.showMessageBox(win, {
       type: 'warning',
-      buttons: ['Сохранить', 'Не сохранять', 'Отмена'],
+      buttons: ['Save', 'Don’t save', 'Cancel'],
       defaultId: 0,
       cancelId: 2,
       title: 'PreviewV',
-      message: 'Сохранить изменения в проекте?',
+      message: 'Save changes to the project?',
       detail: label,
     })
     return (['save', 'discard', 'cancel'] as const)[response]
@@ -445,6 +521,40 @@ app.whenReady().then(() => {
       allowWindowClose.set(win, true)
       win.close()
     }
+  })
+
+  /** EXR / DPX / прочее: один кадр через ffmpeg → PNG data URL для рендерера */
+  ipcMain.handle('decode-raster-image-path', async (_e, filePath: string) => {
+    await fs.access(filePath)
+    const ff = ffmpegStatic
+    if (!ff) {
+      throw new Error('ffmpeg-static not found (run npm install ffmpeg-static)')
+    }
+    const out = join(
+      tmpdir(),
+      `pvimg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}.png`,
+    )
+    await new Promise<void>((resolve, reject) => {
+      const p = spawn(ff, ['-y', '-i', filePath, '-frames:v', '1', out], {
+        windowsHide: true,
+      })
+      let err = ''
+      p.stderr?.on('data', (d: Buffer) => {
+        err += d.toString()
+      })
+      p.on('error', reject)
+      p.on('close', (code) => {
+        if (code === 0) resolve()
+        else reject(new Error(err.trim() || `ffmpeg exited with code ${code}`))
+      })
+    })
+    const buf = await fs.readFile(out)
+    await fs.unlink(out).catch(() => {})
+    const ni = nativeImage.createFromBuffer(buf)
+    const { width, height } = ni.getSize()
+    const png = ni.toPNG()
+    const dataUrl = `data:image/png;base64,${png.toString('base64')}`
+    return { dataUrl, width, height }
   })
 
   ipcMain.handle('open-project-dialog', async () => {
