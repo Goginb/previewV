@@ -9,7 +9,9 @@
     "build": "electron-vite build",
     "clean": "node -e \"try{require('fs').rmSync('out',{recursive:true,force:true})}catch(e){}\"",
     "preview": "electron-vite preview",
-    "build:win": "npm run build && electron-builder build --win"
+    "build:win": "npm run build && electron-builder --win nsis",
+    "build:win:portable": "npm run build && electron-builder --win portable",
+    "build:win:all": "npm run build && electron-builder --win nsis --win portable"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
@@ -65,6 +67,16 @@
       ],
       "sign": null,
       "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "PreviewV",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false
     }
   }
 }
