@@ -6,6 +6,8 @@ interface BaseItem {
   height: number
 }
 
+export type ImageStorage = 'linked' | 'asset' | 'legacy-inline'
+
 export interface VideoItem extends BaseItem {
   type: 'video'
   srcUrl: string
@@ -19,8 +21,10 @@ export interface NoteItem extends BaseItem {
 
 export interface ImageItem extends BaseItem {
   type: 'image'
-  /** Base image as data URL (updated in-place when baking) */
-  dataUrl: string
+  /** Render source for the image (media:// local file or data: URL for unsaved/generated assets). */
+  srcUrl: string
+  /** Backing storage mode used for project persistence. */
+  storage: ImageStorage
   /** ID плитки-видео для кадра F3; пустая строка — импорт из файла */
   sourceVideoId: string
   /** Исходный размер пикселей (для пропорций плитки) */
@@ -28,6 +32,10 @@ export interface ImageItem extends BaseItem {
   naturalHeight?: number
   /** Имя файла при импорте */
   fileName?: string
+  /** Абсолютный путь к исходному файлу на диске (импорт с диска; для поиска дубликатов) */
+  sourceFilePath?: string
+  /** Абсолютный путь к проектному ассету/preview PNG на диске (если уже сохранён). */
+  projectAssetPath?: string
 }
 
 export type CanvasItem = VideoItem | NoteItem | ImageItem
@@ -41,11 +49,14 @@ export type ItemUpdate = {
   // NoteItem
   text?: string
   // ImageItem
-  dataUrl?: string
+  srcUrl?: string
+  storage?: ImageStorage
   naturalWidth?: number
   naturalHeight?: number
   fileName?: string
   sourceVideoId?: string
+  sourceFilePath?: string
+  projectAssetPath?: string
 }
 
 // Backward-compat alias

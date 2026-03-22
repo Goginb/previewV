@@ -6,13 +6,26 @@ import type {
 } from '../types'
 import type {
   DeserializedProject,
-  ProjectCanvasItem,
-  ProjectFile,
+  ProjectCanvasItemV1,
+  ProjectCanvasItemV2,
+  ProjectFileV2,
   ProjectMeta,
   ViewportState,
 } from '../types/project'
 
-const PROJECT_VERSION = 1
+export const PROJECT_VERSION = 2
+
+interface DeserializeProjectOptions {
+  resolveAssetPath?: (relativePath: string) => string | null
+}
+
+interface SerializeProjectOptions {
+  items: CanvasItem[]
+  viewport: ViewportState
+  meta: ProjectMeta
+  assetPathForImage: (item: ImageItem) => string
+  previewAssetPathForImage?: (item: ImageItem) => string | undefined
+}
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null
@@ -50,23 +63,25 @@ function normalizeToForwardSlashes(path: string): string {
   return path.replace(/\\/g, '/')
 }
 
-function localPathToMediaUrl(localPath: string): string {
+export function localPathToMediaUrl(localPath: string): string {
   const normalized = normalizeToForwardSlashes(localPath).replace(/^\/+/, '')
   return `media:///${normalized}`
 }
 
-function mediaUrlToLocalPath(mediaUrl: string): string {
+export function mediaUrlToLocalPath(mediaUrl: string): string {
   if (!mediaUrl.startsWith('media:///')) return ''
   const rest = mediaUrl.slice('media:///'.length)
   let decoded = rest
   try {
     decoded = decodeURIComponent(rest)
   } catch {
-    // If the media url contains '%' that isn't a valid escape sequence,
-    // fall back to raw string.
     decoded = rest
   }
   return decoded.replace(/\//g, '\\')
+}
+
+export function isDataUrl(value: string): boolean {
+  return value.startsWith('data:')
 }
 
 function validateViewport(raw: unknown): ViewportState {
@@ -85,7 +100,7 @@ function validateMeta(raw: unknown): ProjectMeta {
   }
 }
 
-function validateItem(raw: unknown): ProjectCanvasItem {
+function validateItemV1(raw: unknown): ProjectCanvasItemV1 {
   if (!isRecord(raw)) throw new Error('Invalid project: item must be an object')
   const type = mustBeString(raw.type, 'item.type')
 
@@ -110,6 +125,7 @@ function validateItem(raw: unknown): ProjectCanvasItem {
     const naturalWidth = optionalNumber(raw.naturalWidth, 'item.naturalWidth')
     const naturalHeight = optionalNumber(raw.naturalHeight, 'item.naturalHeight')
     const fileName = optionalString(raw.fileName, 'item.fileName')
+    const imageSourcePath = optionalString(raw.imageSourcePath, 'item.imageSourcePath')
     return {
       type: 'image',
       id,
@@ -122,6 +138,7 @@ function validateItem(raw: unknown): ProjectCanvasItem {
       ...(naturalWidth !== undefined ? { naturalWidth } : {}),
       ...(naturalHeight !== undefined ? { naturalHeight } : {}),
       ...(fileName !== undefined ? { fileName } : {}),
+      ...(imageSourcePath !== undefined ? { imageSourcePath } : {}),
     }
   }
 
@@ -133,27 +150,105 @@ function validateItem(raw: unknown): ProjectCanvasItem {
   throw new Error(`Invalid project: unknown item.type "${type}"`)
 }
 
-export function serializeProject(params: {
-  version?: number
-  items: CanvasItem[]
-  viewport: ViewportState
-  meta: ProjectMeta
-}): ProjectFile {
-  const version = params.version ?? PROJECT_VERSION
-  if (version !== PROJECT_VERSION) {
-    throw new Error(`Unsupported project version: ${version}`)
+function validateItemV2(raw: unknown): ProjectCanvasItemV2 {
+  if (!isRecord(raw)) throw new Error('Invalid project: item must be an object')
+  const type = mustBeString(raw.type, 'item.type')
+
+  const id = mustBeString(raw.id, 'item.id')
+  const x = mustBeNumber(raw.x, 'item.x')
+  const y = mustBeNumber(raw.y, 'item.y')
+  const width = mustBeNumber(raw.width, 'item.width')
+  const height = mustBeNumber(raw.height, 'item.height')
+
+  if (type === 'video') {
+    const fileName = mustBeString(raw.fileName, 'item.fileName')
+    const videoPath = mustBeString(raw.videoPath, 'item.videoPath')
+    return { type: 'video', id, x, y, width, height, fileName, videoPath }
   }
 
-  const items: ProjectCanvasItem[] = params.items.map((item) => {
+  if (type === 'image') {
+    const storage = mustBeString(raw.storage, 'item.storage')
+    const sourceVideoId =
+      raw.sourceVideoId === undefined
+        ? ''
+        : mustBeString(raw.sourceVideoId, 'item.sourceVideoId')
+    const naturalWidth = optionalNumber(raw.naturalWidth, 'item.naturalWidth')
+    const naturalHeight = optionalNumber(raw.naturalHeight, 'item.naturalHeight')
+    const fileName = optionalString(raw.fileName, 'item.fileName')
+
+    if (storage === 'linked') {
+      const imageSourcePath = mustBeString(raw.imageSourcePath, 'item.imageSourcePath')
+      const previewAssetPath = optionalString(raw.previewAssetPath, 'item.previewAssetPath')
+      return {
+        type: 'image',
+        storage: 'linked',
+        id,
+        x,
+        y,
+        width,
+        height,
+        sourceVideoId,
+        ...(naturalWidth !== undefined ? { naturalWidth } : {}),
+        ...(naturalHeight !== undefined ? { naturalHeight } : {}),
+        ...(fileName !== undefined ? { fileName } : {}),
+        imageSourcePath,
+        ...(previewAssetPath !== undefined ? { previewAssetPath } : {}),
+      }
+    }
+
+    if (storage === 'asset') {
+      const assetPath = mustBeString(raw.assetPath, 'item.assetPath')
+      return {
+        type: 'image',
+        storage: 'asset',
+        id,
+        x,
+        y,
+        width,
+        height,
+        sourceVideoId,
+        ...(naturalWidth !== undefined ? { naturalWidth } : {}),
+        ...(naturalHeight !== undefined ? { naturalHeight } : {}),
+        ...(fileName !== undefined ? { fileName } : {}),
+        assetPath,
+      }
+    }
+
+    throw new Error(`Invalid project: unknown image storage "${storage}"`)
+  }
+
+  if (type === 'note') {
+    const text = mustBeString(raw.text, 'item.text')
+    return { type: 'note', id, x, y, width, height, text }
+  }
+
+  throw new Error(`Invalid project: unknown item.type "${type}"`)
+}
+
+function resolveAssetMediaUrl(
+  relativePath: string,
+  options: DeserializeProjectOptions,
+): { srcUrl: string; absolutePath: string } {
+  const absolutePath = options.resolveAssetPath?.(relativePath)
+  if (!absolutePath) {
+    throw new Error(`Invalid project: unable to resolve asset "${relativePath}"`)
+  }
+  return {
+    srcUrl: localPathToMediaUrl(absolutePath),
+    absolutePath,
+  }
+}
+
+export function serializeProject(params: SerializeProjectOptions): ProjectFileV2 {
+  const items: ProjectCanvasItemV2[] = params.items.map((item) => {
     if (item.type === 'video') {
-      // We store only the local absolute path of the source video.
       const videoPath = mediaUrlToLocalPath(item.srcUrl)
       if (!videoPath) {
         throw new Error(
           `Can't serialize video "${item.fileName}": video source is not a local media:// URL`,
         )
       }
-      const v: ProjectCanvasItem = {
+      return {
         type: 'video',
         id: item.id,
         x: item.x,
@@ -163,28 +258,46 @@ export function serializeProject(params: {
         fileName: item.fileName,
         videoPath,
       }
-      return v
     }
 
     if (item.type === 'image') {
-      const v: ProjectCanvasItem = {
+      if (item.storage === 'linked' && item.sourceFilePath) {
+        const previewAssetPath = params.previewAssetPathForImage?.(item)
+        return {
+          type: 'image',
+          storage: 'linked',
+          id: item.id,
+          x: item.x,
+          y: item.y,
+          width: item.width,
+          height: item.height,
+          sourceVideoId: item.sourceVideoId,
+          ...(item.naturalWidth !== undefined ? { naturalWidth: item.naturalWidth } : {}),
+          ...(item.naturalHeight !== undefined ? { naturalHeight: item.naturalHeight } : {}),
+          ...(item.fileName !== undefined ? { fileName: item.fileName } : {}),
+          imageSourcePath: item.sourceFilePath,
+          ...(previewAssetPath ? { previewAssetPath } : {}),
+        }
+      }
+
+      const assetPath = params.assetPathForImage(item)
+      return {
         type: 'image',
+        storage: 'asset',
         id: item.id,
         x: item.x,
         y: item.y,
         width: item.width,
         height: item.height,
-        dataUrl: item.dataUrl,
         sourceVideoId: item.sourceVideoId,
         ...(item.naturalWidth !== undefined ? { naturalWidth: item.naturalWidth } : {}),
         ...(item.naturalHeight !== undefined ? { naturalHeight: item.naturalHeight } : {}),
         ...(item.fileName !== undefined ? { fileName: item.fileName } : {}),
+        assetPath,
       }
-      return v
     }
 
-    // note
-    const v: ProjectCanvasItem = {
+    return {
       type: 'note',
       id: item.id,
       x: item.x,
@@ -193,7 +306,6 @@ export function serializeProject(params: {
       height: item.height,
       text: item.text,
     }
-    return v
   })
 
   return {
@@ -204,20 +316,76 @@ export function serializeProject(params: {
   }
 }
 
-export function deserializeProject(raw: unknown): DeserializedProject {
+export function deserializeProject(
+  raw: unknown,
+  options: DeserializeProjectOptions = {},
+): DeserializedProject {
   if (!isRecord(raw)) throw new Error('Invalid project file: root must be an object')
   const version = raw.version
-  if (version !== PROJECT_VERSION) {
+  if (version !== 1 && version !== PROJECT_VERSION) {
     throw new Error(`Unsupported project version: ${String(version)}`)
   }
   if (!Array.isArray(raw.items)) {
     throw new Error('Invalid project: items must be an array')
   }
+
   const viewport = validateViewport(raw.viewport)
   const meta = validateMeta(raw.meta)
 
+  if (version === 1) {
+    const items: CanvasItem[] = raw.items.map((i) => {
+      const validated = validateItemV1(i)
+      if (validated.type === 'video') {
+        const video: VideoItem = {
+          type: 'video',
+          id: validated.id,
+          x: validated.x,
+          y: validated.y,
+          width: validated.width,
+          height: validated.height,
+          fileName: validated.fileName,
+          srcUrl: localPathToMediaUrl(validated.videoPath),
+        }
+        return video
+      }
+      if (validated.type === 'image') {
+        const img: ImageItem = {
+          type: 'image',
+          id: validated.id,
+          x: validated.x,
+          y: validated.y,
+          width: validated.width,
+          height: validated.height,
+          srcUrl: validated.dataUrl,
+          storage: 'legacy-inline',
+          sourceVideoId: validated.sourceVideoId,
+          ...(validated.naturalWidth !== undefined ? { naturalWidth: validated.naturalWidth } : {}),
+          ...(validated.naturalHeight !== undefined ? { naturalHeight: validated.naturalHeight } : {}),
+          ...(validated.fileName !== undefined ? { fileName: validated.fileName } : {}),
+          ...(validated.imageSourcePath !== undefined
+            ? { sourceFilePath: validated.imageSourcePath }
+            : {}),
+        }
+        return img
+      }
+
+      const note: NoteItem = {
+        type: 'note',
+        id: validated.id,
+        x: validated.x,
+        y: validated.y,
+        width: validated.width,
+        height: validated.height,
+        text: validated.text,
+      }
+      return note
+    })
+
+    return { items, viewport, meta }
+  }
+
   const items: CanvasItem[] = raw.items.map((i) => {
-    const validated = validateItem(i)
+    const validated = validateItemV2(i)
     if (validated.type === 'video') {
       const video: VideoItem = {
         type: 'video',
@@ -231,7 +399,32 @@ export function deserializeProject(raw: unknown): DeserializedProject {
       }
       return video
     }
+
     if (validated.type === 'image') {
+      if (validated.storage === 'linked') {
+        const preview = validated.previewAssetPath
+          ? resolveAssetMediaUrl(validated.previewAssetPath, options)
+          : null
+        const img: ImageItem = {
+          type: 'image',
+          id: validated.id,
+          x: validated.x,
+          y: validated.y,
+          width: validated.width,
+          height: validated.height,
+          srcUrl: preview ? preview.srcUrl : localPathToMediaUrl(validated.imageSourcePath),
+          storage: 'linked',
+          sourceVideoId: validated.sourceVideoId,
+          sourceFilePath: validated.imageSourcePath,
+          ...(validated.naturalWidth !== undefined ? { naturalWidth: validated.naturalWidth } : {}),
+          ...(validated.naturalHeight !== undefined ? { naturalHeight: validated.naturalHeight } : {}),
+          ...(validated.fileName !== undefined ? { fileName: validated.fileName } : {}),
+          ...(preview ? { projectAssetPath: preview.absolutePath } : {}),
+        }
+        return img
+      }
+
+      const asset = resolveAssetMediaUrl(validated.assetPath, options)
       const img: ImageItem = {
         type: 'image',
         id: validated.id,
@@ -239,11 +432,13 @@ export function deserializeProject(raw: unknown): DeserializedProject {
         y: validated.y,
         width: validated.width,
         height: validated.height,
-        dataUrl: validated.dataUrl,
+        srcUrl: asset.srcUrl,
+        storage: 'asset',
         sourceVideoId: validated.sourceVideoId,
         ...(validated.naturalWidth !== undefined ? { naturalWidth: validated.naturalWidth } : {}),
         ...(validated.naturalHeight !== undefined ? { naturalHeight: validated.naturalHeight } : {}),
         ...(validated.fileName !== undefined ? { fileName: validated.fileName } : {}),
+        projectAssetPath: asset.absolutePath,
       }
       return img
     }
@@ -262,4 +457,3 @@ export function deserializeProject(raw: unknown): DeserializedProject {
 
   return { items, viewport, meta }
 }
-

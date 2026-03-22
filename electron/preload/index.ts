@@ -17,8 +17,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     showUnsavedDialog: (opts?: { fileLabel?: string }) =>
       ipcRenderer.invoke('show-unsaved-dialog', opts ?? {}),
     confirmCloseWindow: () => ipcRenderer.invoke('window:confirm-close'),
-    decodeRasterImagePath: (path: string) =>
-      ipcRenderer.invoke('decode-raster-image-path', path),
+    resolveImageSource: (path: string) =>
+      ipcRenderer.invoke('resolve-image-source', path),
+    pickFolderDialog: () => ipcRenderer.invoke('pick-folder-dialog'),
+    enumerateFolderMedia: (folderPath: string) =>
+      ipcRenderer.invoke('enumerate-folder-media', folderPath),
+    duplicateMediaImportDialog: (payload: { count: number }) =>
+      ipcRenderer.invoke('duplicate-media-import-dialog', payload),
   },
 })
 

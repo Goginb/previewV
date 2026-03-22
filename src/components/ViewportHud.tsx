@@ -13,6 +13,7 @@ export const ViewportHud: React.FC = () => {
   const scale = useCanvasStore((s) => s.viewport.scale)
   const resetViewport = useCanvasStore((s) => s.resetViewport)
   const frameAllItemsInViewport = useCanvasStore((s) => s.frameAllItemsInViewport)
+  const packAllTilesGrid = useCanvasStore((s) => s.packAllTilesGrid)
 
   const runFrameAll = () => {
     const el = document.getElementById('previewv-canvas-root')
@@ -58,6 +59,14 @@ export const ViewportHud: React.FC = () => {
           ].join(' ')}
         >
           {playbackSuspended ? '▶ Play all' : '⏹ Stop all'}
+        </button>
+        <button
+          type="button"
+          onClick={() => packAllTilesGrid()}
+          title="Pack all tiles into a grid without overlaps (\)"
+          className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors px-2 py-1 rounded bg-zinc-900/80 border border-zinc-700/50 hover:border-zinc-600"
+        >
+          Grid pack (\)
         </button>
         <button
           type="button"

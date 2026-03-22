@@ -11,7 +11,9 @@ import { imageDrawRedoRegistry } from '../utils/imageDrawRedoRegistry'
 import { imageExportRegistry } from '../utils/imageExportRegistry'
 import { flushImageAnnotations } from '../utils/flushImageAnnotations'
 import { importImageFile, isRasterImportFile } from '../utils/imageImport'
-import { imageTileViewSize } from '../utils/tileSizing'
+import { defaultVideoTileSizeForNew, imageTileViewSize } from '../utils/tileSizing'
+import { setVideoPlaybackSuspended } from '../utils/videoGlobalPlayback'
+import { requestVideoWarmupEarly } from '../utils/warmupCanvasMedia'
 import type { CanvasItem, ImageItem, NoteItem, VideoItem } from '../types'
 
 // ── File helpers ──────────────────────────────────────────────────────────────
@@ -39,8 +41,7 @@ function fileToUrl(file: File): string {
   return URL.createObjectURL(file)
 }
 
-const TILE_W  = 320
-const TILE_H  = 210
+const VIDEO_TILE_DEFAULT = defaultVideoTileSizeForNew()
 const NOTE_W  = 220
 const NOTE_H  = 160
 
@@ -96,6 +97,21 @@ function rectsIntersect(
   return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by
 }
 
+function cloneCanvasItemForClipboard(item: CanvasItem): CanvasItem {
+  if (item.type !== 'image') return { ...item }
+  const exporter = imageExportRegistry.get(item.id)
+  const exportedSrcUrl = exporter ? exporter() : null
+  if (exportedSrcUrl) {
+    return {
+      ...item,
+      srcUrl: exportedSrcUrl,
+      storage: 'asset',
+      projectAssetPath: undefined,
+    }
+  }
+  return { ...item }
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export const Canvas: React.FC = () => {
@@ -103,11 +119,13 @@ export const Canvas: React.FC = () => {
   const selectedIds     = useCanvasStore((s) => s.selectedIds)
   const viewport        = useCanvasStore((s) => s.viewport)
   const addItem         = useCanvasStore((s) => s.addItem)
+  const addItems        = useCanvasStore((s) => s.addItems)
   const removeItems     = useCanvasStore((s) => s.removeItems)
   const clearSelection  = useCanvasStore((s) => s.clearSelection)
   const selectOne       = useCanvasStore((s) => s.selectOne)
   const setSelection    = useCanvasStore((s) => s.setSelection)
   const layoutMediaRow  = useCanvasStore((s) => s.layoutMediaRow)
+  const packAllTilesGrid = useCanvasStore((s) => s.packAllTilesGrid)
   const resetViewport   = useCanvasStore((s) => s.resetViewport)
   const frameAllItemsInViewport = useCanvasStore((s) => s.frameAllItemsInViewport)
   const imageEditModeId = useCanvasStore((s) => s.imageEditModeId)
@@ -145,6 +163,7 @@ export const Canvas: React.FC = () => {
 
   useCanvasPanZoom(containerRef)
   useVideoPlaybackManager(containerRef)
+  const selectedIdSet = new Set(selectedIds)
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const rect = containerRef.current?.getBoundingClientRect()
@@ -188,15 +207,9 @@ export const Canvas: React.FC = () => {
       if (detail.command === 'copy') {
         const ids = state.selectedIds
         if (!ids.length) return
-        const selected = state.items.filter((i) => ids.includes(i.id))
-        const copies: CanvasItem[] = selected.map((item) => {
-          if (item.type === 'image') {
-            const exporter = imageExportRegistry.get(item.id)
-            const dataUrl = exporter ? exporter() : item.dataUrl
-            return { ...item, dataUrl }
-          }
-          return { ...item }
-        })
+        const idSet = new Set(ids)
+        const selected = state.items.filter((i) => idSet.has(i.id))
+        const copies: CanvasItem[] = selected.map(cloneCanvasItemForClipboard)
         state.setClipboard(copies)
         return
       }
@@ -336,7 +349,7 @@ export const Canvas: React.FC = () => {
           .saveProjectAs({ projectData })
           .then((res: any) => {
             if (!res) return
-            state.markSaved(res.path)
+            state.syncSavedProjectState(res.project, res.path)
           })
           .catch((err: any) => alert(err?.message ?? String(err)))
         return
@@ -353,7 +366,7 @@ export const Canvas: React.FC = () => {
           .saveProject({ projectData, path: state.currentProjectPath })
           .then((res: any) => {
             if (!res) return
-            state.markSaved(res.path)
+            state.syncSavedProjectState(res.project, res.path)
           })
           .catch((err: any) => alert(err?.message ?? String(err)))
         return
@@ -409,15 +422,9 @@ export const Canvas: React.FC = () => {
         const ids = state.selectedIds
         e.preventDefault()
         if (ids.length) {
-          const selected = state.items.filter((i) => ids.includes(i.id))
-          const copies: CanvasItem[] = selected.map((item) => {
-            if (item.type === 'image') {
-              const exporter = imageExportRegistry.get(item.id)
-              const dataUrl = exporter ? exporter() : item.dataUrl
-              return { ...item, dataUrl }
-            }
-            return { ...item }
-          })
+          const idSet = new Set(ids)
+          const selected = state.items.filter((i) => idSet.has(i.id))
+          const copies: CanvasItem[] = selected.map(cloneCanvasItemForClipboard)
           state.setClipboard(copies)
         }
         return
@@ -439,7 +446,22 @@ export const Canvas: React.FC = () => {
       // Shift+D — duplicate selection (offset copy, new ids)
       if (e.shiftKey && e.code === 'KeyD' && !e.ctrlKey && !e.metaKey && !isTypingTarget(e)) {
         e.preventDefault()
-        useCanvasStore.getState().duplicateSelection()
+        const state = useCanvasStore.getState()
+        const idSet = new Set(state.selectedIds)
+        if (idSet.size === 0) return
+        const toDup = state.items.filter((item) => idSet.has(item.id))
+        if (!toDup.length) return
+        const prefix = `dup-${Date.now()}`
+        const offsetX = 32
+        const offsetY = 32
+        const newItems = toDup.map((item, idx) => ({
+          ...cloneCanvasItemForClipboard(item),
+          id: `${item.type}-${prefix}-${idx}`,
+          x: item.x + offsetX,
+          y: item.y + offsetY,
+        }))
+        useCanvasStore.getState().addItems(newItems)
+        useCanvasStore.getState().setSelection(newItems.map((item) => item.id))
         return
       }
 
@@ -447,6 +469,19 @@ export const Canvas: React.FC = () => {
       if (e.code === 'KeyL' && !isTypingTarget(e)) {
         e.preventDefault()
         layoutMediaRow()
+        return
+      }
+
+      // \ — pack all tiles into a non-overlapping grid (Backslash; IntlBackslash on some layouts)
+      if (
+        (e.code === 'Backslash' || e.code === 'IntlBackslash') &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        !isTypingTarget(e)
+      ) {
+        e.preventDefault()
+        packAllTilesGrid()
         return
       }
 
@@ -495,7 +530,8 @@ export const Canvas: React.FC = () => {
         const img: ImageItem = {
           type: 'image',
           id: `img-${Date.now()}`,
-          dataUrl: cap.dataUrl,
+          srcUrl: cap.dataUrl,
+          storage: 'asset',
           sourceVideoId: selected.id,
           naturalWidth: cap.width,
           naturalHeight: cap.height,
@@ -521,7 +557,7 @@ export const Canvas: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown, true)
     return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [addItem, removeItems, selectOne, layoutMediaRow, frameAllItemsInViewport])
+  }, [addItem, removeItems, selectOne, layoutMediaRow, packAllTilesGrid, frameAllItemsInViewport])
 
   const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault()
@@ -541,20 +577,35 @@ export const Canvas: React.FC = () => {
       const videoFiles = files.filter(isVideoFile)
       const rasterFiles = files.filter(isRasterImportFile)
 
+      const dropMediaCount = videoFiles.length + rasterFiles.filter((f) => !isVideoFile(f)).length
+      if (dropMediaCount > 20) {
+        setVideoPlaybackSuspended(true)
+      }
+
       let i = 0
+      const droppedVideoUrls: string[] = []
+      const newItems: CanvasItem[] = []
       for (const file of videoFiles) {
+        const dw = VIDEO_TILE_DEFAULT.width
+        const dh = VIDEO_TILE_DEFAULT.height
+        const srcUrl = fileToUrl(file)
+        droppedVideoUrls.push(srcUrl)
         const tile: VideoItem = {
           type:     'video',
           id:       `tile-${Date.now()}-${i}`,
-          srcUrl:   fileToUrl(file),
+          srcUrl,
           fileName: file.name,
-          x:        wx - TILE_W / 2 + i * 24,
-          y:        wy - TILE_H / 2 + i * 24,
-          width:    TILE_W,
-          height:   TILE_H,
+          x:        wx - dw / 2 + i * 24,
+          y:        wy - dh / 2 + i * 24,
+          width:    dw,
+          height:   dh,
         }
-        addItem(tile)
+        newItems.push(tile)
         i++
+      }
+
+      if (droppedVideoUrls.length > 0) {
+        queueMicrotask(() => requestVideoWarmupEarly(droppedVideoUrls))
       }
 
       for (const file of rasterFiles) {
@@ -564,9 +615,12 @@ export const Canvas: React.FC = () => {
           const img: ImageItem = {
             type: 'image',
             id: `img-${Date.now()}-${i}`,
-            dataUrl: payload.dataUrl,
+            srcUrl: payload.srcUrl,
+            storage: payload.storage,
             sourceVideoId: '',
             fileName: file.name,
+            ...(payload.sourceFilePath ? { sourceFilePath: payload.sourceFilePath } : {}),
+            ...(payload.projectAssetPath ? { projectAssetPath: payload.projectAssetPath } : {}),
             naturalWidth: payload.naturalWidth,
             naturalHeight: payload.naturalHeight,
             x: wx - payload.width / 2 + i * 24,
@@ -574,14 +628,18 @@ export const Canvas: React.FC = () => {
             width: payload.width,
             height: payload.height,
           }
-          addItem(img)
+          newItems.push(img)
         } catch (err: any) {
           alert(err?.message ?? String(err))
         }
         i++
       }
+
+      if (newItems.length > 0) {
+        addItems(newItems)
+      }
     },
-    [addItem, viewport],
+    [addItems, viewport],
   )
 
   const handleMouseDown = useCallback(
@@ -667,7 +725,7 @@ export const Canvas: React.FC = () => {
         }}
       >
         {items.map((item: CanvasItem) => {
-          const sel = selectedIds.includes(item.id)
+          const sel = selectedIdSet.has(item.id)
           if (item.type === 'video') {
             return <VideoTile key={item.id} tile={item} scale={viewport.scale} isSelected={sel} />
           }
@@ -690,7 +748,7 @@ export const Canvas: React.FC = () => {
               Video: MP4, WebM, MOV… · Images: JPEG, PNG, TIFF, EXR, DPX…
             </p>
             <p className="text-xs mt-3 opacity-40">
-              Ctrl+A · A · Ctrl+O · L · Ctrl+N / F3 · F4 image edit
+              Ctrl+A · A · Ctrl+O · L · \ · Ctrl+N / F3 · F4 image edit
             </p>
           </div>
         </div>

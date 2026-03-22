@@ -37,6 +37,7 @@ interface ImageTileProps {
 
 export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected }) => {
   const updateItem   = useCanvasStore((s) => s.updateItem)
+  const updateItemsBatch = useCanvasStore((s) => s.updateItemsBatch)
   const selectOne    = useCanvasStore((s) => s.selectOne)
   const toggleSelect = useCanvasStore((s) => s.toggleSelect)
   const imageEditModeId = useCanvasStore((s) => s.imageEditModeId)
@@ -58,6 +59,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
   const lastPt    = useRef<{ x: number; y: number } | null>(null)
   const lineStart = useRef<{ x: number; y: number } | null>(null)
   const lineSnap  = useRef<ImageData | null>(null)
+  const overlayDirtyRef = useRef(false)
 
   // Per-stroke undo: each entry is the canvas state BEFORE that stroke
   const undoStack = useRef<ImageData[]>([])
@@ -103,28 +105,33 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
     }
   }, [item.id, undoLastStroke])
 
-  const exportAnnotatedDataUrl = useCallback((): string => {
+  const exportAnnotatedDataUrl = useCallback((): string | null => {
+    if (!overlayDirtyRef.current) return null
     const canvas = canvasRef.current
     const img = baseImgRef.current
-    if (!canvas || !img) return item.dataUrl
+    if (!canvas || !img) return null
     try {
       const off = document.createElement('canvas')
       off.width = canvas.width
       off.height = canvas.height
       const ctx = off.getContext('2d')
-      if (!ctx) return item.dataUrl
+      if (!ctx) return null
       ctx.drawImage(img, 0, 0, off.width, off.height)
       ctx.drawImage(canvas, 0, 0)
       return off.toDataURL('image/png')
     } catch {
-      return item.dataUrl
+      return null
     }
-  }, [item.dataUrl])
+  }, [])
 
   useEffect(() => {
     imageExportRegistry.set(item.id, exportAnnotatedDataUrl)
     return () => { imageExportRegistry.delete(item.id) }
   }, [item.id, exportAnnotatedDataUrl])
+
+  useEffect(() => {
+    overlayDirtyRef.current = false
+  }, [item.id, item.srcUrl])
 
   useEffect(() => {
     const el = rootRef.current
@@ -153,7 +160,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
   const naturalSyncRef = useRef(false)
   useEffect(() => {
     naturalSyncRef.current = false
-  }, [item.id, item.dataUrl])
+  }, [item.id, item.srcUrl])
 
   const onBaseImageLoad = useCallback(
     (ev: React.SyntheticEvent<HTMLImageElement>) => {
@@ -247,9 +254,10 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
     if (!ctx) return
     const pt = toCanvas(e)
 
-    if (tool === 'pencil') {
-      ctx.globalCompositeOperation = 'source-over'
-      ctx.strokeStyle = color
+      if (tool === 'pencil') {
+      overlayDirtyRef.current = true
+        ctx.globalCompositeOperation = 'source-over'
+        ctx.strokeStyle = color
       ctx.lineWidth   = size
       ctx.lineCap     = 'round'
       ctx.lineJoin    = 'round'
@@ -260,6 +268,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
       lastPt.current = pt
 
     } else if (tool === 'line') {
+      overlayDirtyRef.current = true
       // Restore the pre-stroke snapshot so the preview line doesn't compound
       ctx.putImageData(lineSnap.current!, 0, 0)
       ctx.globalCompositeOperation = 'source-over'
@@ -273,6 +282,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
       ctx.stroke()
 
     } else if (tool === 'eraser') {
+      overlayDirtyRef.current = true
       ctx.globalCompositeOperation = 'destination-out'
       ctx.strokeStyle = 'rgba(0,0,0,1)'
       ctx.lineWidth   = size * 4
@@ -307,13 +317,18 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
     img.onload = () => {
       ctx.drawImage(img, 0, 0, off.width, off.height)
       ctx.drawImage(canvas, 0, 0)
-      updateItem(item.id, { dataUrl: off.toDataURL('image/png') })
+      overlayDirtyRef.current = false
+      updateItem(item.id, {
+        srcUrl: off.toDataURL('image/png'),
+        storage: 'asset',
+        projectAssetPath: undefined,
+      })
       canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height)
       undoStack.current = []
       redoStack.current = []
     }
-    img.src = item.dataUrl
-  }, [item.id, item.dataUrl, updateItem])
+    img.src = item.srcUrl
+  }, [item.id, item.srcUrl, updateItem])
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -363,9 +378,13 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
         }
         const dx = d.x - currentOrigin.x
         const dy = d.y - currentOrigin.y
-        for (const [id, pos] of origins) {
-          updateItem(id, { x: pos.x + dx, y: pos.y + dy })
-        }
+        updateItemsBatch(
+          Array.from(origins.entries()).map(([id, pos]) => ({
+            id,
+            updates: { x: pos.x + dx, y: pos.y + dy },
+          })),
+          { recordHistory: true },
+        )
         dragOriginsRef.current = null
         requestAnimationFrame(() => {
           for (const id of origins.keys()) {
@@ -493,7 +512,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
         <div ref={areaRef} className="flex-1 relative overflow-hidden bg-black">
           <img
             ref={baseImgRef}
-            src={item.dataUrl}
+            src={item.srcUrl}
             onLoad={onBaseImageLoad}
             className="absolute inset-0 w-full h-full object-contain select-none"
             style={{ pointerEvents: isEditing ? 'none' : 'auto' }}

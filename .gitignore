@@ -5,5 +5,7 @@ release/
 .vscode/
 .idea/
 *.log
+.tmp-tests/
+electron.vite.config.*.mjs
 .DS_Store
 Thumbs.db

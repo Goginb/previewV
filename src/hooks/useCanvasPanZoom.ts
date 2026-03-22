@@ -14,12 +14,30 @@ export const spacePanActiveRef = { current: false }
 export function useCanvasPanZoom(containerRef: React.RefObject<HTMLElement | null>) {
   const setViewport = useCanvasStore((s) => s.setViewport)
   const viewportRef = useRef(useCanvasStore.getState().viewport)
+  const rafRef = useRef(0)
+  const pendingViewportRef = useRef<null | { x: number; y: number; scale: number }>(null)
 
   useEffect(() => {
     return useCanvasStore.subscribe((state) => {
       viewportRef.current = state.viewport
     })
   }, [])
+
+  const scheduleViewport = useCallback(
+    (nextViewport: { x: number; y: number; scale: number }) => {
+      pendingViewportRef.current = nextViewport
+      viewportRef.current = nextViewport
+      if (rafRef.current) return
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = 0
+        const pending = pendingViewportRef.current
+        pendingViewportRef.current = null
+        if (!pending) return
+        setViewport(pending)
+      })
+    },
+    [setViewport],
+  )
 
   const isPanning = useRef(false)
   const panStart = useRef({ x: 0, y: 0 })
@@ -44,13 +62,13 @@ export function useCanvasPanZoom(containerRef: React.RefObject<HTMLElement | nul
       const worldX = (cx - x) / scale
       const worldY = (cy - y) / scale
 
-      setViewport({
+      scheduleViewport({
         scale: newScale,
         x: cx - worldX * newScale,
         y: cy - worldY * newScale,
       })
     },
-    [containerRef, setViewport],
+    [containerRef, scheduleViewport],
   )
 
   const startPan = useCallback((screenX: number, screenY: number) => {
@@ -80,12 +98,12 @@ export function useCanvasPanZoom(containerRef: React.RefObject<HTMLElement | nul
       if (!isPanning.current) return
       const dx = e.clientX - panStart.current.x
       const dy = e.clientY - panStart.current.y
-      setViewport({
+      scheduleViewport({
         x: panOrigin.current.x + dx,
         y: panOrigin.current.y + dy,
       })
     },
-    [setViewport],
+    [scheduleViewport],
   )
 
   const stopPan = useCallback(() => {
@@ -130,6 +148,7 @@ export function useCanvasPanZoom(containerRef: React.RefObject<HTMLElement | nul
       window.removeEventListener('mouseup', stopPan)
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
+      if (rafRef.current) cancelAnimationFrame(rafRef.current)
     }
   }, [handleWheel, handleMouseDown, handleMouseMove, stopPan, handleKeyDown, handleKeyUp, containerRef])
 }

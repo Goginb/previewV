@@ -6,6 +6,7 @@ const SECTIONS: { title: string; body: string[] }[] = [
     body: [
       'Project files use the .previewv extension (JSON): tiles, pan/zoom, and viewport.',
       'Open: File → Open… or Ctrl+O. Recent files are under File.',
+      'Add folder…: import all supported videos and images from a folder (subfolders included). If some files are already on the canvas, choose to add duplicates again or skip them.',
       'Save: Ctrl+S; Save As: Ctrl+Shift+S. Pick a filename on first save.',
       'Close project without quitting: File → Close project (Ctrl+W).',
       'When closing the window or switching projects, unsaved changes prompt Save / Don’t save / Cancel.',
@@ -28,6 +29,7 @@ const SECTIONS: { title: string; body: string[] }[] = [
       'Select all tiles: Ctrl+A (in a note field, Ctrl+A selects text).',
       'Marquee: drag on empty canvas. Shift+click to add to selection.',
       'Fit everything: A (without Ctrl) or the Fit all button.',
+      'Bottom-right HUD: Stop all / Play all — globally pause or resume video autoplay on the canvas.',
     ],
   },
   {
@@ -36,7 +38,8 @@ const SECTIONS: { title: string; body: string[] }[] = [
       'Ctrl+O — open · Ctrl+S — save · Ctrl+Shift+S — save as',
       'Ctrl+W — close project · Ctrl+A — select all tiles',
       'Ctrl+Z / Ctrl+Shift+Z — undo / redo · Ctrl+C / Ctrl+V — copy / paste tiles',
-      'Delete — remove selection · Shift+D — duplicate · L — row layout for video/image tiles',
+      'Delete — remove selection · Shift+D — duplicate · L — grid layout: all videos (up to 20 per row), then all images below (up to 20 per row), no overlap',
+      '\\ (Backslash) or “Grid pack” — all tiles (video, image, note) into a non-overlapping grid, reading order, up to 20 per row',
       'Ctrl+N — new note · F3 — frame from video · F4 — draw on selected image',
       'Alt+Shift+A — pin window (always on top) · Alt+Shift+B — unpin (also View menu)',
     ],

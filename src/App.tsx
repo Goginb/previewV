@@ -7,6 +7,8 @@ import { useCanvasStore } from './store/canvasStore'
 import { useUiStore } from './store/uiStore'
 import { flushImageAnnotations } from './utils/flushImageAnnotations'
 import { createEmptyProject } from './utils/emptyProject'
+import { importMediaPathsToCanvas } from './utils/importMediaPaths'
+import { collectExistingSourcePaths, normalizePathKey } from './utils/sourcePaths'
 import type { ElectronProjectAPI } from './electron-api'
 
 type ProjectAPI = ElectronProjectAPI
@@ -31,7 +33,7 @@ async function ensureCanLeaveProject(projectAPI: ProjectAPI): Promise<boolean> {
   try {
     const res = await projectAPI.saveProject({ projectData, path })
     if (!res) return false
-    useCanvasStore.getState().markSaved(res.path)
+    useCanvasStore.getState().syncSavedProjectState(res.project, res.path)
     return true
   } catch (err: any) {
     alert(err?.message ?? String(err))
@@ -58,7 +60,7 @@ const App: React.FC = () => {
   const [helpOpen, setHelpOpen] = useState(false)
   const loadProjectState = useCanvasStore((s) => s.loadProjectState)
   const getProjectDataForSave = useCanvasStore((s) => s.getProjectDataForSave)
-  const markSaved = useCanvasStore((s) => s.markSaved)
+  const syncSavedProjectState = useCanvasStore((s) => s.syncSavedProjectState)
 
   useEffect(() => {
     const onHelp = () => setHelpOpen(true)
@@ -81,7 +83,12 @@ const App: React.FC = () => {
   useEffect(() => {
     syncWindowProjectState()
     syncDocumentTitle()
-    const unsub = useCanvasStore.subscribe(() => {
+    let prevDirty = useCanvasStore.getState().isDirty
+    let prevPath = useCanvasStore.getState().currentProjectPath
+    const unsub = useCanvasStore.subscribe((state) => {
+      if (state.isDirty === prevDirty && state.currentProjectPath === prevPath) return
+      prevDirty = state.isDirty
+      prevPath = state.currentProjectPath
       syncWindowProjectState()
       syncDocumentTitle()
     })
@@ -103,6 +110,47 @@ const App: React.FC = () => {
           loadProjectState(res.project, res.path)
           return
         }
+        if (detail.action === 'add-folder') {
+          if (!projectAPI.pickFolderDialog || !projectAPI.enumerateFolderMedia) {
+            alert('Add folder is only available in the desktop app.')
+            return
+          }
+          const folder = await projectAPI.pickFolderDialog()
+          if (!folder) return
+          const paths = await projectAPI.enumerateFolderMedia(folder)
+          if (paths.length === 0) {
+            alert('No supported video or image files in this folder.')
+            return
+          }
+          const items = useCanvasStore.getState().items
+          const existing = collectExistingSourcePaths(items)
+          const duplicates = paths.filter((p) => existing.has(normalizePathKey(p)))
+          let toImport = paths
+          if (duplicates.length > 0) {
+            const choice = await projectAPI.duplicateMediaImportDialog({
+              count: duplicates.length,
+            })
+            if (choice === 'cancel') return
+            if (choice === 'skip') {
+              toImport = paths.filter((p) => !existing.has(normalizePathKey(p)))
+              if (toImport.length === 0) {
+                alert('Nothing new to add — all files were already on the canvas.')
+                return
+              }
+            }
+          }
+          const el = document.getElementById('previewv-canvas-root')
+          const rect = el?.getBoundingClientRect()
+          const vp = useCanvasStore.getState().viewport
+          const cw = rect?.width ?? 800
+          const ch = rect?.height ?? 600
+          const sx = cw / 2
+          const sy = ch / 2
+          const wx = (sx - vp.x) / vp.scale
+          const wy = (sy - vp.y) / vp.scale
+          await importMediaPathsToCanvas(toImport, { x: wx, y: wy })
+          return
+        }
         if (detail.action === 'save') {
           flushImageAnnotations()
           const projectData = getProjectDataForSave()
@@ -111,7 +159,7 @@ const App: React.FC = () => {
             path: useCanvasStore.getState().currentProjectPath,
           })
           if (!res) return
-          markSaved(res.path)
+          syncSavedProjectState(res.project, res.path)
           return
         }
         if (detail.action === 'save-as') {
@@ -119,7 +167,7 @@ const App: React.FC = () => {
           const projectData = getProjectDataForSave()
           const res = await projectAPI.saveProjectAs({ projectData })
           if (!res) return
-          markSaved(res.path)
+          syncSavedProjectState(res.project, res.path)
           return
         }
         if (detail.action === 'save-and-close') {
@@ -130,7 +178,7 @@ const App: React.FC = () => {
             path: useCanvasStore.getState().currentProjectPath,
           })
           if (!res) return
-          markSaved(res.path)
+          syncSavedProjectState(res.project, res.path)
           await projectAPI.confirmCloseWindow()
           return
         }
@@ -155,7 +203,7 @@ const App: React.FC = () => {
 
     window.addEventListener('project-menu-action', handler)
     return () => window.removeEventListener('project-menu-action', handler)
-  }, [getProjectDataForSave, loadProjectState, markSaved])
+  }, [getProjectDataForSave, loadProjectState, syncSavedProjectState])
 
   // Open-on-launch / double-click flow:
   useEffect(() => {

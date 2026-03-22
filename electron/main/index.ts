@@ -9,14 +9,23 @@ import {
   nativeImage,
 } from 'electron'
 import { spawn } from 'child_process'
+import { createHash } from 'crypto'
 import { tmpdir } from 'os'
 import ffmpegStatic from 'ffmpeg-static'
-import { join, basename, extname, normalize } from 'path'
+import { join, basename, dirname, extname, normalize } from 'path'
 import { createReadStream } from 'fs'
 import { promises as fs } from 'fs'
 import { Readable } from 'stream'
 
-import { serializeProject, deserializeProject } from '../../src/utils/projectSerializer'
+import { imageTileViewSize } from '../../src/utils/tileSizing'
+import {
+  deserializeProject,
+  isDataUrl,
+  localPathToMediaUrl,
+  mediaUrlToLocalPath,
+  serializeProject,
+} from '../../src/utils/projectSerializer'
+import type { CanvasItem, ImageItem } from '../../src/types'
 import type { DeserializedProject, ProjectFile } from '../../src/types/project'
 
 const PROJECT_EXT = '.previewv'
@@ -136,6 +145,240 @@ protocol.registerSchemesAsPrivileged([
 ])
 
 const RECENTS_FILE = 'recent-projects.json'
+const PROJECT_ASSET_DIR_SUFFIX = '.assets'
+const PREVIEW_CACHE_DIR = join(tmpdir(), 'previewv-raster-cache')
+const PREVIEW_IMAGE_EXT = new Set(['.tif', '.tiff', '.dpx', '.exr'])
+const DIRECT_IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'])
+const rasterPreviewCache = new Map<
+  string,
+  { mtimeMs: number; size: number; previewPath: string; width: number; height: number }
+>()
+
+/** Recursive folder import: same extensions as the canvas (video + raster). */
+const FOLDER_VIDEO_EXT = new Set(['.mp4', '.webm', '.mov', '.mkv', '.avi', '.m4v', '.ogv'])
+const FOLDER_IMAGE_EXT = new Set([
+  '.jpg',
+  '.jpeg',
+  '.png',
+  '.webp',
+  '.gif',
+  '.bmp',
+  '.tif',
+  '.tiff',
+  '.dpx',
+  '.exr',
+])
+
+function isMediaFileExt(ext: string): boolean {
+  const e = ext.toLowerCase()
+  return FOLDER_VIDEO_EXT.has(e) || FOLDER_IMAGE_EXT.has(e)
+}
+
+function normalizePathKey(filePath: string): string {
+  return normalize(filePath).replace(/\\/g, '/').toLowerCase()
+}
+
+function projectAssetDir(projectPath: string): string {
+  return `${projectPath}${PROJECT_ASSET_DIR_SUFFIX}`
+}
+
+function resolveProjectAssetPath(projectPath: string, relativePath: string): string {
+  const parts = relativePath.split('/').filter(Boolean)
+  return join(projectAssetDir(projectPath), ...parts)
+}
+
+function sanitizeAssetSegment(value: string): string {
+  const trimmed = value.trim().replace(/\.[^.]+$/, '')
+  const cleaned = trimmed.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/-+/g, '-')
+  return cleaned.replace(/^-|-$/g, '') || 'image'
+}
+
+function buildProjectAssetRelativePath(item: ImageItem, kind: 'asset' | 'preview'): string {
+  const base = sanitizeAssetSegment(item.fileName ?? item.id)
+  const suffix = kind === 'preview' ? 'preview' : 'image'
+  return `images/${base}-${item.id}-${suffix}.png`
+}
+
+function dataUrlToBuffer(dataUrl: string): Buffer {
+  const match = /^data:.*?;base64,(.+)$/i.exec(dataUrl)
+  if (!match) {
+    throw new Error('Unsupported data URL payload')
+  }
+  return Buffer.from(match[1], 'base64')
+}
+
+async function loadNativeImageSize(filePath: string): Promise<{ width: number; height: number }> {
+  let img = nativeImage.createFromPath(filePath)
+  if (img.isEmpty()) {
+    const buf = await fs.readFile(filePath)
+    img = nativeImage.createFromBuffer(buf)
+  }
+  const size = img.getSize()
+  if (!size.width || !size.height) {
+    throw new Error(`Failed to read image dimensions for "${basename(filePath)}"`)
+  }
+  return size
+}
+
+async function getUtifModule() {
+  const mod = await import('utif')
+  return (mod as { default?: typeof mod }).default ?? mod
+}
+
+async function ensurePreviewCacheDir(): Promise<void> {
+  await fs.mkdir(PREVIEW_CACHE_DIR, { recursive: true })
+}
+
+function previewCacheFilePath(filePath: string): string {
+  const hash = createHash('sha1').update(normalizePathKey(filePath)).digest('hex').slice(0, 16)
+  return join(PREVIEW_CACHE_DIR, `${hash}.png`)
+}
+
+async function renderTiffPreview(filePath: string, outputPath: string): Promise<{ width: number; height: number }> {
+  const UTIF = await getUtifModule()
+  const input = await fs.readFile(filePath)
+  const ab = input.buffer.slice(input.byteOffset, input.byteOffset + input.byteLength)
+  const ifds = UTIF.decode(ab)
+  if (!ifds.length) throw new Error('TIFF: no frames')
+  UTIF.decodeImage(ab, ifds[0])
+  const ifd = ifds[0]
+  const width = ifd.width
+  const height = ifd.height
+  if (!width || !height) throw new Error('TIFF: invalid dimensions')
+  const rgba = UTIF.toRGBA8(ifd)
+  const bitmap = Buffer.from(rgba.buffer, rgba.byteOffset, rgba.byteLength)
+  const png = nativeImage.createFromBitmap(bitmap, { width, height }).toPNG()
+  await fs.writeFile(outputPath, png)
+  return { width, height }
+}
+
+async function renderViaFfmpegPreview(filePath: string, outputPath: string): Promise<{ width: number; height: number }> {
+  const ff = ffmpegStatic
+  if (!ff) {
+    throw new Error('ffmpeg-static not found (run npm install ffmpeg-static)')
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const p = spawn(ff, ['-y', '-i', filePath, '-frames:v', '1', outputPath], {
+      windowsHide: true,
+    })
+    let err = ''
+    p.stderr?.on('data', (d: Buffer) => {
+      err += d.toString()
+    })
+    p.on('error', reject)
+    p.on('close', (code) => {
+      if (code === 0) resolve()
+      else reject(new Error(err.trim() || `ffmpeg exited with code ${code}`))
+    })
+  })
+
+  return loadNativeImageSize(outputPath)
+}
+
+async function ensureSpecialImagePreview(filePath: string): Promise<{
+  previewPath: string
+  width: number
+  height: number
+}> {
+  const stat = await fs.stat(filePath)
+  const cacheKey = normalizePathKey(filePath)
+  const cached = rasterPreviewCache.get(cacheKey)
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    try {
+      await fs.access(cached.previewPath)
+      return {
+        previewPath: cached.previewPath,
+        width: cached.width,
+        height: cached.height,
+      }
+    } catch {
+      rasterPreviewCache.delete(cacheKey)
+    }
+  }
+
+  await ensurePreviewCacheDir()
+  const previewPath = previewCacheFilePath(filePath)
+  const ext = extname(filePath).toLowerCase()
+  const rendered =
+    ext === '.tif' || ext === '.tiff'
+      ? await renderTiffPreview(filePath, previewPath)
+      : await renderViaFfmpegPreview(filePath, previewPath)
+
+  rasterPreviewCache.set(cacheKey, {
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    previewPath,
+    width: rendered.width,
+    height: rendered.height,
+  })
+
+  return {
+    previewPath,
+    width: rendered.width,
+    height: rendered.height,
+  }
+}
+
+async function resolveImageSourceFromPath(filePath: string) {
+  const normalizedPath = normalize(filePath)
+  const st = await fs.stat(normalizedPath)
+  if (!st.isFile()) {
+    throw new Error('Not a file')
+  }
+
+  const ext = extname(normalizedPath).toLowerCase()
+  if (DIRECT_IMAGE_EXT.has(ext)) {
+    const natural = await loadNativeImageSize(normalizedPath)
+    const view = imageTileViewSize(natural.width, natural.height)
+    return {
+      srcUrl: localPathToMediaUrl(normalizedPath),
+      storage: 'linked' as const,
+      naturalWidth: natural.width,
+      naturalHeight: natural.height,
+      width: view.width,
+      height: view.height,
+      sourceFilePath: normalizedPath,
+    }
+  }
+
+  if (PREVIEW_IMAGE_EXT.has(ext)) {
+    const preview = await ensureSpecialImagePreview(normalizedPath)
+    const view = imageTileViewSize(preview.width, preview.height)
+    return {
+      srcUrl: localPathToMediaUrl(preview.previewPath),
+      storage: 'linked' as const,
+      naturalWidth: preview.width,
+      naturalHeight: preview.height,
+      width: view.width,
+      height: view.height,
+      sourceFilePath: normalizedPath,
+      projectAssetPath: preview.previewPath,
+    }
+  }
+
+  throw new Error(`Unsupported format: ${ext || 'unknown'}`)
+}
+
+async function walkDirCollectMediaFiles(dir: string): Promise<string[]> {
+  const out: string[] = []
+  let entries: import('fs').Dirent[]
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true })
+  } catch {
+    return out
+  }
+  for (const ent of entries) {
+    const full = join(dir, ent.name)
+    if (ent.isDirectory()) {
+      out.push(...(await walkDirCollectMediaFiles(full)))
+    } else if (ent.isFile()) {
+      const x = extname(ent.name)
+      if (isMediaFileExt(x)) out.push(full)
+    }
+  }
+  return out
+}
 
 async function readRecentProjects(userDataDir: string): Promise<string[]> {
   const filePath = join(userDataDir, RECENTS_FILE)
@@ -180,7 +423,9 @@ async function readProjectFromDisk(projectPath: string): Promise<{ project: Dese
   const raw = await fs.readFile(projectPath, 'utf8')
   const parsed: unknown = JSON.parse(raw)
   const rawItemsCount = isRecord(parsed) && Array.isArray((parsed as any).items) ? (parsed as any).items.length : null
-  const project = deserializeProject(parsed)
+  const project = deserializeProject(parsed, {
+    resolveAssetPath: (relativePath) => resolveProjectAssetPath(projectPath, relativePath),
+  })
   return { project, rawItemsCount }
 }
 
@@ -196,6 +441,18 @@ let activeWindow: BrowserWindow | null = null
 
 /** Mirrors BrowserWindow always-on-top; used for menu checkbox + IPC (avoids relying on platform-specific getters). */
 let alwaysOnTopEnabled = false
+
+function revealWindow(win: BrowserWindow): void {
+  if (win.isMinimized()) {
+    win.restore()
+  }
+  if (!win.isVisible()) {
+    win.show()
+  } else {
+    win.show()
+  }
+  win.focus()
+}
 
 function applyAlwaysOnTop(win: BrowserWindow, enabled: boolean): void {
   alwaysOnTopEnabled = enabled
@@ -294,6 +551,11 @@ async function refreshApplicationMenu() {
           label: 'Open...',
           accelerator: 'CmdOrCtrl+O',
           click: () => activeWindow?.webContents.send('project:menu-action', { action: 'open' }),
+        },
+        {
+          label: 'Add folder…',
+          click: () =>
+            activeWindow?.webContents.send('project:menu-action', { action: 'add-folder' }),
         },
         {
           label: 'Save',
@@ -416,13 +678,14 @@ async function refreshApplicationMenu() {
 
 function createWindow(): void {
   alwaysOnTopEnabled = false
+  const showImmediately = !app.isPackaged
 
   const mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
     minWidth: 800,
     minHeight: 600,
-    show: false,
+    show: showImmediately,
     backgroundColor: '#09090b',
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
@@ -430,9 +693,21 @@ function createWindow(): void {
     },
   })
 
-  mainWindow.on('ready-to-show', () => {
-    mainWindow.show()
-  })
+  if (!showImmediately) {
+    mainWindow.on('ready-to-show', () => {
+      revealWindow(mainWindow)
+    })
+  } else {
+    const devShowFallback = setTimeout(() => {
+      if (!mainWindow.isDestroyed()) {
+        revealWindow(mainWindow)
+      }
+    }, 1200)
+    mainWindow.once('ready-to-show', () => {
+      clearTimeout(devShowFallback)
+      revealWindow(mainWindow)
+    })
+  }
 
   activeWindow = mainWindow
   setupWindowCloseGuard(mainWindow)
@@ -494,6 +769,60 @@ app.whenReady().then(() => {
     applyAlwaysOnTop(activeWindow, Boolean(enabled))
   })
 
+  ipcMain.handle('pick-folder-dialog', async () => {
+    if (!activeWindow) return null
+    const result = await dialog.showOpenDialog(activeWindow, {
+      title: 'Select folder with media',
+      properties: ['openDirectory'],
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    return result.filePaths[0]!
+  })
+
+  ipcMain.handle('enumerate-folder-media', async (_e, folderPath: unknown) => {
+    if (typeof folderPath !== 'string' || !folderPath.trim()) return []
+    const dir = normalize(folderPath.trim())
+    try {
+      const st = await fs.stat(dir)
+      if (!st.isDirectory()) return []
+    } catch {
+      return []
+    }
+    const files = await walkDirCollectMediaFiles(dir)
+    files.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+    return files
+  })
+
+  ipcMain.handle('resolve-image-source', async (_e, filePath: unknown) => {
+    if (typeof filePath !== 'string' || !filePath.trim()) {
+      throw new Error('Invalid path')
+    }
+    return resolveImageSourceFromPath(filePath)
+  })
+
+  ipcMain.handle(
+    'duplicate-media-import-dialog',
+    async (event, payload: { count?: number }) => {
+      const win = BrowserWindow.fromWebContents(event.sender)
+      if (!win) return 'cancel'
+      const n = typeof payload?.count === 'number' ? payload.count : 0
+      const { response } = await dialog.showMessageBox(win, {
+        type: 'question',
+        buttons: ['Добавить ещё раз', 'Пропустить дубликаты', 'Отмена'],
+        defaultId: 1,
+        cancelId: 2,
+        title: 'PreviewV',
+        message:
+          n > 0
+            ? `Часть файлов из папки (${n}) уже есть на холсте.`
+            : 'Часть файлов из папки уже есть на холсте.',
+        detail:
+          'Добавить копии ещё раз, не добавлять уже существующие файлы или отменить импорт?',
+      })
+      return (['add', 'skip', 'cancel'] as const)[response] ?? 'cancel'
+    },
+  )
+
   // ── Project IPC ──────────────────────────────────────────────────────────
   ipcMain.handle('get-recent-projects', async () => {
     return readRecentProjects(app.getPath('userData'))
@@ -521,40 +850,6 @@ app.whenReady().then(() => {
       allowWindowClose.set(win, true)
       win.close()
     }
-  })
-
-  /** EXR / DPX / прочее: один кадр через ffmpeg → PNG data URL для рендерера */
-  ipcMain.handle('decode-raster-image-path', async (_e, filePath: string) => {
-    await fs.access(filePath)
-    const ff = ffmpegStatic
-    if (!ff) {
-      throw new Error('ffmpeg-static not found (run npm install ffmpeg-static)')
-    }
-    const out = join(
-      tmpdir(),
-      `pvimg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}.png`,
-    )
-    await new Promise<void>((resolve, reject) => {
-      const p = spawn(ff, ['-y', '-i', filePath, '-frames:v', '1', out], {
-        windowsHide: true,
-      })
-      let err = ''
-      p.stderr?.on('data', (d: Buffer) => {
-        err += d.toString()
-      })
-      p.on('error', reject)
-      p.on('close', (code) => {
-        if (code === 0) resolve()
-        else reject(new Error(err.trim() || `ffmpeg exited with code ${code}`))
-      })
-    })
-    const buf = await fs.readFile(out)
-    await fs.unlink(out).catch(() => {})
-    const ni = nativeImage.createFromBuffer(buf)
-    const { width, height } = ni.getSize()
-    const png = ni.toPNG()
-    const dataUrl = `data:image/png;base64,${png.toString('base64')}`
-    return { dataUrl, width, height }
   })
 
   ipcMain.handle('open-project-dialog', async () => {
@@ -589,45 +884,130 @@ app.whenReady().then(() => {
     return { path: projectPath, project }
   })
 
-  async function saveToPath(projectPath: string, projectData: any): Promise<{ path: string }> {
+  function linkedImageNeedsPreviewAsset(item: ImageItem): boolean {
+    if (!item.sourceFilePath) return false
+    if (item.projectAssetPath) return true
+    if (isDataUrl(item.srcUrl)) return true
+    const srcPath = mediaUrlToLocalPath(item.srcUrl)
+    if (!srcPath) return false
+    return normalizePathKey(srcPath) !== normalizePathKey(item.sourceFilePath)
+  }
+
+  async function materializeImageBuffer(item: ImageItem): Promise<Buffer> {
+    if (isDataUrl(item.srcUrl)) {
+      return dataUrlToBuffer(item.srcUrl)
+    }
+
+    const localSrcPath = mediaUrlToLocalPath(item.srcUrl)
+    const filePath = item.projectAssetPath ?? localSrcPath
+    if (!filePath) {
+      throw new Error(`Can't persist image "${item.fileName ?? item.id}": unsupported source URL`)
+    }
+    return fs.readFile(filePath)
+  }
+
+  async function writeProjectAssets(
+    finalProjectPath: string,
+    items: CanvasItem[],
+  ): Promise<{
+    assetPathByImageId: Map<string, string>
+    previewAssetPathByImageId: Map<string, string>
+  }> {
+    const assetPathByImageId = new Map<string, string>()
+    const previewAssetPathByImageId = new Map<string, string>()
+    const assetWrites: Array<{ relativePath: string; buffer: Buffer }> = []
+
+    for (const item of items) {
+      if (item.type !== 'image') continue
+
+      if (item.storage === 'linked' && item.sourceFilePath) {
+        if (!linkedImageNeedsPreviewAsset(item)) continue
+        const relativePath = buildProjectAssetRelativePath(item, 'preview')
+        previewAssetPathByImageId.set(item.id, relativePath)
+        assetWrites.push({
+          relativePath,
+          buffer: await materializeImageBuffer(item),
+        })
+        continue
+      }
+
+      const relativePath = buildProjectAssetRelativePath(item, 'asset')
+      assetPathByImageId.set(item.id, relativePath)
+      assetWrites.push({
+        relativePath,
+        buffer: await materializeImageBuffer(item),
+      })
+    }
+
+    const assetsRoot = projectAssetDir(finalProjectPath)
+    await fs.rm(assetsRoot, { recursive: true, force: true })
+
+    for (const asset of assetWrites) {
+      const outPath = resolveProjectAssetPath(finalProjectPath, asset.relativePath)
+      await fs.mkdir(dirname(outPath), { recursive: true })
+      await fs.writeFile(outPath, asset.buffer)
+    }
+
+    return { assetPathByImageId, previewAssetPathByImageId }
+  }
+
+  async function saveToPath(
+    projectPath: string,
+    projectData: any,
+  ): Promise<{ path: string; project: DeserializedProject }> {
     const now = new Date().toISOString()
     if (!projectData || !Array.isArray(projectData.items)) {
       throw new Error('Cannot save: projectData.items is not an array')
     }
+
+    const items = projectData.items as CanvasItem[]
+
+    const finalPath =
+      extname(projectPath).toLowerCase() === PROJECT_EXT
+        ? projectPath
+        : `${projectPath}${PROJECT_EXT}`
+
+    const { assetPathByImageId, previewAssetPathByImageId } = await writeProjectAssets(
+      finalPath,
+      items,
+    )
+
     const project = serializeProject({
-      version: 1,
-      items: projectData.items,
+      items,
       viewport: projectData.viewport,
       meta: {
         createdAt: projectData.meta.createdAt,
         updatedAt: projectData.meta.updatedAt ?? now,
       },
+      assetPathForImage: (item) => {
+        const relativePath = assetPathByImageId.get(item.id)
+        if (!relativePath) {
+          throw new Error(`Missing project asset path for image "${item.fileName ?? item.id}"`)
+        }
+        return relativePath
+      },
+      previewAssetPathForImage: (item) => previewAssetPathByImageId.get(item.id),
     })
-    if (project.items.length !== projectData.items.length) {
+    if (project.items.length !== items.length) {
       throw new Error('Cannot save: serialized items count mismatch')
     }
     if (project.items.length === 0) {
       throw new Error('Cannot save: project contains no items')
     }
 
-    // Ensure extension
-    const finalPath =
-      extname(projectPath).toLowerCase() === PROJECT_EXT
-        ? projectPath
-        : `${projectPath}${PROJECT_EXT}`
-
     await writeProjectToDisk(finalPath, project)
-    // Verification round-trip: ensure disk content deserializes to same items count.
     const raw = await fs.readFile(finalPath, 'utf8')
     const parsed = JSON.parse(raw)
-    const reopened = deserializeProject(parsed)
+    const reopened = deserializeProject(parsed, {
+      resolveAssetPath: (relativePath) => resolveProjectAssetPath(finalPath, relativePath),
+    })
     if (reopened.items.length !== project.items.length) {
       throw new Error('Project save verification failed (items mismatch after reload)')
     }
     const nextRecents = await touchRecentProject(app.getPath('userData'), finalPath)
     await writeRecentProjects(app.getPath('userData'), nextRecents)
     await refreshApplicationMenu()
-    return { path: finalPath }
+    return { path: finalPath, project: reopened }
   }
 
   ipcMain.handle('save-project', async (_e, payload: { projectData: any; path: string | null }) => {
@@ -666,7 +1046,7 @@ app.whenReady().then(() => {
     if (projectPath) {
       sendOpenProjectToRenderer(projectPath)
     }
-    if (activeWindow) activeWindow.show()
+    if (activeWindow) revealWindow(activeWindow)
   })
 
   app.on('activate', () => {

@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "test": "node -e \"try{require('fs').rmSync('.tmp-tests',{recursive:true,force:true})}catch(e){}\" && tsc -p tsconfig.tests.json && node -e \"require('fs').writeFileSync('.tmp-tests/package.json', '{\\\"type\\\":\\\"commonjs\\\"}')\" && node --test .tmp-tests/tests/projectSerializer.test.js .tmp-tests/tests/canvasStore.test.js",
     "clean": "node -e \"try{require('fs').rmSync('out',{recursive:true,force:true})}catch(e){}\"",
     "preview": "electron-vite preview",
     "build:win": "npm run build && electron-builder --win nsis",

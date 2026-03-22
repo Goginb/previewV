@@ -11,14 +11,23 @@ export interface ProjectMeta {
   updatedAt: string
 }
 
-export interface ProjectFile {
+export interface ProjectFileV1 {
   version: 1
-  items: ProjectCanvasItem[]
+  items: ProjectCanvasItemV1[]
   viewport: ViewportState
   meta: ProjectMeta
 }
 
-export type ProjectCanvasItem =
+export interface ProjectFileV2 {
+  version: 2
+  items: ProjectCanvasItemV2[]
+  viewport: ViewportState
+  meta: ProjectMeta
+}
+
+export type ProjectFile = ProjectFileV1 | ProjectFileV2
+
+export type ProjectCanvasItemV1 =
   | {
       type: 'video'
       id: string
@@ -42,6 +51,8 @@ export type ProjectCanvasItem =
       naturalWidth?: number
       naturalHeight?: number
       fileName?: string
+      /** Absolute path when image was imported from a file (folder/drag) */
+      imageSourcePath?: string
     }
   | {
       type: 'note'
@@ -52,6 +63,62 @@ export type ProjectCanvasItem =
       height: number
       text: string
     }
+
+export type ProjectCanvasItemV2 =
+  | {
+      type: 'video'
+      id: string
+      x: number
+      y: number
+      width: number
+      height: number
+      fileName: string
+      /** local absolute path on disk */
+      videoPath: string
+    }
+  | {
+      type: 'image'
+      storage: 'linked'
+      id: string
+      x: number
+      y: number
+      width: number
+      height: number
+      sourceVideoId: string
+      naturalWidth?: number
+      naturalHeight?: number
+      fileName?: string
+      /** Absolute path to the linked source image */
+      imageSourcePath: string
+      /** Optional relative preview PNG path inside <project>.previewv.assets */
+      previewAssetPath?: string
+    }
+  | {
+      type: 'image'
+      storage: 'asset'
+      id: string
+      x: number
+      y: number
+      width: number
+      height: number
+      sourceVideoId: string
+      naturalWidth?: number
+      naturalHeight?: number
+      fileName?: string
+      /** Relative asset path inside <project>.previewv.assets */
+      assetPath: string
+    }
+  | {
+      type: 'note'
+      id: string
+      x: number
+      y: number
+      width: number
+      height: number
+      text: string
+    }
+
+export type ProjectCanvasItem = ProjectCanvasItemV1 | ProjectCanvasItemV2
 
 export interface DeserializedProject {
   items: CanvasItem[]

@@ -10,6 +10,28 @@ export const IMAGE_TOOLBAR_H = 32
 /**
  * Размер плитки видео: полоса заголовка + область видео с сохранением aspect + таймлайн.
  */
+/** New video tiles: typical 16:9 so metadata doesn’t resize from a tiny wrong box. */
+export function defaultVideoTileSizeForNew(): { width: number; height: number } {
+  return videoTileSizeFromVideo(1920, 1080)
+}
+
+/**
+ * Outer w×h for the worst-case aspect (ultrawide / portrait) — use for grid spacing so tiles never overlap after metadata loads.
+ */
+export function maxVideoTileOuterSize(): { width: number; height: number } {
+  const samples = [
+    videoTileSizeFromVideo(16_384, 1),
+    videoTileSizeFromVideo(1, 16_384),
+    videoTileSizeFromVideo(7680, 4320),
+    videoTileSizeFromVideo(1, 1),
+    videoTileSizeFromVideo(1920, 1080),
+  ]
+  return {
+    width: Math.max(...samples.map((s) => s.width)),
+    height: Math.max(...samples.map((s) => s.height)),
+  }
+}
+
 export function videoTileSizeFromVideo(videoWidth: number, videoHeight: number): {
   width: number
   height: number

@@ -5,11 +5,17 @@ import { videoUserPausedIds } from '../utils/videoUserPausedRegistry'
 import { getVideoPlaybackSuspended } from '../utils/videoGlobalPlayback'
 import type { VideoItem } from '../types'
 
-const UPDATE_MS = 400
+const UPDATE_MS = 600
 /** Extra margin so tiles near the edge still count as visible (less “dead” previews). */
 const BUFFER_PX = 96
-/** Concurrent playing cap — raise carefully (CPU/GPU); still better than “stuck” off-screen logic. */
-const MAX_PLAYING = 48
+/** Concurrent playing cap — keep decoder pressure low enough that pan/zoom stays responsive. */
+const MAX_PLAYING = 12
+/**
+ * After “Play all”, don’t call play() on every visible tile in one tick — that spikes decode + network.
+ * Remaining tiles catch up on the next ticks.
+ */
+const PLAY_STARTS_PER_TICK = 3
+const VIEWPORT_SETTLE_MS = 140
 
 function isVideoItem(item: any): item is VideoItem {
   return item && item.type === 'video'
@@ -93,6 +99,7 @@ function setsEqual(a: Set<string>, b: Set<string>): boolean {
 
 export function useVideoPlaybackManager(containerRef: React.RefObject<HTMLElement | null>) {
   const playingRef = useRef<Set<string>>(new Set())
+  const viewportBusyUntilRef = useRef(0)
 
   useEffect(() => {
     const tick = () => {
@@ -112,6 +119,10 @@ export function useVideoPlaybackManager(containerRef: React.RefObject<HTMLElemen
           }
         }
         playingRef.current = new Set()
+        return
+      }
+
+      if (Date.now() < viewportBusyUntilRef.current) {
         return
       }
 
@@ -144,6 +155,8 @@ export function useVideoPlaybackManager(containerRef: React.RefObject<HTMLElemen
         }
       }
 
+      let playBudget = PLAY_STARTS_PER_TICK
+
       for (const id of desiredSet) {
         const video = videoRegistry.get(id)
         if (!video) {
@@ -151,15 +164,12 @@ export function useVideoPlaybackManager(containerRef: React.RefObject<HTMLElemen
           continue
         }
 
-        const isNew = !currentPlaying.has(id)
-
-        if (isNew) {
-          if (!videoUserPausedIds.has(id)) {
-            try {
-              void video.play().catch(() => {})
-            } catch {
-              // ignore
-            }
+        if (!videoUserPausedIds.has(id) && video.paused && playBudget > 0) {
+          playBudget -= 1
+          try {
+            void video.play().catch(() => {})
+          } catch {
+            // ignore
           }
         }
 
@@ -172,21 +182,56 @@ export function useVideoPlaybackManager(containerRef: React.RefObject<HTMLElemen
     }
 
     let rafScheduled = 0
-    const scheduleTick = () => {
+    let deferredTickTimer = 0
+    const runTickInFrame = () => {
       if (rafScheduled) return
       rafScheduled = requestAnimationFrame(() => {
         rafScheduled = 0
         tick()
       })
     }
+    const scheduleTick = (mode: 'immediate' | 'deferred') => {
+      if (mode === 'deferred') {
+        if (deferredTickTimer) window.clearTimeout(deferredTickTimer)
+        deferredTickTimer = window.setTimeout(() => {
+          deferredTickTimer = 0
+          runTickInFrame()
+        }, VIEWPORT_SETTLE_MS)
+        return
+      }
+      if (deferredTickTimer) {
+        window.clearTimeout(deferredTickTimer)
+        deferredTickTimer = 0
+      }
+      runTickInFrame()
+    }
 
     tick()
     const interval = window.setInterval(tick, UPDATE_MS)
-    const unsub = useCanvasStore.subscribe(scheduleTick)
+    let prevItems = useCanvasStore.getState().items
+    let prevSelectedIds = useCanvasStore.getState().selectedIds
+    let prevViewport = useCanvasStore.getState().viewport
+    const unsub = useCanvasStore.subscribe((state) => {
+      const itemsChanged = state.items !== prevItems
+      const selectionChanged = state.selectedIds !== prevSelectedIds
+      const viewportChanged = state.viewport !== prevViewport
+      prevItems = state.items
+      prevSelectedIds = state.selectedIds
+      prevViewport = state.viewport
+      if (viewportChanged) {
+        viewportBusyUntilRef.current = Date.now() + VIEWPORT_SETTLE_MS
+        scheduleTick('deferred')
+        return
+      }
+      if (itemsChanged || selectionChanged) {
+        scheduleTick('immediate')
+      }
+    })
 
     return () => {
       window.clearInterval(interval)
       unsub()
+      if (deferredTickTimer) window.clearTimeout(deferredTickTimer)
       if (rafScheduled) cancelAnimationFrame(rafScheduled)
     }
   }, [containerRef])

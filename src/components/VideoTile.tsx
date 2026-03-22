@@ -44,6 +44,7 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected })
   const [paused, setPaused] = useState(true)
 
   const updateItem = useCanvasStore((s) => s.updateItem)
+  const updateItemsBatch = useCanvasStore((s) => s.updateItemsBatch)
   const selectOne = useCanvasStore((s) => s.selectOne)
   const toggleSelect = useCanvasStore((s) => s.toggleSelect)
   const dragOriginsRef = useRef<Map<string, { x: number; y: number }> | null>(null)
@@ -276,9 +277,13 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected })
         }
         const dx = d.x - currentOrigin.x
         const dy = d.y - currentOrigin.y
-        for (const [id, pos] of origins) {
-          updateItem(id, { x: pos.x + dx, y: pos.y + dy })
-        }
+        updateItemsBatch(
+          Array.from(origins.entries()).map(([id, pos]) => ({
+            id,
+            updates: { x: pos.x + dx, y: pos.y + dy },
+          })),
+          { recordHistory: true },
+        )
         dragOriginsRef.current = null
 
         requestAnimationFrame(() => {
@@ -336,7 +341,7 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected })
             loop
             muted
             playsInline
-            preload="auto"
+            preload="none"
           />
         </div>
 

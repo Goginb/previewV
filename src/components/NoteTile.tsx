@@ -12,6 +12,7 @@ interface NoteTileProps {
 
 export const NoteTile: React.FC<NoteTileProps> = ({ note, scale, isSelected }) => {
   const updateItem = useCanvasStore((s) => s.updateItem)
+  const updateItemsBatch = useCanvasStore((s) => s.updateItemsBatch)
   const selectOne    = useCanvasStore((s) => s.selectOne)
   const toggleSelect = useCanvasStore((s) => s.toggleSelect)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -80,9 +81,13 @@ export const NoteTile: React.FC<NoteTileProps> = ({ note, scale, isSelected }) =
         }
         const dx = d.x - currentOrigin.x
         const dy = d.y - currentOrigin.y
-        for (const [id, pos] of origins) {
-          updateItem(id, { x: pos.x + dx, y: pos.y + dy })
-        }
+        updateItemsBatch(
+          Array.from(origins.entries()).map(([id, pos]) => ({
+            id,
+            updates: { x: pos.x + dx, y: pos.y + dy },
+          })),
+          { recordHistory: true },
+        )
         dragOriginsRef.current = null
 
         requestAnimationFrame(() => {
