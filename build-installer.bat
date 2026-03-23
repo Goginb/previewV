@@ -1,9 +1,9 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title PreviewV
+title PreviewV Installer Build
 echo.
-echo  Starting PreviewV...
+echo  Building PreviewV installer...
 echo.
 
 where node >nul 2>nul
@@ -21,9 +21,14 @@ if not exist node_modules (
   if errorlevel 1 goto install_failed
 )
 
-call npm.cmd run dev
-if errorlevel 1 goto dev_failed
-goto end
+call npm.cmd run build:win
+if errorlevel 1 goto build_failed
+
+echo.
+echo  Installer created in the release folder.
+echo.
+pause
+exit /b 0
 
 :no_node
 echo  Node.js is not installed or is not in PATH.
@@ -37,7 +42,7 @@ goto fail
 
 :no_package
 echo  package.json was not found.
-echo  Run start.bat from the root of the PreviewV repository.
+echo  Run build-installer.bat from the root of the PreviewV repository.
 goto fail
 
 :install_failed
@@ -45,16 +50,12 @@ echo.
 echo  npm ci failed. Check the error messages above.
 goto fail
 
-:dev_failed
+:build_failed
 echo.
-echo  PreviewV failed to start in dev mode.
-echo  Check the error messages above.
+echo  Installer build failed. Check the error messages above.
 goto fail
 
 :fail
 echo.
 pause
 exit /b 1
-
-:end
-endlocal
