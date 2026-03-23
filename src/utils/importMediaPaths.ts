@@ -45,6 +45,19 @@ function nextId(prefix: string, i: number): string {
   return `${prefix}-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 9)}`
 }
 
+async function resolveVideoSrcUrl(localPath: string): Promise<string> {
+  const projectAPI = (window as any).electronAPI?.projectAPI
+  if (!projectAPI?.resolveVideoSource) {
+    return localPathToMediaUrl(localPath)
+  }
+  try {
+    const payload = await projectAPI.resolveVideoSource(localPath)
+    return payload?.srcUrl || localPathToMediaUrl(localPath)
+  } catch {
+    return localPathToMediaUrl(localPath)
+  }
+}
+
 /**
  * Add tiles from absolute file paths (videos + raster images). Used by “Add folder”.
  * Videos are placed on a fixed grid (max cell = worst-case video tile size) so metadata
@@ -82,12 +95,13 @@ export async function importMediaPathsToCanvas(
 
   for (let i = 0; i < videoPaths.length; i++) {
     const p = videoPaths[i]
+    const srcUrl = await resolveVideoSrcUrl(p)
     const row = Math.floor(i / ROW_CAP)
     const col = i % ROW_CAP
     const tile: VideoItem = {
       type: 'video',
       id: nextId('tile', i),
-      srcUrl: localPathToMediaUrl(p),
+      srcUrl,
       fileName: pathBasename(p),
       x: originX + col * cellW,
       y: originY + row * cellH,
@@ -99,7 +113,9 @@ export async function importMediaPathsToCanvas(
   }
 
   if (videoPaths.length > 0) {
-    const earlyUrls = videoPaths.map((p) => localPathToMediaUrl(p))
+    const earlyUrls = pendingItems
+      .filter((i): i is VideoItem => i.type === 'video')
+      .map((i) => i.srcUrl)
     queueMicrotask(() => requestVideoWarmupEarly(earlyUrls))
   }
 

@@ -169,12 +169,15 @@ protocol.registerSchemesAsPrivileged([
 const RECENTS_FILE = 'recent-projects.json'
 const PROJECT_ASSET_DIR_SUFFIX = '.assets'
 const PREVIEW_CACHE_DIR = join(tmpdir(), 'previewv-raster-cache')
+const VIDEO_PROXY_CACHE_DIR = join(tmpdir(), 'previewv-video-proxy-cache')
 const PREVIEW_IMAGE_EXT = new Set(['.tif', '.tiff', '.dpx', '.exr'])
 const DIRECT_IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'])
+const VIDEO_PROXY_EXT = new Set(['.mov', '.mkv', '.avi', '.m4v'])
 const rasterPreviewCache = new Map<
   string,
   { mtimeMs: number; size: number; previewPath: string; width: number; height: number }
 >()
+const videoProxyCache = new Map<string, { mtimeMs: number; size: number; proxyPath: string }>()
 
 /** Recursive folder import: same extensions as the canvas (video + raster). */
 const FOLDER_VIDEO_EXT = new Set(['.mp4', '.webm', '.mov', '.mkv', '.avi', '.m4v', '.ogv'])
@@ -251,9 +254,18 @@ async function ensurePreviewCacheDir(): Promise<void> {
   await fs.mkdir(PREVIEW_CACHE_DIR, { recursive: true })
 }
 
+async function ensureVideoProxyCacheDir(): Promise<void> {
+  await fs.mkdir(VIDEO_PROXY_CACHE_DIR, { recursive: true })
+}
+
 function previewCacheFilePath(filePath: string): string {
   const hash = createHash('sha1').update(normalizePathKey(filePath)).digest('hex').slice(0, 16)
   return join(PREVIEW_CACHE_DIR, `${hash}.png`)
+}
+
+function videoProxyCacheFilePath(filePath: string): string {
+  const hash = createHash('sha1').update(normalizePathKey(filePath)).digest('hex').slice(0, 16)
+  return join(VIDEO_PROXY_CACHE_DIR, `${hash}.mp4`)
 }
 
 async function renderTiffPreview(filePath: string, outputPath: string): Promise<{ width: number; height: number }> {
@@ -296,6 +308,97 @@ async function renderViaFfmpegPreview(filePath: string, outputPath: string): Pro
   })
 
   return loadNativeImageSize(outputPath)
+}
+
+async function transcodeVideoProxy(filePath: string, outputPath: string): Promise<void> {
+  const ff = ffmpegStatic
+  if (!ff) {
+    throw new Error('ffmpeg-static not found (run npm install ffmpeg-static)')
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const p = spawn(
+      ff,
+      [
+        '-y',
+        '-i',
+        filePath,
+        '-c:v',
+        'libx264',
+        '-preset',
+        'veryfast',
+        '-crf',
+        '20',
+        '-pix_fmt',
+        'yuv420p',
+        '-movflags',
+        '+faststart',
+        '-c:a',
+        'aac',
+        '-b:a',
+        '192k',
+        outputPath,
+      ],
+      { windowsHide: true },
+    )
+    let err = ''
+    p.stderr?.on('data', (d: Buffer) => {
+      err += d.toString()
+    })
+    p.on('error', reject)
+    p.on('close', (code) => {
+      if (code === 0) resolve()
+      else reject(new Error(err.trim() || `ffmpeg exited with code ${code}`))
+    })
+  })
+}
+
+async function resolveVideoSourceFromPath(filePath: string): Promise<{
+  srcUrl: string
+  sourceFilePath: string
+  transcoded: boolean
+}> {
+  const normalizedPath = normalize(filePath)
+  const stat = await fs.stat(normalizedPath)
+  if (!stat.isFile()) throw new Error('Not a file')
+
+  const ext = extname(normalizedPath).toLowerCase()
+  if (!VIDEO_PROXY_EXT.has(ext)) {
+    return {
+      srcUrl: localPathToMediaUrl(normalizedPath),
+      sourceFilePath: normalizedPath,
+      transcoded: false,
+    }
+  }
+
+  const cacheKey = normalizePathKey(normalizedPath)
+  const cached = videoProxyCache.get(cacheKey)
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    try {
+      await fs.access(cached.proxyPath)
+      return {
+        srcUrl: localPathToMediaUrl(cached.proxyPath),
+        sourceFilePath: normalizedPath,
+        transcoded: true,
+      }
+    } catch {
+      videoProxyCache.delete(cacheKey)
+    }
+  }
+
+  await ensureVideoProxyCacheDir()
+  const proxyPath = videoProxyCacheFilePath(normalizedPath)
+  await transcodeVideoProxy(normalizedPath, proxyPath)
+  videoProxyCache.set(cacheKey, {
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    proxyPath,
+  })
+  return {
+    srcUrl: localPathToMediaUrl(proxyPath),
+    sourceFilePath: normalizedPath,
+    transcoded: true,
+  }
 }
 
 async function ensureSpecialImagePreview(filePath: string): Promise<{
@@ -448,6 +551,17 @@ async function readProjectFromDisk(projectPath: string): Promise<{ project: Dese
   const project = deserializeProject(parsed, {
     resolveAssetPath: (relativePath) => resolveProjectAssetPath(projectPath, relativePath),
   })
+  for (const item of project.items) {
+    if (item.type !== 'video') continue
+    const sourcePath = mediaUrlToLocalPath(item.srcUrl)
+    if (!sourcePath) continue
+    try {
+      const resolved = await resolveVideoSourceFromPath(sourcePath)
+      item.srcUrl = resolved.srcUrl
+    } catch {
+      // Keep original source URL if proxy generation failed.
+    }
+  }
   return { project, rawItemsCount }
 }
 
@@ -820,6 +934,13 @@ app.whenReady().then(() => {
       throw new Error('Invalid path')
     }
     return resolveImageSourceFromPath(filePath)
+  })
+
+  ipcMain.handle('resolve-video-source', async (_e, filePath: unknown) => {
+    if (typeof filePath !== 'string' || !filePath.trim()) {
+      throw new Error('Invalid path')
+    }
+    return resolveVideoSourceFromPath(filePath)
   })
 
   ipcMain.handle(

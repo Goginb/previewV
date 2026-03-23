@@ -41,6 +41,19 @@ function fileToUrl(file: File): string {
   return URL.createObjectURL(file)
 }
 
+async function resolveDroppedVideoUrl(file: File): Promise<string> {
+  const nativePath = (file as File & { path?: string }).path
+  if (!nativePath) return fileToUrl(file)
+  const projectAPI = (window as any).electronAPI?.projectAPI
+  if (!projectAPI?.resolveVideoSource) return fileToUrl(file)
+  try {
+    const resolved = await projectAPI.resolveVideoSource(nativePath)
+    return resolved?.srcUrl || fileToUrl(file)
+  } catch {
+    return fileToUrl(file)
+  }
+}
+
 const VIDEO_TILE_DEFAULT = defaultVideoTileSizeForNew()
 const NOTE_W  = 220
 const NOTE_H  = 160
@@ -595,7 +608,7 @@ export const Canvas: React.FC = () => {
       for (const file of videoFiles) {
         const dw = VIDEO_TILE_DEFAULT.width
         const dh = VIDEO_TILE_DEFAULT.height
-        const srcUrl = fileToUrl(file)
+        const srcUrl = await resolveDroppedVideoUrl(file)
         droppedVideoUrls.push(srcUrl)
         const tile: VideoItem = {
           type:     'video',

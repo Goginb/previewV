@@ -19,6 +19,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     confirmCloseWindow: () => ipcRenderer.invoke('window:confirm-close'),
     resolveImageSource: (path: string) =>
       ipcRenderer.invoke('resolve-image-source', path),
+    resolveVideoSource: (path: string) =>
+      ipcRenderer.invoke('resolve-video-source', path),
     pickFolderDialog: () => ipcRenderer.invoke('pick-folder-dialog'),
     enumerateFolderMedia: (folderPath: string) =>
       ipcRenderer.invoke('enumerate-folder-media', folderPath),

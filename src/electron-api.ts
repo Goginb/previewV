@@ -21,6 +21,7 @@ export interface ElectronProjectAPI {
   showUnsavedDialog: (opts?: { fileLabel?: string }) => Promise<'save' | 'discard' | 'cancel'>
   confirmCloseWindow: () => Promise<void>
   resolveImageSource: (path: string) => Promise<ResolvedImageImport>
+  resolveVideoSource: (path: string) => Promise<ResolvedVideoImport>
   pickFolderDialog: () => Promise<string | null>
   enumerateFolderMedia: (folderPath: string) => Promise<string[]>
   duplicateMediaImportDialog: (payload: {
@@ -37,4 +38,10 @@ export interface ResolvedImageImport {
   height: number
   sourceFilePath?: string
   projectAssetPath?: string
+}
+
+export interface ResolvedVideoImport {
+  srcUrl: string
+  sourceFilePath: string
+  transcoded: boolean
 }
