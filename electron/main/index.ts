@@ -664,7 +664,7 @@ async function refreshApplicationMenu() {
       label: 'Help',
       submenu: [
         {
-          label: 'User guide',
+          label: 'Инструкция',
           accelerator: 'F1',
           click: () => activeWindow?.webContents.send('app:show-help'),
         },

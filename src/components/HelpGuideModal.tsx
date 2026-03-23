@@ -2,46 +2,46 @@ import React from 'react'
 
 const SECTIONS: { title: string; body: string[] }[] = [
   {
-    title: 'Projects',
+    title: 'Проекты',
     body: [
-      'Project files use the .previewv extension (JSON): tiles, pan/zoom, and viewport.',
-      'Open: File → Open… or Ctrl+O. Recent files are under File.',
-      'Add folder…: import all supported videos and images from a folder (subfolders included). If some files are already on the canvas, choose to add duplicates again or skip them.',
-      'Save: Ctrl+S; Save As: Ctrl+Shift+S. Pick a filename on first save.',
-      'Close project without quitting: File → Close project (Ctrl+W).',
-      'When closing the window or switching projects, unsaved changes prompt Save / Don’t save / Cancel.',
+      'Файлы проекта используют расширение .previewv: на холсте сохраняются плитки, viewport, pan/zoom и метаданные.',
+      'Открыть проект: File → Open… или Ctrl+O. Последние проекты доступны в меню File.',
+      'Add folder… импортирует все поддерживаемые видео и изображения из папки вместе с подпапками.',
+      'Сохранить: Ctrl+S. Сохранить как: Ctrl+Shift+S. При первом сохранении выберите имя файла.',
+      'Закрыть проект без выхода из приложения: File → Close project или Ctrl+W.',
+      'При закрытии окна и при переключении проекта приложение спрашивает: сохранить, не сохранять или отменить действие.',
     ],
   },
   {
-    title: 'Video & images',
+    title: 'Видео и изображения',
     body: [
-      'Drop video or images on the canvas: JPEG, PNG, TIFF in-app; EXR/DPX via ffmpeg (needs a local file path when dragging).',
-      'Tile sizes follow the aspect ratio of the source video or image.',
-      'Video frame: select a video tile and press F3 to create an image tile.',
-      'Drawing: select an image tile and press F4 (edit mode). The tile expands to the drawing area; F4 again or Done exits. Without F4, drawing is off.',
+      'На холст можно перетаскивать локальные видео и изображения: MP4, WebM, MOV, JPEG, PNG, TIFF, EXR, DPX и другие поддерживаемые форматы.',
+      'Размер плитки подстраивается под пропорции исходного видео или изображения.',
+      'Кадр из видео: выделите video tile и нажмите F3.',
+      'Рисование по изображению: выделите image tile и нажмите F4. Повторное F4 или кнопка Done завершает режим редактирования.',
     ],
   },
   {
-    title: 'Canvas & selection',
+    title: 'Холст и выделение',
     body: [
-      'Pan: hold Space and drag, or scroll / trackpad.',
-      'Zoom: mouse wheel with Ctrl (or trackpad gestures).',
-      'Select all tiles: Ctrl+A (in a note field, Ctrl+A selects text).',
-      'Marquee: drag on empty canvas. Shift+click to add to selection.',
-      'Fit everything: A (without Ctrl) or the Fit all button.',
-      'Bottom-right HUD: Stop all / Play all — globally pause or resume video autoplay on the canvas.',
+      'Перемещение по холсту: удерживайте Space и тяните мышью, либо используйте колесо мыши или тачпад.',
+      'Масштаб: Ctrl + колесо мыши или жесты тачпада.',
+      'Выделить всё: Ctrl+A. Внутри текстовой заметки Ctrl+A выделяет именно текст.',
+      'Прямоугольное выделение: тяните по пустому месту холста. Shift или Ctrl добавляют элементы к текущему выделению.',
+      'Показать весь холст: клавиша A без Ctrl или кнопка Fit all.',
+      'HUD справа снизу: Stop all / Play all глобально останавливает или возвращает autoplay у видео на холсте.',
     ],
   },
   {
-    title: 'Shortcuts',
+    title: 'Горячие клавиши',
     body: [
-      'Ctrl+O — open · Ctrl+S — save · Ctrl+Shift+S — save as',
-      'Ctrl+W — close project · Ctrl+A — select all tiles',
-      'Ctrl+Z / Ctrl+Shift+Z — undo / redo · Ctrl+C / Ctrl+V — copy / paste tiles',
-      'Delete — remove selection · Shift+D — duplicate · L — grid layout: all videos (up to 20 per row), then all images below (up to 20 per row), no overlap',
-      '\\ (Backslash) or “Grid pack” — all tiles (video, image, note) into a non-overlapping grid, reading order, up to 20 per row',
-      'Ctrl+N — new note · F3 — frame from video · F4 — draw on selected image',
-      'Alt+Shift+A — pin window (always on top) · Alt+Shift+B — unpin (also View menu)',
+      'Ctrl+O — открыть · Ctrl+S — сохранить · Ctrl+Shift+S — сохранить как',
+      'Ctrl+W — закрыть проект · Ctrl+A — выделить все плитки',
+      'Ctrl+Z / Ctrl+Shift+Z — undo / redo · Ctrl+C / Ctrl+V — копировать / вставить плитки',
+      'Delete — удалить выделение · Shift+D — дублировать · L — разложить медиа по сетке без наложения',
+      '\\ или кнопка Grid pack — упаковать все плитки в общую сетку без наложения',
+      'Ctrl+N — новая заметка · F3 — кадр из видео · F4 — рисование по выбранному изображению',
+      'Alt+Shift+A — закрепить окно поверх всех · Alt+Shift+B — снять закрепление',
     ],
   },
 ]
@@ -60,14 +60,14 @@ export const HelpGuideModal: React.FC<{ onClose: () => void }> = ({ onClose }) =
       <div className="w-full max-w-lg max-h-[min(85vh,36rem)] flex flex-col rounded-xl border border-zinc-700 bg-zinc-950 shadow-2xl">
         <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-zinc-800 shrink-0">
           <h2 id="help-guide-title" className="text-base font-semibold text-zinc-100">
-            Help — PreviewV
+            Инструкция — PreviewV
           </h2>
           <button
             type="button"
             onClick={onClose}
             className="text-sm px-3 py-1.5 rounded-lg bg-zinc-800 text-zinc-200 hover:bg-zinc-700 border border-zinc-600"
           >
-            Close
+            Закрыть
           </button>
         </div>
         <div className="overflow-y-auto px-4 py-3 text-sm text-zinc-300 space-y-5">

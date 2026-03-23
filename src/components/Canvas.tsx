@@ -430,7 +430,7 @@ export const Canvas: React.FC = () => {
         return
       }
 
-      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyV' && !isTypingTarget(e)) {
+      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyV' && !e.shiftKey && !isTypingTarget(e)) {
         const state = useCanvasStore.getState()
         e.preventDefault()
         if (state.clipboard.length) {
@@ -557,7 +557,14 @@ export const Canvas: React.FC = () => {
 
     window.addEventListener('keydown', handleKeyDown, true)
     return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [addItem, removeItems, selectOne, layoutMediaRow, packAllTilesGrid, frameAllItemsInViewport])
+  }, [
+    addItem,
+    removeItems,
+    selectOne,
+    layoutMediaRow,
+    packAllTilesGrid,
+    frameAllItemsInViewport,
+  ])
 
   const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault()
@@ -604,10 +611,6 @@ export const Canvas: React.FC = () => {
         i++
       }
 
-      if (droppedVideoUrls.length > 0) {
-        queueMicrotask(() => requestVideoWarmupEarly(droppedVideoUrls))
-      }
-
       for (const file of rasterFiles) {
         if (isVideoFile(file)) continue
         try {
@@ -633,6 +636,10 @@ export const Canvas: React.FC = () => {
           alert(err?.message ?? String(err))
         }
         i++
+      }
+
+      if (droppedVideoUrls.length > 0) {
+        queueMicrotask(() => requestVideoWarmupEarly(droppedVideoUrls))
       }
 
       if (newItems.length > 0) {
@@ -743,12 +750,12 @@ export const Canvas: React.FC = () => {
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none">
           <div className="text-center text-zinc-600">
             <div className="text-5xl mb-4 opacity-40">▶</div>
-            <p className="text-base font-medium tracking-wide">Drop video or image files here</p>
+            <p className="text-base font-medium tracking-wide">Перетащите сюда видео или изображения</p>
             <p className="text-sm mt-1 opacity-60">
-              Video: MP4, WebM, MOV… · Images: JPEG, PNG, TIFF, EXR, DPX…
+              Видео: MP4, WebM, MOV… · Изображения: JPEG, PNG, TIFF, EXR, DPX…
             </p>
             <p className="text-xs mt-3 opacity-40">
-              Ctrl+A · A · Ctrl+O · L · \ · Ctrl+N / F3 · F4 image edit
+              Ctrl+A · A · Ctrl+O · L · \ · Ctrl+N / F3 · F4
             </p>
           </div>
         </div>
