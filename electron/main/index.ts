@@ -311,10 +311,17 @@ async function renderViaFfmpegPreview(filePath: string, outputPath: string): Pro
 }
 
 async function transcodeVideoProxy(filePath: string, outputPath: string): Promise<void> {
-  const ff = ffmpegStatic
-  if (!ff) {
-    throw new Error('ffmpeg-static not found (run npm install ffmpeg-static)')
+  // Prefer bundled ffmpeg-static, but if its binary is missing (common when postinstall wasn't able to download),
+  // fall back to system `ffmpeg` from PATH.
+  let ff: string | null = ffmpegStatic
+  if (ff) {
+    try {
+      await fs.access(ff)
+    } catch {
+      ff = null
+    }
   }
+  if (!ff) ff = 'ffmpeg'
 
   await new Promise<void>((resolve, reject) => {
     const p = spawn(

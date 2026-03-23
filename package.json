@@ -1,6 +1,6 @@
 {
   "name": "previewv",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Infinite canvas video reference board",
   "type": "module",
   "main": "out/main/index.js",
