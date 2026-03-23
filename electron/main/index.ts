@@ -379,6 +379,7 @@ async function resolveVideoSourceFromPath(filePath: string): Promise<{
   }
 
   const cacheKey = normalizePathKey(normalizedPath)
+  const proxyPath = videoProxyCacheFilePath(normalizedPath)
   const cached = videoProxyCache.get(cacheKey)
   if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
     try {
@@ -393,8 +394,28 @@ async function resolveVideoSourceFromPath(filePath: string): Promise<{
     }
   }
 
+  // Persisted cache reuse across app restarts:
+  // if deterministic proxy file already exists and is not older than source,
+  // skip costly re-transcode on first load.
+  try {
+    const proxyStat = await fs.stat(proxyPath)
+    if (proxyStat.isFile() && proxyStat.mtimeMs >= stat.mtimeMs) {
+      videoProxyCache.set(cacheKey, {
+        mtimeMs: stat.mtimeMs,
+        size: stat.size,
+        proxyPath,
+      })
+      return {
+        srcUrl: localPathToMediaUrl(proxyPath),
+        sourceFilePath: normalizedPath,
+        transcoded: true,
+      }
+    }
+  } catch {
+    // no persistent proxy yet — fall through to transcode
+  }
+
   await ensureVideoProxyCacheDir()
-  const proxyPath = videoProxyCacheFilePath(normalizedPath)
   await transcodeVideoProxy(normalizedPath, proxyPath)
   videoProxyCache.set(cacheKey, {
     mtimeMs: stat.mtimeMs,
