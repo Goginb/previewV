@@ -311,17 +311,22 @@ async function renderViaFfmpegPreview(filePath: string, outputPath: string): Pro
 }
 
 async function transcodeVideoProxy(filePath: string, outputPath: string): Promise<void> {
-  // Prefer bundled ffmpeg-static, but if its binary is missing (common when postinstall wasn't able to download),
-  // fall back to system `ffmpeg` from PATH.
-  let ff: string | null = ffmpegStatic
-  if (ff) {
+  // 1) Prefer explicit extraResources binary bundled with installer.
+  // 2) Then try ffmpeg-static binary path.
+  // 3) Finally fall back to system `ffmpeg` from PATH.
+  const candidates: string[] = [join(process.resourcesPath, 'ffmpeg', 'ffmpeg.exe')]
+  if (ffmpegStatic) candidates.push(ffmpegStatic)
+
+  let ff: string = 'ffmpeg'
+  for (const candidate of candidates) {
     try {
-      await fs.access(ff)
+      await fs.access(candidate)
+      ff = candidate
+      break
     } catch {
-      ff = null
+      // try next candidate
     }
   }
-  if (!ff) ff = 'ffmpeg'
 
   await new Promise<void>((resolve, reject) => {
     const p = spawn(
