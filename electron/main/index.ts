@@ -170,6 +170,7 @@ const RECENTS_FILE = 'recent-projects.json'
 const PROJECT_ASSET_DIR_SUFFIX = '.assets'
 const PREVIEW_CACHE_DIR = join(tmpdir(), 'previewv-raster-cache')
 const VIDEO_PROXY_CACHE_DIR = join(tmpdir(), 'previewv-video-proxy-cache')
+const FFMPEG_RUNTIME_CACHE_DIR = join(tmpdir(), 'previewv-ffmpeg-runtime')
 const PREVIEW_IMAGE_EXT = new Set(['.tif', '.tiff', '.dpx', '.exr'])
 const DIRECT_IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'])
 const VIDEO_PROXY_EXT = new Set(['.mov', '.mkv', '.avi', '.m4v'])
@@ -258,6 +259,10 @@ async function ensureVideoProxyCacheDir(): Promise<void> {
   await fs.mkdir(VIDEO_PROXY_CACHE_DIR, { recursive: true })
 }
 
+async function ensureFfmpegRuntimeCacheDir(): Promise<void> {
+  await fs.mkdir(FFMPEG_RUNTIME_CACHE_DIR, { recursive: true })
+}
+
 function previewCacheFilePath(filePath: string): string {
   const hash = createHash('sha1').update(normalizePathKey(filePath)).digest('hex').slice(0, 16)
   return join(PREVIEW_CACHE_DIR, `${hash}.png`)
@@ -311,22 +316,62 @@ async function renderViaFfmpegPreview(filePath: string, outputPath: string): Pro
 }
 
 async function transcodeVideoProxy(filePath: string, outputPath: string): Promise<void> {
-  // 1) Prefer explicit extraResources binary bundled with installer.
-  // 2) Then try ffmpeg-static binary path.
-  // 3) Finally fall back to system `ffmpeg` from PATH.
+  const canExecuteFfmpeg = async (bin: string): Promise<boolean> => {
+    return await new Promise<boolean>((resolve) => {
+      const p = spawn(bin, ['-version'], { windowsHide: true })
+      const timer = setTimeout(() => {
+        try {
+          p.kill()
+        } catch {
+          // ignore
+        }
+        resolve(false)
+      }, 6000)
+      p.on('error', () => {
+        clearTimeout(timer)
+        resolve(false)
+      })
+      p.on('close', (code) => {
+        clearTimeout(timer)
+        resolve(code === 0)
+      })
+    })
+  }
+
   const candidates: string[] = [join(process.resourcesPath, 'ffmpeg', 'ffmpeg.exe')]
   if (ffmpegStatic) candidates.push(ffmpegStatic)
 
-  let ff: string = 'ffmpeg'
+  let ff: string | null = null
   for (const candidate of candidates) {
     try {
       await fs.access(candidate)
-      ff = candidate
-      break
+      if (await canExecuteFfmpeg(candidate)) {
+        ff = candidate
+        break
+      }
     } catch {
       // try next candidate
     }
   }
+
+  // Some endpoints block execution from Program Files/resources paths.
+  // Mirror bundled binary to %TEMP% and run from there as a robust fallback.
+  if (!ff) {
+    const bundled = join(process.resourcesPath, 'ffmpeg', 'ffmpeg.exe')
+    try {
+      await fs.access(bundled)
+      await ensureFfmpegRuntimeCacheDir()
+      const runtimeFfmpeg = join(FFMPEG_RUNTIME_CACHE_DIR, 'ffmpeg.exe')
+      await fs.copyFile(bundled, runtimeFfmpeg)
+      if (await canExecuteFfmpeg(runtimeFfmpeg)) {
+        ff = runtimeFfmpeg
+      }
+    } catch {
+      // ignore, continue to PATH fallback
+    }
+  }
+
+  if (!ff) ff = 'ffmpeg'
 
   await new Promise<void>((resolve, reject) => {
     const p = spawn(
