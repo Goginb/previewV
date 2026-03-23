@@ -49,6 +49,28 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected })
   const toggleSelect = useCanvasStore((s) => s.toggleSelect)
   const dragOriginsRef = useRef<Map<string, { x: number; y: number }> | null>(null)
   const durationRef = useRef(0)
+
+  // Smooth resize: while user drags resize handles, keep store in sync (throttled to rAF).
+  const resizeRafRef = useRef<number>(0)
+  const pendingResizeRef = useRef<null | { x: number; y: number; width: number; height: number }>(null)
+
+  const scheduleResizeUpdate = useCallback(
+    (next: { x: number; y: number; width: number; height: number }) => {
+      pendingResizeRef.current = next
+      if (resizeRafRef.current) return
+      resizeRafRef.current = requestAnimationFrame(() => {
+        resizeRafRef.current = 0
+        const p = pendingResizeRef.current
+        pendingResizeRef.current = null
+        if (!p) return
+        updateItemsBatch(
+          [{ id: tile.id, updates: { x: p.x, y: p.y, width: p.width, height: p.height } }],
+          { markDirty: false, recordHistory: false },
+        )
+      })
+    },
+    [tile.id, updateItemsBatch],
+  )
   useEffect(() => {
     durationRef.current = duration
   }, [duration])
@@ -293,6 +315,12 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected })
             if (el) el.style.transform = ''
           }
         })
+      }}
+      onResize={(_, __, ref, ___, position) => {
+        const w = parseInt(ref.style.width, 10)
+        const h = parseInt(ref.style.height, 10)
+        if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return
+        scheduleResizeUpdate({ x: position.x, y: position.y, width: w, height: h })
       }}
       onResizeStop={(_, __, ref, ___, position) => {
         updateItem(tile.id, {

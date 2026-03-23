@@ -50,6 +50,28 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
   const baseImgRef = useRef<HTMLImageElement>(null)
   const dragOriginsRef = useRef<Map<string, { x: number; y: number }> | null>(null)
 
+  // Smooth resize: keep store synced while dragging resize handles (throttled to rAF).
+  const resizeRafRef = useRef<number>(0)
+  const pendingResizeRef = useRef<null | { x: number; y: number; width: number; height: number }>(null)
+
+  const scheduleResizeUpdate = useCallback(
+    (next: { x: number; y: number; width: number; height: number }) => {
+      pendingResizeRef.current = next
+      if (resizeRafRef.current) return
+      resizeRafRef.current = requestAnimationFrame(() => {
+        resizeRafRef.current = 0
+        const p = pendingResizeRef.current
+        pendingResizeRef.current = null
+        if (!p) return
+        updateItemsBatch(
+          [{ id: item.id, updates: { x: p.x, y: p.y, width: p.width, height: p.height } }],
+          { markDirty: false, recordHistory: false },
+        )
+      })
+    },
+    [item.id, updateItemsBatch],
+  )
+
   const [tool,  setTool]  = useState<DrawTool>('pencil')
   const [color, setColor] = useState('#ef4444')
   const [size,  setSize]  = useState(5)
@@ -393,6 +415,12 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
             if (el) el.style.transform = ''
           }
         })
+      }}
+      onResize={(_, __, ref, ___, position) => {
+        const w = parseInt(ref.style.width, 10)
+        const h = parseInt(ref.style.height, 10)
+        if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return
+        scheduleResizeUpdate({ x: position.x, y: position.y, width: w, height: h })
       }}
       onResizeStop={(_, __, ref, ___, pos) =>
         updateItem(item.id, {

@@ -284,31 +284,73 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   packAllTilesGrid: () => {
     const state = get()
-    const tiles = state.items
-    if (tiles.length === 0) return
+    const selectionSet = new Set(state.selectedIds)
 
-    const anchorX = Math.min(...tiles.map((m) => m.x))
-    const anchorY = Math.min(...tiles.map((m) => m.y))
-    const sorted = sortByCanvasReadingOrder(tiles)
-    const pos = new Map<string, { x: number; y: number }>()
+    const isVideo = (i: CanvasItem) => i.type === 'video'
+    const canMove = (i: CanvasItem) => isVideo(i) && (selectionSet.size > 0 ? selectionSet.has(i.id) : true)
 
-    let y = anchorY
-    for (let i = 0; i < sorted.length; i += LAYOUT_ROW_CAP) {
-      const row = sorted.slice(i, i + LAYOUT_ROW_CAP)
-      let x = anchorX
-      let rowH = 0
-      for (const t of row) {
-        pos.set(t.id, { x, y })
-        rowH = Math.max(rowH, t.height)
-        x += t.width + ROW_GAP
+    const movable = state.items.filter(canMove)
+    if (movable.length === 0) return
+
+    // If there is a selection, we move only selected videos; otherwise we move all videos.
+    // Non-movable items keep their positions and act as obstacles.
+    const movableSet = new Set(movable.map((m) => m.id))
+
+    const rectsOverlap = (
+      ax: number,
+      ay: number,
+      aw: number,
+      ah: number,
+      bx: number,
+      by: number,
+      bw: number,
+      bh: number,
+    ): boolean => {
+      return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by
+    }
+
+    const occupied: Array<{ x: number; y: number; w: number; h: number }> = state.items
+      .filter((i) => !movableSet.has(i.id))
+      .map((i) => ({ x: i.x, y: i.y, w: i.width, h: i.height }))
+
+    const placed = new Map<string, { x: number; y: number }>()
+    const sorted = sortByCanvasReadingOrder(movable)
+
+    const MAX_X_STEPS = 20 // prevents "one big line" behavior; forces wrapping to next rows
+    const MAX_ATTEMPTS_PER_TILE = 5000
+
+    for (const t of sorted) {
+      let x = t.x
+      let y = t.y
+      const stepX = Math.max(1, t.width + ROW_GAP)
+      const stepY = Math.max(1, t.height + ROW_GAP)
+
+      let attempts = 0
+      while (attempts < MAX_ATTEMPTS_PER_TILE) {
+        const hit = occupied.some((o) =>
+          rectsOverlap(x, y, t.width, t.height, o.x, o.y, o.w, o.h),
+        )
+        if (!hit) break
+
+        x += stepX
+        const xSteps = Math.floor((x - t.x) / stepX)
+        if (xSteps >= MAX_X_STEPS) {
+          x = t.x
+          y += stepY
+        }
+
+        attempts++
       }
-      y += rowH + ROW_GAP
+
+      placed.set(t.id, { x, y })
+      occupied.push({ x, y, w: t.width, h: t.height })
     }
 
     set((state) => ({
       _past: pushPast(state._past, state.items),
       items: state.items.map((item) => {
-        const next = pos.get(item.id)
+        if (!movableSet.has(item.id)) return item
+        const next = placed.get(item.id)
         return next ? { ...item, x: next.x, y: next.y } : item
       }),
       isDirty: true,

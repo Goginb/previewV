@@ -19,6 +19,28 @@ export const NoteTile: React.FC<NoteTileProps> = ({ note, scale, isSelected }) =
   const rootRef = useRef<HTMLDivElement>(null)
   const dragOriginsRef = useRef<Map<string, { x: number; y: number }> | null>(null)
 
+  // Smooth resize: while dragging resize handles, update store throttled to rAF.
+  const resizeRafRef = useRef<number>(0)
+  const pendingResizeRef = useRef<null | { x: number; y: number; width: number; height: number }>(null)
+
+  const scheduleResizeUpdate = useCallback(
+    (next: { x: number; y: number; width: number; height: number }) => {
+      pendingResizeRef.current = next
+      if (resizeRafRef.current) return
+      resizeRafRef.current = requestAnimationFrame(() => {
+        resizeRafRef.current = 0
+        const p = pendingResizeRef.current
+        pendingResizeRef.current = null
+        if (!p) return
+        updateItemsBatch(
+          [{ id: note.id, updates: { x: p.x, y: p.y, width: p.width, height: p.height } }],
+          { markDirty: false, recordHistory: false },
+        )
+      })
+    },
+    [note.id, updateItemsBatch],
+  )
+
   // Auto-focus the textarea when the note is first created (empty text)
   useEffect(() => {
     if (note.text === '') {
@@ -105,6 +127,12 @@ export const NoteTile: React.FC<NoteTileProps> = ({ note, scale, isSelected }) =
           width: parseInt(ref.style.width, 10),
           height: parseInt(ref.style.height, 10),
         })
+      }}
+      onResize={(_, __, ref, ___, position) => {
+        const w = parseInt(ref.style.width, 10)
+        const h = parseInt(ref.style.height, 10)
+        if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return
+        scheduleResizeUpdate({ x: position.x, y: position.y, width: w, height: h })
       }}
       style={{ zIndex: 20, pointerEvents: 'auto' }}
       dragHandleClassName="note-drag-handle"
