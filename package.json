@@ -1,18 +1,19 @@
 {
   "name": "previewv",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "description": "Infinite canvas video reference board",
   "type": "module",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "ensure:ffmpeg": "node scripts/ensure-ffmpeg-static.mjs",
     "test": "node -e \"try{require('fs').rmSync('.tmp-tests',{recursive:true,force:true})}catch(e){}\" && tsc -p tsconfig.tests.json && node -e \"require('fs').writeFileSync('.tmp-tests/package.json', '{\\\"type\\\":\\\"commonjs\\\"}')\" && node --test .tmp-tests/tests/projectSerializer.test.js .tmp-tests/tests/canvasStore.test.js",
     "clean": "node -e \"try{require('fs').rmSync('out',{recursive:true,force:true})}catch(e){}\"",
     "preview": "electron-vite preview",
-    "build:win": "npm run build && electron-builder --win nsis",
-    "build:win:portable": "npm run build && electron-builder --win portable",
-    "build:win:all": "npm run build && electron-builder --win nsis --win portable",
+    "build:win": "npm run ensure:ffmpeg && npm run build && electron-builder --win nsis",
+    "build:win:portable": "npm run ensure:ffmpeg && npm run build && electron-builder --win portable",
+    "build:win:all": "npm run ensure:ffmpeg && npm run build && electron-builder --win nsis --win portable",
     "build:dist": "npm run build:win:all"
   },
   "devDependencies": {
@@ -73,7 +74,7 @@
       "signAndEditExecutable": false
     },
     "nsis": {
-      "artifactName": "${productName} Setup.${ext}",
+      "artifactName": "${productName} Setup ${version}.${ext}",
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
