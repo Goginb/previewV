@@ -369,7 +369,7 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected })
             loop
             muted
             playsInline
-            preload="none"
+            preload="metadata"
           />
         </div>
 

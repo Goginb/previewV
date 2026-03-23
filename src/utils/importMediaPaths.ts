@@ -15,6 +15,7 @@ const SECTION_GAP = 48
 const GAP = 16
 /** Параллельное чтение картинок с диска — не блокирует конец импорта на сотнях файлов подряд. */
 const IMAGE_IMPORT_CONCURRENCY = 6
+const VIDEO_RESOLVE_CONCURRENCY = 3
 
 async function mapPool<T, R>(
   arr: T[],
@@ -80,6 +81,7 @@ export async function importMediaPathsToCanvas(
 
   const addItems = useCanvasStore.getState().addItems
   const setSelection = useCanvasStore.getState().setSelection
+  const updateItemsBatch = useCanvasStore.getState().updateItemsBatch
 
   const footprint = maxVideoTileOuterSize()
   const defaultVid = defaultVideoTileSizeForNew()
@@ -93,9 +95,11 @@ export async function importMediaPathsToCanvas(
   const newIds: string[] = []
   const pendingItems: Array<VideoItem | ImageItem> = []
 
+  const videoResolveQueue: Array<{ id: string; originalPath: string; currentSrcUrl: string }> = []
+
   for (let i = 0; i < videoPaths.length; i++) {
     const p = videoPaths[i]
-    const srcUrl = await resolveVideoSrcUrl(p)
+    const srcUrl = localPathToMediaUrl(p)
     const row = Math.floor(i / ROW_CAP)
     const col = i % ROW_CAP
     const tile: VideoItem = {
@@ -109,6 +113,7 @@ export async function importMediaPathsToCanvas(
       height: defaultVid.height,
     }
     pendingItems.push(tile)
+    videoResolveQueue.push({ id: tile.id, originalPath: p, currentSrcUrl: srcUrl })
     newIds.push(tile.id)
   }
 
@@ -193,5 +198,18 @@ export async function importMediaPathsToCanvas(
 
   if (newIds.length > 0) {
     setSelection(newIds)
+  }
+
+  // Resolve proxy/video source asynchronously so tiles appear immediately.
+  if (videoResolveQueue.length > 0) {
+    void mapPool(videoResolveQueue, VIDEO_RESOLVE_CONCURRENCY, async (entry) => {
+      const resolvedSrc = await resolveVideoSrcUrl(entry.originalPath)
+      if (!resolvedSrc || resolvedSrc === entry.currentSrcUrl) return null
+      return { id: entry.id, updates: { srcUrl: resolvedSrc } }
+    }).then((updates) => {
+      const batch = updates.filter((u): u is { id: string; updates: { srcUrl: string } } => !!u)
+      if (batch.length === 0) return
+      updateItemsBatch(batch, { recordHistory: false, markDirty: false })
+    })
   }
 }

@@ -133,6 +133,7 @@ export const Canvas: React.FC = () => {
   const viewport        = useCanvasStore((s) => s.viewport)
   const addItem         = useCanvasStore((s) => s.addItem)
   const addItems        = useCanvasStore((s) => s.addItems)
+  const updateItemsBatch = useCanvasStore((s) => s.updateItemsBatch)
   const removeItems     = useCanvasStore((s) => s.removeItems)
   const clearSelection  = useCanvasStore((s) => s.clearSelection)
   const selectOne       = useCanvasStore((s) => s.selectOne)
@@ -605,14 +606,16 @@ export const Canvas: React.FC = () => {
       let i = 0
       const droppedVideoUrls: string[] = []
       const newItems: CanvasItem[] = []
+      const deferredVideoResolves: Promise<{ id: string; srcUrl: string } | null>[] = []
       for (const file of videoFiles) {
         const dw = VIDEO_TILE_DEFAULT.width
         const dh = VIDEO_TILE_DEFAULT.height
-        const srcUrl = await resolveDroppedVideoUrl(file)
+        const srcUrl = fileToUrl(file)
         droppedVideoUrls.push(srcUrl)
+        const tileId = `tile-${Date.now()}-${i}`
         const tile: VideoItem = {
           type:     'video',
-          id:       `tile-${Date.now()}-${i}`,
+          id:       tileId,
           srcUrl,
           fileName: file.name,
           x:        wx - dw / 2 + i * 24,
@@ -621,6 +624,14 @@ export const Canvas: React.FC = () => {
           height:   dh,
         }
         newItems.push(tile)
+        deferredVideoResolves.push(
+          resolveDroppedVideoUrl(file)
+            .then((resolvedUrl) => {
+              if (!resolvedUrl || resolvedUrl === srcUrl) return null
+              return { id: tileId, srcUrl: resolvedUrl }
+            })
+            .catch(() => null),
+        )
         i++
       }
 
@@ -658,8 +669,18 @@ export const Canvas: React.FC = () => {
       if (newItems.length > 0) {
         addItems(newItems)
       }
+
+      if (deferredVideoResolves.length > 0) {
+        void Promise.all(deferredVideoResolves).then((resolved) => {
+          const updates = resolved
+            .filter((r): r is { id: string; srcUrl: string } => !!r)
+            .map((r) => ({ id: r.id, updates: { srcUrl: r.srcUrl } }))
+          if (updates.length === 0) return
+          updateItemsBatch(updates, { recordHistory: false, markDirty: false })
+        })
+      }
     },
-    [addItems, viewport],
+    [addItems, updateItemsBatch, viewport],
   )
 
   const handleMouseDown = useCallback(
