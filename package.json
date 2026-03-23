@@ -74,10 +74,10 @@
     },
     "nsis": {
       "artifactName": "${productName} Setup.${ext}",
-      "oneClick": true,
+      "oneClick": false,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": false,
-      "allowElevation": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "PreviewV",

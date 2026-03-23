@@ -32,6 +32,28 @@ const PROJECT_EXT = '.previewv'
 
 const PROJECT_OPEN_CHANNEL = 'app-open-project-by-path'
 
+function isKnownWebStreamCloseError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const e = error as { code?: unknown; message?: unknown; stack?: unknown }
+  const code = typeof e.code === 'string' ? e.code : ''
+  const message = typeof e.message === 'string' ? e.message : ''
+  const stack = typeof e.stack === 'string' ? e.stack : ''
+  return (
+    code === 'ERR_INVALID_STATE' &&
+    message.includes('Controller is already closed') &&
+    stack.includes('node:internal/webstreams')
+  )
+}
+
+process.on('uncaughtException', (error) => {
+  if (isKnownWebStreamCloseError(error)) {
+    // Avoid hard-crashing packaged app on known Node stream adapter edge-case.
+    console.warn('[PreviewV] Ignored known webstream close error:', (error as Error).message)
+    return
+  }
+  throw error
+})
+
 function findPreviewVPathFromArgv(argv: string[]): string | null {
   const found = argv.find((a) => typeof a === 'string' && a.toLowerCase().endsWith(PROJECT_EXT))
   if (!found) return null

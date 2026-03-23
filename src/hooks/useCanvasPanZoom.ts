@@ -24,9 +24,15 @@ export function useCanvasPanZoom(containerRef: React.RefObject<HTMLElement | nul
   }, [])
 
   const scheduleViewport = useCallback(
-    (nextViewport: { x: number; y: number; scale: number }) => {
-      pendingViewportRef.current = nextViewport
-      viewportRef.current = nextViewport
+    (nextViewport: Partial<{ x: number; y: number; scale: number }>) => {
+      const current = viewportRef.current
+      const merged = {
+        x: Number.isFinite(nextViewport.x) ? nextViewport.x : current.x,
+        y: Number.isFinite(nextViewport.y) ? nextViewport.y : current.y,
+        scale: Number.isFinite(nextViewport.scale) ? nextViewport.scale : current.scale,
+      }
+      pendingViewportRef.current = merged
+      viewportRef.current = merged
       if (rafRef.current) return
       rafRef.current = requestAnimationFrame(() => {
         rafRef.current = 0
@@ -49,6 +55,7 @@ export function useCanvasPanZoom(containerRef: React.RefObject<HTMLElement | nul
       e.preventDefault()
 
       const { x, y, scale } = viewportRef.current
+      if (!Number.isFinite(scale) || scale <= 0) return
       const rect = containerRef.current?.getBoundingClientRect()
       if (!rect) return
 
