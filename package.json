@@ -12,7 +12,8 @@
     "preview": "electron-vite preview",
     "build:win": "npm run build && electron-builder --win nsis",
     "build:win:portable": "npm run build && electron-builder --win portable",
-    "build:win:all": "npm run build && electron-builder --win nsis --win portable"
+    "build:win:all": "npm run build && electron-builder --win nsis --win portable",
+    "build:dist": "npm run build:win:all"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
@@ -72,14 +73,19 @@
       "signAndEditExecutable": false
     },
     "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "allowElevation": true,
+      "artifactName": "${productName} Setup.${ext}",
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "allowElevation": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "PreviewV",
       "runAfterFinish": true,
       "deleteAppDataOnUninstall": false
+    },
+    "portable": {
+      "artifactName": "${productName} Portable ${version}.${ext}"
     }
   }
 }
