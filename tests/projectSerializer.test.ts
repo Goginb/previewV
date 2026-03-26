@@ -178,3 +178,83 @@ test('deserializeProject resolves v2 project assets into runtime image sources',
     localPathToMediaUrl('C:\\projects\\demo.previewv.assets\\images\\img-asset.png'),
   )
 })
+
+test('serializeProject preserves backdrop items', () => {
+  const items: CanvasItem[] = [
+    {
+      type: 'backdrop',
+      id: 'bd-1',
+      x: 10,
+      y: 20,
+      width: 300,
+      height: 120,
+      color: '#0f172a',
+      brightness: 55,
+      saturation: 130,
+      label: 'Group A',
+      labelSize: 'md',
+      collapsed: false,
+      expandedHeight: 120,
+      attachedVideoIds: ['tile-1', 'tile-2'],
+    },
+  ]
+
+  const serialized = serializeProject({
+    items,
+    viewport: { x: 1, y: 2, scale: 1.5 },
+    meta: META,
+    assetPathForImage: () => 'unused.png',
+  })
+
+  const backdrop = serialized.items.find((item) => item.type === 'backdrop' && item.id === 'bd-1')
+  assert.deepEqual(backdrop, {
+    type: 'backdrop',
+    id: 'bd-1',
+    x: 10,
+    y: 20,
+    width: 300,
+    height: 120,
+    color: '#0f172a',
+    brightness: 55,
+    saturation: 130,
+    label: 'Group A',
+    labelSize: 'md',
+    collapsed: false,
+    expandedHeight: 120,
+    attachedVideoIds: ['tile-1', 'tile-2'],
+  })
+})
+
+test('deserializeProject maps v2 backdrops', () => {
+  const project = deserializeProject({
+    version: 2,
+    viewport: { x: 0, y: 0, scale: 1 },
+    meta: META,
+    items: [
+      {
+        type: 'backdrop',
+        id: 'bd-1',
+        x: 10,
+        y: 20,
+        width: 300,
+        height: 48,
+        color: '#0f172a',
+        brightness: 80,
+        saturation: 160,
+        label: 'Group A',
+        labelSize: 'lg',
+        collapsed: true,
+        expandedHeight: 120,
+        attachedVideoIds: ['tile-1'],
+      },
+    ],
+  })
+
+  const backdrop = project.items.find((item) => item.type === 'backdrop' && item.id === 'bd-1') as any
+  assert.equal(backdrop.color, '#0f172a')
+  assert.equal(backdrop.collapsed, true)
+  assert.deepEqual(backdrop.attachedVideoIds, ['tile-1'])
+  assert.equal(backdrop.labelSize, 'lg')
+  assert.equal(backdrop.brightness, 80)
+  assert.equal(backdrop.saturation, 160)
+})

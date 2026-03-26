@@ -5,12 +5,16 @@ import { videoRegistry } from '../utils/videoRegistry'
 import { tileDomRegistry } from '../utils/tileDomRegistry'
 import { setVideoUserPausedByUser } from '../utils/videoUserPausedRegistry'
 import { videoTileSizeFromVideo } from '../utils/tileSizing'
+import { getVideoPlaybackSuspended } from '../utils/videoGlobalPlayback'
+import { setManualPlaybackAllowedInSuspended } from '../utils/videoSuspendedManualAllowRegistry'
 import type { VideoItem } from '../types'
+import { computeAttachedVideoIds } from '../utils/backdrops'
 
 interface VideoTileProps {
   tile: VideoItem
   scale: number
   isSelected: boolean
+  isHidden?: boolean
 }
 
 function formatTime(sec: number): string {
@@ -31,7 +35,7 @@ function getVideoDuration(v: HTMLVideoElement, durationState: number): number {
 const TITLE_H = 24
 const CONTROLS_H = 34
 
-export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected }) => {
+export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, isHidden }) => {
   const videoRef = useRef<HTMLVideoElement>(null)
   const trackRef = useRef<HTMLDivElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -185,6 +189,9 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected })
     scrubRef.current = false
     if (wasPlayingBeforeScrubRef.current) {
       setVideoUserPausedByUser(tile.id, false)
+      if (getVideoPlaybackSuspended()) {
+        setManualPlaybackAllowedInSuspended(tile.id, true)
+      }
       void v.play().catch(() => {})
     }
     scheduleSyncAfterSeek()
@@ -242,8 +249,12 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected })
     if (!v) return
     if (v.paused) {
       setVideoUserPausedByUser(tile.id, false)
+      if (getVideoPlaybackSuspended()) {
+        setManualPlaybackAllowedInSuspended(tile.id, true)
+      }
       void v.play().catch(() => {})
     } else {
+      setManualPlaybackAllowedInSuspended(tile.id, false)
       setVideoUserPausedByUser(tile.id, true)
       v.pause()
     }
@@ -288,27 +299,50 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected })
       }}
       onDragStop={(_, d) => {
         const origins = dragOriginsRef.current
+        const state = useCanvasStore.getState()
+
+        const moved = new Map<string, { x: number; y: number }>()
         if (!origins || origins.size <= 1) {
-          updateItem(tile.id, { x: d.x, y: d.y })
-          return
+          moved.set(tile.id, { x: d.x, y: d.y })
+        } else {
+          const currentOrigin = origins.get(tile.id)
+          if (!currentOrigin) {
+            moved.set(tile.id, { x: d.x, y: d.y })
+          } else {
+            const dx = d.x - currentOrigin.x
+            const dy = d.y - currentOrigin.y
+            for (const [id, pos] of origins.entries()) {
+              moved.set(id, { x: pos.x + dx, y: pos.y + dy })
+            }
+          }
         }
-        const currentOrigin = origins.get(tile.id)
-        if (!currentOrigin) {
-          updateItem(tile.id, { x: d.x, y: d.y })
-          return
+
+        // Apply moved positions to a snapshot so backdrop rules can be evaluated.
+        const nextItems = state.items.map((it) => {
+          const p = moved.get(it.id)
+          return p ? { ...it, x: p.x, y: p.y } : it
+        })
+        const nextVideos = nextItems.filter((i): i is VideoItem => i.type === 'video')
+
+        const backdropUpdates: Array<{ id: string; updates: any }> = []
+        for (const it of nextItems) {
+          if (it.type !== 'backdrop') continue
+          if (it.collapsed) continue
+          const nextAttached = computeAttachedVideoIds(it, nextVideos)
+          const prev = it.attachedVideoIds ?? []
+          const same = prev.length === nextAttached.length && prev.every((v, idx) => v === nextAttached[idx])
+          if (!same) backdropUpdates.push({ id: it.id, updates: { attachedVideoIds: nextAttached } })
         }
-        const dx = d.x - currentOrigin.x
-        const dy = d.y - currentOrigin.y
-        updateItemsBatch(
-          Array.from(origins.entries()).map(([id, pos]) => ({
-            id,
-            updates: { x: pos.x + dx, y: pos.y + dy },
-          })),
-          { recordHistory: true },
-        )
+
+        const movedUpdates = Array.from(moved.entries()).map(([id, pos]) => ({
+          id,
+          updates: { x: pos.x, y: pos.y },
+        }))
+        updateItemsBatch([...movedUpdates, ...backdropUpdates], { recordHistory: true })
         dragOriginsRef.current = null
 
         requestAnimationFrame(() => {
+          if (!origins || origins.size <= 1) return
           for (const id of origins.keys()) {
             if (id === tile.id) continue
             const el = tileDomRegistry.get(id)
@@ -330,7 +364,11 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected })
           height: parseInt(ref.style.height, 10),
         })
       }}
-      style={{ zIndex: 10, pointerEvents: 'auto' }}
+      style={{
+        zIndex: 10,
+        pointerEvents: isHidden ? 'none' : 'auto',
+        visibility: isHidden ? 'hidden' : 'visible',
+      }}
       dragHandleClassName="tile-drag-handle"
       onMouseDown={(e) => {
         e.stopPropagation()
@@ -340,9 +378,13 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected })
     >
       <div
         ref={rootRef}
+        data-video-tile-root="true"
+        data-item-id={tile.id}
         className={[
           'relative rounded-lg overflow-hidden shadow-2xl bg-zinc-900 border box-border',
-          isSelected ? 'border-indigo-500' : 'border-zinc-700/60',
+          isSelected
+            ? 'border-indigo-300 ring-2 ring-indigo-400/80 shadow-[0_0_0_1px_rgba(99,102,241,0.35),0_0_28px_rgba(99,102,241,0.25)]'
+            : 'border-zinc-700/60',
         ].join(' ')}
         style={{ width: tile.width, height: tile.height }}
       >

@@ -2,6 +2,62 @@
 @tailwind components;
 @tailwind utilities;
 
+:root,
+[data-theme='default'] {
+  --app-bg: #09090b;
+  --canvas-bg: #09090b;
+  --canvas-solid-bg: #0f172a;
+  --canvas-solid-border: #111827;
+  --grid-minor-color: rgba(113, 113, 122, 0.15);
+  --grid-major-color: rgba(113, 113, 122, 0.3);
+  --menu-bg: rgba(9, 9, 11, 0.96);
+  --menu-border: rgba(63, 63, 70, 0.8);
+}
+
+[data-theme='light'] {
+  --app-bg: #eef2f7;
+  --canvas-bg: #e8edf4;
+  --canvas-solid-bg: #f4f6fb;
+  --canvas-solid-border: #cbd5e1;
+  --grid-minor-color: rgba(100, 116, 139, 0.2);
+  --grid-major-color: rgba(51, 65, 85, 0.3);
+  --menu-bg: rgba(248, 250, 252, 0.96);
+  --menu-border: rgba(148, 163, 184, 0.7);
+}
+
+[data-theme='pink'] {
+  --app-bg: #170a14;
+  --canvas-bg: #1f1020;
+  --canvas-solid-bg: #2a1232;
+  --canvas-solid-border: #6b214f;
+  --grid-minor-color: rgba(244, 114, 182, 0.14);
+  --grid-major-color: rgba(244, 114, 182, 0.28);
+  --menu-bg: rgba(35, 12, 32, 0.96);
+  --menu-border: rgba(190, 24, 93, 0.55);
+}
+
+[data-theme='camouflage'] {
+  --app-bg: #11140e;
+  --canvas-bg: #1a2114;
+  --canvas-solid-bg: #24301c;
+  --canvas-solid-border: #3f4b2f;
+  --grid-minor-color: rgba(163, 230, 53, 0.11);
+  --grid-major-color: rgba(163, 230, 53, 0.2);
+  --menu-bg: rgba(28, 36, 20, 0.95);
+  --menu-border: rgba(132, 204, 22, 0.4);
+}
+
+[data-theme='greenFx'] {
+  --app-bg: #07120c;
+  --canvas-bg: #0a1710;
+  --canvas-solid-bg: #0f2318;
+  --canvas-solid-border: #1f5d3a;
+  --grid-minor-color: rgba(34, 197, 94, 0.12);
+  --grid-major-color: rgba(34, 197, 94, 0.24);
+  --menu-bg: rgba(8, 23, 15, 0.96);
+  --menu-border: rgba(34, 197, 94, 0.5);
+}
+
 *,
 *::before,
 *::after {

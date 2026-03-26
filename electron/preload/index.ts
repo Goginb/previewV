@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
   windowAPI: {
     getAlwaysOnTop: () => ipcRenderer.invoke('window:get-always-on-top'),
+    getAutosaveEnabled: () => ipcRenderer.invoke('autosave:get-enabled'),
+    setAutosaveEnabled: (enabled: boolean) => ipcRenderer.invoke('autosave:set-enabled', enabled),
   },
   projectAPI: {
     openProjectDialog: () => ipcRenderer.invoke('open-project-dialog'),
@@ -50,9 +52,29 @@ ipcRenderer.on('app:show-help', () => {
   window.dispatchEvent(new CustomEvent('app-show-help'))
 })
 
+ipcRenderer.on('app:open-settings', () => {
+  window.dispatchEvent(new CustomEvent('app-open-settings'))
+})
+
+ipcRenderer.on('app:request-unsaved-close', (_event, payload: { fileLabel?: string }) => {
+  window.dispatchEvent(
+    new CustomEvent('app-request-unsaved-close', {
+      detail: payload ?? {},
+    }),
+  )
+})
+
 ipcRenderer.on('window:always-on-top-changed', (_event, payload: { value: boolean }) => {
   window.dispatchEvent(
     new CustomEvent('previewv-always-on-top', {
+      detail: payload,
+    }),
+  )
+})
+
+ipcRenderer.on('autosave:status', (_event, payload: { lastAutosaveAt: string | null }) => {
+  window.dispatchEvent(
+    new CustomEvent('previewv-autosave-status', {
       detail: payload,
     }),
   )

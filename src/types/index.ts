@@ -38,7 +38,33 @@ export interface ImageItem extends BaseItem {
   projectAssetPath?: string
 }
 
-export type CanvasItem = VideoItem | NoteItem | ImageItem
+export interface BackdropItem extends BaseItem {
+  type: 'backdrop'
+  /**
+   * Dark fill color as hex (e.g. "#1f2937").
+   * Used to render a semi-transparent backdrop.
+   */
+  color: string
+  /**
+   * 0..100: increases perceived brightness of the backdrop color.
+   * Implemented as mix towards white for readability.
+   */
+  brightness: number
+  /** 0..200: saturation multiplier (100 = original). */
+  saturation: number
+  /** Optional label shown on the backdrop header. */
+  label: string
+  /** Label font size preset for readability when zoomed out. */
+  labelSize: 'sm' | 'md' | 'lg'
+  /** When collapsed, hide attached videos inside the backdrop. */
+  collapsed: boolean
+  /** Height before collapse, used to restore on expand. */
+  expandedHeight?: number
+  /** Video ids attached to this backdrop (moved together when backdrop is dragged normally). */
+  attachedVideoIds: string[]
+}
+
+export type CanvasItem = VideoItem | NoteItem | ImageItem | BackdropItem
 
 /** Fields that can be updated on any canvas item */
 export type ItemUpdate = {
@@ -57,6 +83,15 @@ export type ItemUpdate = {
   sourceVideoId?: string
   sourceFilePath?: string
   projectAssetPath?: string
+  // BackdropItem
+  color?: string
+  brightness?: number
+  saturation?: number
+  label?: string
+  labelSize?: 'sm' | 'md' | 'lg'
+  collapsed?: boolean
+  expandedHeight?: number
+  attachedVideoIds?: string[]
 }
 
 // Backward-compat alias

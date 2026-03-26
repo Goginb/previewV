@@ -9,6 +9,7 @@ interface PreviewVProjectState {
 interface Window {
   __previewvProjectState?: PreviewVProjectState
   __previewvPendingProjectPath?: string | undefined
+  __previewvAutosaveSnapshot?: (() => { projectData: unknown; path: string | null } | null) | undefined
   electronAPI?: {
     platform: string
     projectAPI: import('./electron-api').ElectronProjectAPI

@@ -4,6 +4,8 @@ import type { DeserializedProject } from './types/project'
 /** Window-level helpers from main (always-on-top, etc.). */
 export interface ElectronWindowAPI {
   getAlwaysOnTop: () => Promise<boolean>
+  getAutosaveEnabled: () => Promise<boolean>
+  setAutosaveEnabled: (enabled: boolean) => Promise<void>
 }
 
 /** Типы API, проброшенные из electron/preload (см. contextBridge). */

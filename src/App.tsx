@@ -3,6 +3,7 @@ import { Canvas } from './components/Canvas'
 import { ViewportHud } from './components/ViewportHud'
 import { ProjectTitleBar } from './components/ProjectTitleBar'
 import { HelpGuideModal } from './components/HelpGuideModal'
+import { SettingsModal } from './components/SettingsModal'
 import { useCanvasStore } from './store/canvasStore'
 import { useUiStore } from './store/uiStore'
 import { flushImageAnnotations } from './utils/flushImageAnnotations'
@@ -58,9 +59,15 @@ function syncDocumentTitle(): void {
 
 const App: React.FC = () => {
   const [helpOpen, setHelpOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [closePrompt, setClosePrompt] = useState<null | { fileLabel: string; busy: boolean }>(null)
   const loadProjectState = useCanvasStore((s) => s.loadProjectState)
   const getProjectDataForSave = useCanvasStore((s) => s.getProjectDataForSave)
   const syncSavedProjectState = useCanvasStore((s) => s.syncSavedProjectState)
+  const autosaveEnabled = useUiStore((s) => s.autosaveEnabled)
+  const setAutosaveEnabled = useUiStore((s) => s.setAutosaveEnabled)
+  const setLastAutosaveAt = useUiStore((s) => s.setLastAutosaveAt)
+  const theme = useUiStore((s) => s.theme)
 
   useEffect(() => {
     const onHelp = () => setHelpOpen(true)
@@ -69,16 +76,62 @@ const App: React.FC = () => {
   }, [])
 
   useEffect(() => {
+    const onSettings = () => setSettingsOpen(true)
+    window.addEventListener('app-open-settings', onSettings)
+    return () => window.removeEventListener('app-open-settings', onSettings)
+  }, [])
+
+  useEffect(() => {
+    const onRequestUnsavedClose = (e: Event) => {
+      const d = (e as CustomEvent).detail as { fileLabel?: string }
+      setClosePrompt({ fileLabel: d?.fileLabel ?? fileLabelFromStore(), busy: false })
+    }
+    window.addEventListener('app-request-unsaved-close', onRequestUnsavedClose)
+    return () => window.removeEventListener('app-request-unsaved-close', onRequestUnsavedClose)
+  }, [])
+
+  useEffect(() => {
     const wa = window.electronAPI?.windowAPI
     if (!wa) return
     void wa.getAlwaysOnTop().then((v) => useUiStore.getState().setAlwaysOnTop(v))
+    void wa.getAutosaveEnabled().then((v) => setAutosaveEnabled(v))
     const onChange = (e: Event) => {
       const d = (e as CustomEvent).detail as { value: boolean }
       useUiStore.getState().setAlwaysOnTop(d.value)
     }
+    const onAutosave = (e: Event) => {
+      const d = (e as CustomEvent).detail as { lastAutosaveAt: string | null }
+      setLastAutosaveAt(d.lastAutosaveAt ?? null)
+    }
     window.addEventListener('previewv-always-on-top', onChange)
-    return () => window.removeEventListener('previewv-always-on-top', onChange)
+    window.addEventListener('previewv-autosave-status', onAutosave)
+    return () => {
+      window.removeEventListener('previewv-always-on-top', onChange)
+      window.removeEventListener('previewv-autosave-status', onAutosave)
+    }
+  }, [setAutosaveEnabled, setLastAutosaveAt])
+
+  useEffect(() => {
+    const wa = window.electronAPI?.windowAPI
+    if (!wa) return
+    void wa.setAutosaveEnabled(autosaveEnabled)
+  }, [autosaveEnabled])
+
+  useEffect(() => {
+    window.__previewvAutosaveSnapshot = () => {
+      const state = useCanvasStore.getState()
+      if (!state.currentProjectPath) return null
+      const projectData = state.getProjectDataForSave()
+      return { projectData, path: state.currentProjectPath }
+    }
+    return () => {
+      window.__previewvAutosaveSnapshot = undefined
+    }
   }, [])
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+  }, [theme])
 
   useEffect(() => {
     syncWindowProjectState()
@@ -237,8 +290,74 @@ const App: React.FC = () => {
   }, [loadProjectState])
 
   return (
-    <div className="relative w-full h-full min-h-[100dvh] bg-zinc-950">
+    <div className="relative w-full h-full min-h-[100dvh]" style={{ background: 'var(--app-bg)' }}>
       {helpOpen && <HelpGuideModal onClose={() => setHelpOpen(false)} />}
+      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+      {closePrompt && (
+        <div className="fixed inset-0 z-[6500] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div
+            className="w-[min(92vw,500px)] rounded-xl border p-4"
+            style={{ background: 'var(--menu-bg)', borderColor: 'var(--menu-border)' }}
+          >
+            <h3 className="text-base font-semibold text-zinc-100">Save changes before closing?</h3>
+            <p className="text-sm text-zinc-300 mt-1">{closePrompt.fileLabel}</p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={closePrompt.busy}
+                className="px-3 py-1.5 rounded border border-zinc-700 text-zinc-200 hover:bg-zinc-800/60 disabled:opacity-50"
+                onClick={() => setClosePrompt(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={closePrompt.busy}
+                className="px-3 py-1.5 rounded border border-zinc-700 text-zinc-100 hover:bg-zinc-800/70 disabled:opacity-50"
+                onClick={async () => {
+                  const projectAPI = window.electronAPI?.projectAPI
+                  if (!projectAPI) return
+                  setClosePrompt((p) => (p ? { ...p, busy: true } : p))
+                  try {
+                    await projectAPI.confirmCloseWindow()
+                  } catch {
+                    setClosePrompt((p) => (p ? { ...p, busy: false } : p))
+                  }
+                }}
+              >
+                Don’t save
+              </button>
+              <button
+                type="button"
+                disabled={closePrompt.busy}
+                className="px-3 py-1.5 rounded bg-emerald-700 text-white hover:bg-emerald-600 disabled:opacity-50"
+                onClick={async () => {
+                  const projectAPI = window.electronAPI?.projectAPI
+                  if (!projectAPI) return
+                  setClosePrompt((p) => (p ? { ...p, busy: true } : p))
+                  try {
+                    flushImageAnnotations()
+                    const projectData = useCanvasStore.getState().getProjectDataForSave()
+                    const path = useCanvasStore.getState().currentProjectPath
+                    const res = await projectAPI.saveProject({ projectData, path })
+                    if (!res) {
+                      setClosePrompt((p) => (p ? { ...p, busy: false } : p))
+                      return
+                    }
+                    useCanvasStore.getState().syncSavedProjectState(res.project, res.path)
+                    await projectAPI.confirmCloseWindow()
+                  } catch (err: any) {
+                    alert(err?.message ?? String(err))
+                    setClosePrompt((p) => (p ? { ...p, busy: false } : p))
+                  }
+                }}
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <ProjectTitleBar />
       <div className="absolute inset-x-0 top-11 bottom-0 min-h-0">
         <Canvas />

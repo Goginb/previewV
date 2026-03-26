@@ -3,6 +3,7 @@ import { useCanvasStore } from '../store/canvasStore'
 import { videoRegistry } from '../utils/videoRegistry'
 import { videoUserPausedIds } from '../utils/videoUserPausedRegistry'
 import { getVideoPlaybackSuspended } from '../utils/videoGlobalPlayback'
+import { isManualPlaybackAllowedInSuspended } from '../utils/videoSuspendedManualAllowRegistry'
 import type { VideoItem } from '../types'
 
 const UPDATE_MS = 600
@@ -46,9 +47,22 @@ function computeDesiredPlayback(params: {
 
   const candidates: { id: string; distSq: number; selected: boolean }[] = []
 
+  // Skip videos hidden by collapsed backdrops.
+  const hiddenVideoIds = new Set<string>()
+  for (const raw of items) {
+    if (raw?.type !== 'backdrop') continue
+    if (!raw?.collapsed) continue
+    const ids: unknown = raw?.attachedVideoIds
+    if (!Array.isArray(ids)) continue
+    for (const v of ids) {
+      if (typeof v === 'string') hiddenVideoIds.add(v)
+    }
+  }
+
   for (const raw of items) {
     if (!isVideoItem(raw)) continue
     const id = raw.id
+    if (hiddenVideoIds.has(id)) continue
     const left = raw.x * scale + viewportX
     const top = raw.y * scale + viewportY
     const w = raw.width * scale
@@ -111,7 +125,8 @@ export function useVideoPlaybackManager(containerRef: React.RefObject<HTMLElemen
       if (w <= 0 || h <= 0) return
 
       if (getVideoPlaybackSuspended()) {
-        for (const [, video] of videoRegistry) {
+        for (const [id, video] of videoRegistry) {
+          if (isManualPlaybackAllowedInSuspended(id)) continue
           try {
             video.pause()
           } catch {

@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { CanvasItem, ItemUpdate } from '../types'
 import type { DeserializedProject, ProjectMeta, ViewportState } from '../types/project'
 import { requestMediaWarmup } from '../utils/warmupCanvasMedia'
+import { useUiStore } from './uiStore'
 
 export interface Viewport {
   x: number
@@ -67,7 +68,7 @@ interface CanvasState {
   resetViewport: () => void
   frameAllItemsInViewport: (containerWidth: number, containerHeight: number) => void
   layoutMediaRow: () => void
-  packAllTilesGrid: () => void
+  gridAlignTiles: () => void
   undo: () => void
   redo: () => void
   setClipboard: (items: CanvasItem[]) => void
@@ -282,18 +283,19 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }))
   },
 
-  packAllTilesGrid: () => {
+  gridAlignTiles: () => {
     const state = get()
     const selectionSet = new Set(state.selectedIds)
 
-    const isVideo = (i: CanvasItem) => i.type === 'video'
-    const canMove = (i: CanvasItem) => isVideo(i) && (selectionSet.size > 0 ? selectionSet.has(i.id) : true)
+    const isTile = (i: CanvasItem) => i.type === 'video' || i.type === 'image' || i.type === 'note'
+    const canMove = (i: CanvasItem) => {
+      if (!isTile(i)) return false
+      return selectionSet.size > 0 ? selectionSet.has(i.id) : true
+    }
 
     const movable = state.items.filter(canMove)
     if (movable.length === 0) return
 
-    // If there is a selection, we move only selected videos; otherwise we move all videos.
-    // Non-movable items keep their positions and act as obstacles.
     const movableSet = new Set(movable.map((m) => m.id))
 
     const rectsOverlap = (
@@ -305,46 +307,69 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       by: number,
       bw: number,
       bh: number,
-    ): boolean => {
-      return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by
-    }
+    ): boolean => ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by
 
+    // Obstacles are all non-moved tiles (notes/images/videos). Backdrops are allowed to overlap.
     const occupied: Array<{ x: number; y: number; w: number; h: number }> = state.items
-      .filter((i) => !movableSet.has(i.id))
+      .filter((i) => !movableSet.has(i.id) && isTile(i))
       .map((i) => ({ x: i.x, y: i.y, w: i.width, h: i.height }))
 
     const placed = new Map<string, { x: number; y: number }>()
     const sorted = sortByCanvasReadingOrder(movable)
-
-    const MAX_X_STEPS = 20 // prevents "one big line" behavior; forces wrapping to next rows
-    const MAX_ATTEMPTS_PER_TILE = 5000
+    const { gridSizeX, gridSizeY } = useUiStore.getState()
+    const snapX = Math.max(8, Math.round(gridSizeX))
+    const snapY = Math.max(8, Math.round(gridSizeY))
 
     for (const t of sorted) {
-      let x = t.x
-      let y = t.y
-      const stepX = Math.max(1, t.width + ROW_GAP)
-      const stepY = Math.max(1, t.height + ROW_GAP)
+      const baseX = Math.round(t.x / snapX) * snapX
+      const baseY = Math.round(t.y / snapY) * snapY
 
-      let attempts = 0
-      while (attempts < MAX_ATTEMPTS_PER_TILE) {
-        const hit = occupied.some((o) =>
-          rectsOverlap(x, y, t.width, t.height, o.x, o.y, o.w, o.h),
-        )
-        if (!hit) break
+      const canPlaceAt = (x: number, y: number) =>
+        !occupied.some((o) => rectsOverlap(x, y, t.width, t.height, o.x, o.y, o.w, o.h))
 
-        x += stepX
-        const xSteps = Math.floor((x - t.x) / stepX)
-        if (xSteps >= MAX_X_STEPS) {
-          x = t.x
-          y += stepY
-        }
-
-        attempts++
+      // 1) Prefer keeping original position.
+      if (canPlaceAt(baseX, baseY)) {
+        placed.set(t.id, { x: baseX, y: baseY })
+        occupied.push({ x: baseX, y: baseY, w: t.width, h: t.height })
+        continue
       }
 
-      placed.set(t.id, { x, y })
-      occupied.push({ x, y, w: t.width, h: t.height })
+      // 2) Minimal nudge search around current spot (keeps layout, only resolves overlaps).
+      // Uses a perimeter spiral in ROW_GAP steps: tends to produce row/column adjustments.
+      const stepX = snapX
+      const stepY = snapY
+      const maxR = 40 // 40 * 16px = 640px search radius cap
+      let found: { x: number; y: number } | null = null
+
+      for (let r = 1; r <= maxR && !found; r++) {
+        const dx = r * stepX
+        const dy = r * stepY
+        // Perimeter points around the base position.
+        for (let s = -r; s <= r && !found; s++) {
+          const sx = s * stepX
+          const sy = s * stepY
+          const candidates = [
+            { x: baseX + dx, y: baseY + sy },
+            { x: baseX - dx, y: baseY + sy },
+            { x: baseX + sx, y: baseY + dy },
+            { x: baseX + sx, y: baseY - dy },
+          ]
+          for (const c of candidates) {
+            if (canPlaceAt(c.x, c.y)) {
+              found = c
+              break
+            }
+          }
+        }
+      }
+
+      // If we can't find a nearby spot, keep current position (safer than moving far away).
+      if (!found) continue
+      placed.set(t.id, found)
+      occupied.push({ x: found.x, y: found.y, w: t.width, h: t.height })
     }
+
+    if (placed.size === 0) return
 
     set((state) => ({
       _past: pushPast(state._past, state.items),

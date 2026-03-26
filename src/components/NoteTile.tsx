@@ -147,7 +147,9 @@ export const NoteTile: React.FC<NoteTileProps> = ({ note, scale, isSelected }) =
         className={[
           'w-full h-full flex flex-col rounded-lg overflow-hidden shadow-2xl',
           'bg-amber-950/80 border',
-          isSelected ? 'border-amber-400' : 'border-amber-800/60',
+          isSelected
+            ? 'border-amber-300 ring-2 ring-amber-400/80 shadow-[0_0_0_1px_rgba(251,191,36,0.30),0_0_24px_rgba(251,191,36,0.22)]'
+            : 'border-amber-800/60',
         ].join(' ')}
       >
         {/* Drag handle */}

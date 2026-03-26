@@ -19,7 +19,10 @@ export const ProjectTitleBar: React.FC = () => {
       className="fixed top-0 left-0 right-0 z-[2000] pointer-events-none select-none"
       aria-hidden
     >
-      <div className="flex items-center justify-center px-4 py-2 bg-zinc-950/85 backdrop-blur-sm border-b border-zinc-800/80">
+      <div
+        className="flex items-center justify-center px-4 py-2 backdrop-blur-sm border-b"
+        style={{ background: 'color-mix(in oklab, var(--app-bg) 88%, black)', borderColor: 'var(--menu-border)' }}
+      >
         <div
           className="text-xs sm:text-sm text-zinc-300 font-medium truncate max-w-[min(90vw,42rem)] text-center"
           title={path ?? 'Project not saved to disk'}
@@ -29,7 +32,7 @@ export const ProjectTitleBar: React.FC = () => {
           {alwaysOnTop && (
             <span
               className="text-sky-400 ml-2 text-[10px] uppercase tracking-wide border border-sky-500/50 rounded px-1 py-0.5"
-              title="Window pinned (always on top). Alt+Shift+B to unpin."
+              title="Window pinned (always on top). Ctrl+Shift+A toggles pin."
             >
               Pinned
             </span>

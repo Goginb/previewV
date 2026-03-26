@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useCanvasStore } from '../store/canvasStore'
 import { useCanvasPanZoom, spacePanActiveRef } from '../hooks/useCanvasPanZoom'
 import { useVideoPlaybackManager } from '../hooks/useVideoPlaybackManager'
@@ -14,7 +15,10 @@ import { importImageFile, isRasterImportFile } from '../utils/imageImport'
 import { defaultVideoTileSizeForNew, imageTileViewSize } from '../utils/tileSizing'
 import { setVideoPlaybackSuspended } from '../utils/videoGlobalPlayback'
 import { requestVideoWarmupEarly } from '../utils/warmupCanvasMedia'
+import { BackdropTile, createBackdropItem } from './BackdropTile'
+import { backdropHeaderHeight, computeAttachedVideoIds } from '../utils/backdrops'
 import type { CanvasItem, ImageItem, NoteItem, VideoItem } from '../types'
+import { useUiStore } from '../store/uiStore'
 
 // ── File helpers ──────────────────────────────────────────────────────────────
 
@@ -139,14 +143,20 @@ export const Canvas: React.FC = () => {
   const selectOne       = useCanvasStore((s) => s.selectOne)
   const setSelection    = useCanvasStore((s) => s.setSelection)
   const layoutMediaRow  = useCanvasStore((s) => s.layoutMediaRow)
-  const packAllTilesGrid = useCanvasStore((s) => s.packAllTilesGrid)
+  const gridAlignTiles = useCanvasStore((s) => s.gridAlignTiles)
   const resetViewport   = useCanvasStore((s) => s.resetViewport)
   const frameAllItemsInViewport = useCanvasStore((s) => s.frameAllItemsInViewport)
   const imageEditModeId = useCanvasStore((s) => s.imageEditModeId)
   const setImageEditModeId = useCanvasStore((s) => s.setImageEditModeId)
+  const gridSizeX = useUiStore((s) => s.gridSizeX)
+  const gridSizeY = useUiStore((s) => s.gridSizeY)
+  const theme = useUiStore((s) => s.theme)
+  const alwaysOnTop = useUiStore((s) => s.alwaysOnTop)
+  const setAlwaysOnTop = useUiStore((s) => s.setAlwaysOnTop)
 
   const containerRef    = useRef<HTMLDivElement>(null)
   const lastMouseScreen = useRef({ x: 0, y: 0 })
+  const [ctxMenu, setCtxMenu] = useState<null | { x: number; y: number; kind: 'canvas' | 'video' | 'image'; itemId?: string }>(null)
 
   // Ensure paste has a sane default position even if the user hasn't moved
   // the mouse after selecting items.
@@ -178,6 +188,15 @@ export const Canvas: React.FC = () => {
   useCanvasPanZoom(containerRef)
   useVideoPlaybackManager(containerRef)
   const selectedIdSet = new Set(selectedIds)
+  const hiddenVideoIds = useMemo(() => {
+    const set = new Set<string>()
+    for (const it of items) {
+      if (it.type !== 'backdrop') continue
+      if (!it.collapsed) continue
+      for (const vid of it.attachedVideoIds) set.add(vid)
+    }
+    return set
+  }, [items])
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const rect = containerRef.current?.getBoundingClientRect()
@@ -486,7 +505,7 @@ export const Canvas: React.FC = () => {
         return
       }
 
-      // \ — pack all tiles into a non-overlapping grid (Backslash; IntlBackslash on some layouts)
+      // \ — align all tiles into a non-overlapping grid (Backslash; IntlBackslash on some layouts)
       if (
         (e.code === 'Backslash' || e.code === 'IntlBackslash') &&
         !e.ctrlKey &&
@@ -495,7 +514,78 @@ export const Canvas: React.FC = () => {
         !isTypingTarget(e)
       ) {
         e.preventDefault()
-        packAllTilesGrid()
+        gridAlignTiles()
+        return
+      }
+
+      // B — create a new backdrop at cursor position
+      if (e.code === 'KeyB' && !e.ctrlKey && !e.metaKey && !e.altKey && !isTypingTarget(e)) {
+        e.preventDefault()
+        const state = useCanvasStore.getState()
+        const idSet = new Set(state.selectedIds)
+        const selectedTiles = state.items.filter(
+          (it) =>
+            idSet.has(it.id) &&
+            (it.type === 'video' || it.type === 'image' || it.type === 'note'),
+        )
+
+        const PAD_X = 28
+        const PAD_BOTTOM = 28
+        const PAD_TOP = 28 + backdropHeaderHeight('md') + 16 // padding + default header + label room
+        let rect: { x: number; y: number; width: number; height: number }
+
+        if (selectedTiles.length > 0) {
+          let minX = Infinity
+          let minY = Infinity
+          let maxX = -Infinity
+          let maxY = -Infinity
+          for (const it of selectedTiles) {
+            minX = Math.min(minX, it.x)
+            minY = Math.min(minY, it.y)
+            maxX = Math.max(maxX, it.x + it.width)
+            maxY = Math.max(maxY, it.y + it.height)
+          }
+          rect = {
+            x: minX - PAD_X,
+            y: minY - PAD_TOP,
+            width: Math.max(220, maxX - minX + 2 * PAD_X),
+            height: Math.max(160, (maxY - minY) + PAD_TOP + PAD_BOTTOM),
+          }
+        } else {
+          const { x: sx, y: sy } = lastMouseScreen.current
+          const { x: vx, y: vy, scale } = state.viewport
+          const worldX = (sx - vx) / scale
+          const worldY = (sy - vy) / scale
+          const w = 360
+          const h = 220
+          rect = { x: worldX - w / 2, y: worldY - h / 2, width: w, height: h }
+        }
+
+        const attachedVideoIds = computeAttachedVideoIds(
+          rect,
+          state.items.filter((i): i is VideoItem => i.type === 'video'),
+        )
+
+        const backdrop = createBackdropItem({
+          id: `backdrop-${Date.now()}`,
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+          color:
+            theme === 'light'
+              ? '#64748b'
+              : theme === 'pink'
+                ? '#be185d'
+                : theme === 'camouflage'
+                  ? '#3f6212'
+                  : theme === 'greenFx'
+                    ? '#16a34a'
+                    : '#1d4ed8',
+          attachedVideoIds,
+        })
+        addItem(backdrop)
+        selectOne(backdrop.id)
         return
       }
 
@@ -576,9 +666,81 @@ export const Canvas: React.FC = () => {
     removeItems,
     selectOne,
     layoutMediaRow,
-    packAllTilesGrid,
+    gridAlignTiles,
     frameAllItemsInViewport,
+    theme,
   ])
+
+  // ── Context menu (canvas + video tiles) ───────────────────────────────────
+  useEffect(() => {
+    if (!ctxMenu) return
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null
+      if (t?.closest?.('[data-canvas-ctx-menu="true"]')) return
+      setCtxMenu(null)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setCtxMenu(null)
+    }
+    window.addEventListener('mousedown', onDown, true)
+    window.addEventListener('keydown', onKey, true)
+    return () => {
+      window.removeEventListener('mousedown', onDown, true)
+      window.removeEventListener('keydown', onKey, true)
+    }
+  }, [ctxMenu])
+
+  useEffect(() => {
+    const onContextMenu = (e: MouseEvent) => {
+      if (e.defaultPrevented) return
+      const t = e.target as HTMLElement | null
+      if (!t) return
+      if (t.closest?.('[data-backdrop-ctx-menu="true"]')) return
+      const videoRoot = t.closest?.('[data-video-tile-root="true"]') as HTMLElement | null
+      const imageRoot = t.closest?.('[data-image-tile-root="true"]') as HTMLElement | null
+      const isBg = t.getAttribute('data-canvas-bg') === 'true'
+      if (!videoRoot && !imageRoot && !isBg) return
+      e.preventDefault()
+      e.stopPropagation()
+      if (videoRoot) {
+        const id = videoRoot.getAttribute('data-item-id') ?? undefined
+        if (id) selectOne(id)
+        setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'video', itemId: id })
+        return
+      }
+      if (imageRoot) {
+        const id = imageRoot.getAttribute('data-item-id') ?? undefined
+        if (id) selectOne(id)
+        setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'image', itemId: id })
+        return
+      }
+      setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'canvas' })
+    }
+    window.addEventListener('contextmenu', onContextMenu, true)
+    return () => window.removeEventListener('contextmenu', onContextMenu, true)
+  }, [selectOne])
+
+  const contentBounds = useMemo(() => {
+    if (!items.length) return null
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    for (const it of items) {
+      minX = Math.min(minX, it.x)
+      minY = Math.min(minY, it.y)
+      maxX = Math.max(maxX, it.x + it.width)
+      maxY = Math.max(maxY, it.y + it.height)
+    }
+    if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) return null
+    const pad = 420
+    return {
+      x: minX - pad,
+      y: minY - pad,
+      width: Math.max(1, maxX - minX + pad * 2),
+      height: Math.max(1, maxY - minY + pad * 2),
+    }
+  }, [items])
 
   const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault()
@@ -728,7 +890,8 @@ export const Canvas: React.FC = () => {
       id="previewv-canvas-root"
       ref={containerRef}
       data-canvas-bg="true"
-      className="relative w-full h-full overflow-hidden bg-zinc-950 outline-none"
+      className="relative w-full h-full overflow-hidden outline-none"
+      style={{ background: 'var(--canvas-bg)' }}
       tabIndex={-1}
       onMouseMove={handleMouseMove}
       onMouseDown={handleMouseDown}
@@ -740,9 +903,24 @@ export const Canvas: React.FC = () => {
         data-canvas-bg="true"
         className="absolute inset-0 pointer-events-none"
         style={{
-          backgroundImage: 'radial-gradient(circle, #3f3f46 1px, transparent 1px)',
-          backgroundSize:     `${32 * viewport.scale}px ${32 * viewport.scale}px`,
-          backgroundPosition: `${viewport.x}px ${viewport.y}px`,
+          backgroundImage: [
+            'linear-gradient(to right, var(--grid-major-color) 1px, transparent 1px)',
+            'linear-gradient(to bottom, var(--grid-major-color) 1px, transparent 1px)',
+            'linear-gradient(to right, var(--grid-minor-color) 1px, transparent 1px)',
+            'linear-gradient(to bottom, var(--grid-minor-color) 1px, transparent 1px)',
+          ].join(','),
+          backgroundSize: [
+            `${gridSizeX * 5 * viewport.scale}px ${gridSizeY * 5 * viewport.scale}px`,
+            `${gridSizeX * 5 * viewport.scale}px ${gridSizeY * 5 * viewport.scale}px`,
+            `${gridSizeX * viewport.scale}px ${gridSizeY * viewport.scale}px`,
+            `${gridSizeX * viewport.scale}px ${gridSizeY * viewport.scale}px`,
+          ].join(','),
+          backgroundPosition: [
+            `${viewport.x}px ${viewport.y}px`,
+            `${viewport.x}px ${viewport.y}px`,
+            `${viewport.x}px ${viewport.y}px`,
+            `${viewport.x}px ${viewport.y}px`,
+          ].join(','),
         }}
       />
 
@@ -765,16 +943,43 @@ export const Canvas: React.FC = () => {
           transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`,
         }}
       >
-        {items.map((item: CanvasItem) => {
+        {contentBounds && (
+          <div
+            className="absolute rounded-xl border"
+            style={{
+              left: contentBounds.x,
+              top: contentBounds.y,
+              width: contentBounds.width,
+              height: contentBounds.height,
+              background: 'var(--canvas-solid-bg)',
+              borderColor: 'var(--canvas-solid-border)',
+              zIndex: 0,
+              pointerEvents: 'none',
+            }}
+          />
+        )}
+        {/* Tiles first, backdrops last so backdrop headers stack above videos/images/notes (z-index + paint order). */}
+        {[...items.filter((i) => i.type !== 'backdrop'), ...items.filter((i) => i.type === 'backdrop')].map((item: CanvasItem) => {
           const sel = selectedIdSet.has(item.id)
           if (item.type === 'video') {
-            return <VideoTile key={item.id} tile={item} scale={viewport.scale} isSelected={sel} />
+            return (
+              <VideoTile
+                key={item.id}
+                tile={item}
+                scale={viewport.scale}
+                isSelected={sel}
+                isHidden={hiddenVideoIds.has(item.id)}
+              />
+            )
           }
           if (item.type === 'note') {
             return <NoteTile key={item.id} note={item} scale={viewport.scale} isSelected={sel} />
           }
           if (item.type === 'image') {
             return <ImageTile key={item.id} item={item} scale={viewport.scale} isSelected={sel} />
+          }
+          if (item.type === 'backdrop') {
+            return <BackdropTile key={item.id} backdrop={item} scale={viewport.scale} isSelected={sel} />
           }
           return null
         })}
@@ -789,11 +994,215 @@ export const Canvas: React.FC = () => {
               Видео: MP4, WebM, MOV… · Изображения: JPEG, PNG, TIFF, EXR, DPX…
             </p>
             <p className="text-xs mt-3 opacity-40">
-              Ctrl+A · A · Ctrl+O · L · \ · Ctrl+N / F3 · F4
+              Ctrl+A · A · Ctrl+O · L · B · \ · Ctrl+N / F3 · F4
             </p>
           </div>
         </div>
       )}
+
+      {ctxMenu &&
+        createPortal(
+          <div
+            data-canvas-ctx-menu="true"
+            className="fixed z-[10000] rounded-lg border shadow-2xl p-1.5 min-w-[220px]"
+            style={{
+              left: ctxMenu.x,
+              top: ctxMenu.y,
+              borderColor: 'var(--menu-border)',
+              background: 'var(--menu-bg)',
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div className="px-2 py-1 text-[11px] text-zinc-400 select-none">
+              {ctxMenu.kind === 'video' ? 'Video tile' : ctxMenu.kind === 'image' ? 'Image tile' : 'Canvas'}
+            </div>
+            <div className="h-px bg-zinc-800/80 my-1" />
+            {(ctxMenu.kind === 'video' || ctxMenu.kind === 'image') && ctxMenu.itemId && (
+              <>
+                <button
+                  type="button"
+                  className="w-full text-left px-2 py-1.5 text-sm text-zinc-100 hover:bg-zinc-800/60 rounded"
+                  onClick={() => {
+                    const state = useCanvasStore.getState()
+                    const ids = state.selectedIds.length ? state.selectedIds : [ctxMenu.itemId!]
+                    removeItems(ids)
+                    setCtxMenu(null)
+                  }}
+                >
+                  Delete
+                </button>
+                <button
+                  type="button"
+                  className="w-full text-left px-2 py-1.5 text-sm text-zinc-100 hover:bg-zinc-800/60 rounded"
+                  onClick={() => {
+                    const state = useCanvasStore.getState()
+                    const ids = state.selectedIds.length ? state.selectedIds : [ctxMenu.itemId!]
+                    const idSet = new Set(ids)
+                    const selected = state.items.filter((i) => idSet.has(i.id))
+                    const copies: CanvasItem[] = selected.map(cloneCanvasItemForClipboard)
+                    state.setClipboard(copies)
+                    setCtxMenu(null)
+                  }}
+                >
+                  Copy
+                </button>
+                {ctxMenu.kind === 'video' ? (
+                  <button
+                    type="button"
+                    className="w-full text-left px-2 py-1.5 text-sm text-zinc-100 hover:bg-zinc-800/60 rounded"
+                    onClick={() => {
+                      const state = useCanvasStore.getState()
+                      const vid = videoRegistry.get(ctxMenu.itemId!)
+                      if (!vid) return
+                      const cap = captureVideoFrame(vid)
+                      const { x: sx, y: sy } = lastMouseScreen.current
+                      const { x: vx, y: vy, scale } = state.viewport
+                      const worldX = (sx - vx) / scale
+                      const worldY = (sy - vy) / scale
+                      const view = imageTileViewSize(cap.width, cap.height)
+                      const img: ImageItem = {
+                        type: 'image',
+                        id: `image-${Date.now()}`,
+                        x: worldX + 24,
+                        y: worldY + 24,
+                        width: view.width,
+                        height: view.height,
+                        srcUrl: cap.dataUrl,
+                        storage: 'legacy-inline',
+                        sourceVideoId: ctxMenu.itemId!,
+                        naturalWidth: cap.width,
+                        naturalHeight: cap.height,
+                        fileName: 'Frame',
+                      }
+                      addItem(img)
+                      setSelection([img.id])
+                      setCtxMenu(null)
+                    }}
+                  >
+                    Capture frame (F3)
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="w-full text-left px-2 py-1.5 text-sm text-zinc-100 hover:bg-zinc-800/60 rounded"
+                    onClick={() => {
+                      setImageEditModeId(ctxMenu.itemId!)
+                      setCtxMenu(null)
+                    }}
+                  >
+                    Draw mode (F4)
+                  </button>
+                )}
+                <div className="h-px bg-zinc-800/80 my-1" />
+              </>
+            )}
+            <button
+              type="button"
+              className="w-full text-left px-2 py-1.5 text-sm text-zinc-100 hover:bg-zinc-800/60 rounded"
+              onClick={() => {
+                window.dispatchEvent(new CustomEvent('app-open-settings'))
+                setCtxMenu(null)
+              }}
+            >
+              Settings
+            </button>
+            {ctxMenu.kind === 'canvas' && (
+              <button
+                type="button"
+                className="w-full text-left px-2 py-1.5 text-sm text-zinc-100 hover:bg-zinc-800/60 rounded"
+                onClick={async () => {
+                  const next = !alwaysOnTop
+                  const wa = window.electronAPI?.windowAPI
+                  if (wa?.setAlwaysOnTop) {
+                    await wa.setAlwaysOnTop(next)
+                  }
+                  setAlwaysOnTop(next)
+                  setCtxMenu(null)
+                }}
+              >
+                {alwaysOnTop ? 'Disable always on top' : 'Enable always on top'}
+              </button>
+            )}
+
+            <button
+              type="button"
+              className="w-full text-left px-2 py-1.5 text-sm text-zinc-100 hover:bg-zinc-800/60 rounded"
+              onClick={() => {
+                const state = useCanvasStore.getState()
+                const { x: sx, y: sy } = lastMouseScreen.current
+                const { x: vx, y: vy, scale } = state.viewport
+                const x = (sx - vx) / scale - NOTE_W / 2
+                const y = (sy - vy) / scale - NOTE_H / 2
+                const note: NoteItem = {
+                  type: 'note',
+                  id: `note-${Date.now()}`,
+                  x,
+                  y,
+                  width: NOTE_W,
+                  height: NOTE_H,
+                  text: '',
+                }
+                addItem(note)
+                selectOne(note.id)
+                setCtxMenu(null)
+              }}
+            >
+              New note (Ctrl+N)
+            </button>
+
+            <button
+              type="button"
+              className="w-full text-left px-2 py-1.5 text-sm text-zinc-100 hover:bg-zinc-800/60 rounded"
+              onClick={() => {
+                gridAlignTiles()
+                setCtxMenu(null)
+              }}
+            >
+              Grid align (\\)
+            </button>
+
+            <button
+              type="button"
+              className="w-full text-left px-2 py-1.5 text-sm text-zinc-100 hover:bg-zinc-800/60 rounded"
+              onClick={() => {
+                layoutMediaRow()
+                setCtxMenu(null)
+              }}
+            >
+              L — Layout media row
+            </button>
+
+            <button
+              type="button"
+              className="w-full text-left px-2 py-1.5 text-sm text-zinc-100 hover:bg-zinc-800/60 rounded"
+              onClick={() => {
+                const el = containerRef.current
+                if (!el) return
+                const { width, height } = el.getBoundingClientRect()
+                frameAllItemsInViewport(width, height)
+                setCtxMenu(null)
+              }}
+            >
+              Fit all (A)
+            </button>
+
+            <button
+              type="button"
+              className="w-full text-left px-2 py-1.5 text-sm text-zinc-100 hover:bg-zinc-800/60 rounded disabled:opacity-40"
+              disabled={useCanvasStore.getState().clipboard.length === 0}
+              onClick={() => {
+                const state = useCanvasStore.getState()
+                const { x: sx, y: sy } = lastMouseScreen.current
+                const { x: vx, y: vy, scale } = state.viewport
+                state.pasteClipboard((sx - vx) / scale, (sy - vy) / scale)
+                setCtxMenu(null)
+              }}
+            >
+              Paste (Ctrl+V)
+            </button>
+          </div>,
+          document.body,
+        )}
     </div>
   )
 }

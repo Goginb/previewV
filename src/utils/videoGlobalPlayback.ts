@@ -3,6 +3,8 @@
  * воспроизведения не запускает ролики и каждый тик ставит на паузу всё в registry.
  */
 
+import { clearManualPlaybackAllowedInSuspended } from './videoSuspendedManualAllowRegistry'
+
 let suspended = false
 const listeners = new Set<() => void>()
 
@@ -11,6 +13,10 @@ export function getVideoPlaybackSuspended(): boolean {
 }
 
 export function setVideoPlaybackSuspended(next: boolean): void {
+  if (!suspended && next) {
+    // New "Stop all" session starts from clean state.
+    clearManualPlaybackAllowedInSuspended()
+  }
   suspended = next
   for (const fn of listeners) {
     try {

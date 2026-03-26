@@ -117,6 +117,22 @@ export type ProjectCanvasItemV2 =
       height: number
       text: string
     }
+  | {
+      type: 'backdrop'
+      id: string
+      x: number
+      y: number
+      width: number
+      height: number
+      color: string
+      brightness: number
+      saturation: number
+      label: string
+      labelSize: 'sm' | 'md' | 'lg'
+      collapsed: boolean
+      expandedHeight?: number
+      attachedVideoIds: string[]
+    }
 
 export type ProjectCanvasItem = ProjectCanvasItemV1 | ProjectCanvasItemV2
 

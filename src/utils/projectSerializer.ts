@@ -1,5 +1,6 @@
 import type {
   CanvasItem,
+  BackdropItem,
   ImageItem,
   NoteItem,
   VideoItem,
@@ -57,6 +58,24 @@ function optionalString(v: unknown, _field: string): string | undefined {
   if (v === undefined) return undefined
   if (typeof v !== 'string') return undefined
   return v
+}
+
+function optionalBackdropLabelSize(v: unknown): 'sm' | 'md' | 'lg' | undefined {
+  if (v === undefined) return undefined
+  if (v === 'sm' || v === 'md' || v === 'lg') return v
+  return undefined
+}
+
+function optionalBackdropBrightness(v: unknown): number | undefined {
+  if (v === undefined) return undefined
+  if (typeof v !== 'number' || Number.isNaN(v)) return undefined
+  return Math.max(0, Math.min(100, v))
+}
+
+function optionalBackdropSaturation(v: unknown): number | undefined {
+  if (v === undefined) return undefined
+  if (typeof v !== 'number' || Number.isNaN(v)) return undefined
+  return Math.max(0, Math.min(200, v))
 }
 
 function normalizeToForwardSlashes(path: string): string {
@@ -222,6 +241,44 @@ function validateItemV2(raw: unknown): ProjectCanvasItemV2 {
     return { type: 'note', id, x, y, width, height, text }
   }
 
+  if (type === 'backdrop') {
+    const color = mustBeString(raw.color, 'item.color')
+    const label = mustBeString(raw.label, 'item.label')
+    const labelSize = optionalBackdropLabelSize(raw.labelSize) ?? 'md'
+    const brightness = optionalBackdropBrightness(raw.brightness) ?? 40
+    const saturation = optionalBackdropSaturation(raw.saturation) ?? 100
+    const collapsed = raw.collapsed
+    if (typeof collapsed !== 'boolean') {
+      throw new Error(`Invalid project: field "item.collapsed" must be a boolean`)
+    }
+    const expandedHeight = optionalNumber(raw.expandedHeight, 'item.expandedHeight')
+    if (!Array.isArray(raw.attachedVideoIds)) {
+      throw new Error(`Invalid project: field "item.attachedVideoIds" must be an array`)
+    }
+    const attachedVideoIds = raw.attachedVideoIds.map((v, idx) => {
+      if (typeof v !== 'string') {
+        throw new Error(`Invalid project: item.attachedVideoIds[${idx}] must be a string`)
+      }
+      return v
+    })
+    return {
+      type: 'backdrop',
+      id,
+      x,
+      y,
+      width,
+      height,
+      color,
+      brightness,
+      saturation,
+      label,
+      labelSize,
+      collapsed,
+      ...(expandedHeight !== undefined ? { expandedHeight } : {}),
+      attachedVideoIds,
+    }
+  }
+
   throw new Error(`Invalid project: unknown item.type "${type}"`)
 }
 
@@ -294,6 +351,26 @@ export function serializeProject(params: SerializeProjectOptions): ProjectFileV2
         ...(item.naturalHeight !== undefined ? { naturalHeight: item.naturalHeight } : {}),
         ...(item.fileName !== undefined ? { fileName: item.fileName } : {}),
         assetPath,
+      }
+    }
+
+    if (item.type === 'backdrop') {
+      const expandedHeight = item.expandedHeight
+      return {
+        type: 'backdrop',
+        id: item.id,
+        x: item.x,
+        y: item.y,
+        width: item.width,
+        height: item.height,
+        color: item.color,
+        brightness: typeof item.brightness === 'number' ? Math.max(0, Math.min(100, item.brightness)) : 40,
+        saturation: typeof item.saturation === 'number' ? Math.max(0, Math.min(200, item.saturation)) : 100,
+        label: item.label,
+        labelSize: item.labelSize ?? 'md',
+        collapsed: item.collapsed,
+        ...(expandedHeight !== undefined ? { expandedHeight } : {}),
+        attachedVideoIds: item.attachedVideoIds,
       }
     }
 
@@ -441,6 +518,26 @@ export function deserializeProject(
         projectAssetPath: asset.absolutePath,
       }
       return img
+    }
+
+    if (validated.type === 'backdrop') {
+      const backdrop: BackdropItem = {
+        type: 'backdrop',
+        id: validated.id,
+        x: validated.x,
+        y: validated.y,
+        width: validated.width,
+        height: validated.height,
+        color: validated.color,
+        brightness: validated.brightness ?? 40,
+        saturation: validated.saturation ?? 100,
+        label: validated.label,
+        labelSize: validated.labelSize ?? 'md',
+        collapsed: validated.collapsed,
+        ...(validated.expandedHeight !== undefined ? { expandedHeight: validated.expandedHeight } : {}),
+        attachedVideoIds: validated.attachedVideoIds,
+      }
+      return backdrop
     }
 
     const note: NoteItem = {

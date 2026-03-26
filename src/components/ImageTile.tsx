@@ -18,6 +18,7 @@ const PALETTE = [
 ]
 
 const SIZES: [number, string][] = [[2, 'S'], [5, 'M'], [12, 'L']]
+const EDIT_VIEWPORT_FILL = 0.78
 
 const CURSOR: Record<DrawTool, string> = {
   pencil: 'crosshair',
@@ -49,6 +50,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
   const rootRef   = useRef<HTMLDivElement>(null)
   const baseImgRef = useRef<HTMLImageElement>(null)
   const dragOriginsRef = useRef<Map<string, { x: number; y: number }> | null>(null)
+  const preEditRectRef = useRef<null | { x: number; y: number; width: number; height: number }>(null)
 
   // Smooth resize: keep store synced while dragging resize handles (throttled to rAF).
   const resizeRafRef = useRef<number>(0)
@@ -169,15 +171,48 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
     const nh = item.naturalHeight
     if (!nw || !nh) return
     if (isEditing && !prevEditingRef.current) {
-      const box = imageTileEditSize(nw, nh)
-      updateItem(item.id, { width: box.width, height: box.height })
+      preEditRectRef.current = { x: item.x, y: item.y, width: item.width, height: item.height }
+      const base = imageTileEditSize(nw, nh)
+      const root = document.getElementById('previewv-canvas-root')
+      const rect = root?.getBoundingClientRect()
+      const vp = useCanvasStore.getState().viewport
+      if (!rect) {
+        updateItem(item.id, { width: base.width, height: base.height })
+      } else {
+        const toolbarScreenH = 32
+        const maxScreenW = Math.max(420, Math.floor(rect.width * EDIT_VIEWPORT_FILL))
+        const maxScreenH = Math.max(320, Math.floor(rect.height * EDIT_VIEWPORT_FILL) - toolbarScreenH)
+        const ar = Math.max(1e-4, nw / nh)
+        let contentScreenW = maxScreenW
+        let contentScreenH = Math.round(contentScreenW / ar)
+        if (contentScreenH > maxScreenH) {
+          contentScreenH = maxScreenH
+          contentScreenW = Math.round(contentScreenH * ar)
+        }
+        const nextW = Math.max(base.width, Math.round(contentScreenW / Math.max(0.001, vp.scale)))
+        const nextH = Math.max(base.height, Math.round((contentScreenH + toolbarScreenH) / Math.max(0.001, vp.scale)))
+        const centerX = (rect.width / 2 - vp.x) / vp.scale
+        const centerY = (rect.height / 2 - vp.y) / vp.scale
+        updateItem(item.id, {
+          width: nextW,
+          height: nextH,
+          x: Math.round(centerX - nextW / 2),
+          y: Math.round(centerY - nextH / 2),
+        })
+      }
     }
     if (!isEditing && prevEditingRef.current) {
-      const box = imageTileViewSize(nw, nh)
-      updateItem(item.id, { width: box.width, height: box.height })
+      const restore = preEditRectRef.current
+      if (restore) {
+        updateItem(item.id, restore)
+      } else {
+        const box = imageTileViewSize(nw, nh)
+        updateItem(item.id, { width: box.width, height: box.height })
+      }
+      preEditRectRef.current = null
     }
     prevEditingRef.current = isEditing
-  }, [isEditing, item.id, item.naturalWidth, item.naturalHeight, updateItem])
+  }, [isEditing, item.id, item.naturalWidth, item.naturalHeight, item.x, item.y, item.width, item.height, updateItem])
 
   const naturalSyncRef = useRef(false)
   useEffect(() => {
@@ -330,27 +365,51 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
     const canvas = canvasRef.current
     if (!canvas) return
 
-    const off = document.createElement('canvas')
-    off.width  = canvas.width
-    off.height = canvas.height
-    const ctx  = off.getContext('2d')!
-
-    const img  = new Image()
-    img.onload = () => {
-      ctx.drawImage(img, 0, 0, off.width, off.height)
-      ctx.drawImage(canvas, 0, 0)
-      overlayDirtyRef.current = false
-      updateItem(item.id, {
-        srcUrl: off.toDataURL('image/png'),
-        storage: 'asset',
-        projectAssetPath: undefined,
-      })
-      canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height)
-      undoStack.current = []
-      redoStack.current = []
+    const bakeWithImage = (img: HTMLImageElement) => {
+      const off = document.createElement('canvas')
+      off.width = canvas.width
+      off.height = canvas.height
+      const ctx = off.getContext('2d')
+      if (!ctx) return
+      try {
+        ctx.drawImage(img, 0, 0, off.width, off.height)
+        ctx.drawImage(canvas, 0, 0)
+        const nextSrc = off.toDataURL('image/png')
+        overlayDirtyRef.current = false
+        updateItem(item.id, {
+          srcUrl: nextSrc,
+          storage: 'asset',
+          projectAssetPath: undefined,
+        })
+        canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height)
+        undoStack.current = []
+        redoStack.current = []
+        setImageEditModeId(null)
+      } catch (err: any) {
+        alert(err?.message ?? String(err))
+      }
     }
+
+    const loaded = baseImgRef.current
+    if (loaded && loaded.complete && loaded.naturalWidth > 0 && loaded.naturalHeight > 0) {
+      bakeWithImage(loaded)
+      return
+    }
+
+    const img = new Image()
+    img.onload = () => bakeWithImage(img)
     img.src = item.srcUrl
-  }, [item.id, item.srcUrl, updateItem])
+  }, [item.id, item.srcUrl, updateItem, setImageEditModeId])
+
+  const handleClearOverlay = useCallback(() => {
+    const canvas = canvasRef.current
+    const ctx = canvas?.getContext('2d')
+    if (!canvas || !ctx) return
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    overlayDirtyRef.current = false
+    undoStack.current = []
+    redoStack.current = []
+  }, [])
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -439,9 +498,13 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
     >
       <div
         ref={rootRef}
+        data-image-tile-root="true"
+        data-item-id={item.id}
         className={[
           'w-full h-full flex flex-col rounded-lg overflow-hidden shadow-2xl bg-zinc-900 border',
-          isSelected ? 'border-emerald-500' : 'border-zinc-700/60',
+          isSelected
+            ? 'border-emerald-300 ring-2 ring-emerald-400/80 shadow-[0_0_0_1px_rgba(16,185,129,0.30),0_0_26px_rgba(16,185,129,0.22)]'
+            : 'border-zinc-700/60',
         ].join(' ')}
       >
 
@@ -470,7 +533,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
                 tool === t ? 'bg-zinc-600 text-white' : 'text-zinc-400 hover:text-zinc-200',
               ].join(' ')}
             >
-              {t === 'pencil' ? '✎' : t === 'line' ? '╱' : '⌫'}
+              {t === 'pencil' ? '✎' : t === 'line' ? '╱' : 'E'}
             </button>
           ))}
 
@@ -525,13 +588,13 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
           </button>
 
           <button
-            type="button"
-            title="Exit edit mode (F4)"
-            onMouseDown={(e) => { e.stopPropagation(); setImageEditModeId(null) }}
-            className="h-6 px-2 rounded text-[10px] font-semibold bg-zinc-700 text-zinc-200 hover:bg-zinc-600 shrink-0"
+            title="Clear all overlay strokes"
+            onMouseDown={(e) => { e.stopPropagation(); handleClearOverlay() }}
+            className="h-6 px-2 rounded text-[10px] font-semibold bg-rose-900/70 text-rose-300 hover:bg-rose-800 hover:text-rose-100 shrink-0 transition-colors"
           >
-            Done
+            Clear all
           </button>
+
           </>
           )}
         </div>

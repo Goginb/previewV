@@ -655,6 +655,94 @@ let activeWindow: BrowserWindow | null = null
 
 /** Mirrors BrowserWindow always-on-top; used for menu checkbox + IPC (avoids relying on platform-specific getters). */
 let alwaysOnTopEnabled = false
+let autosaveEnabled = true
+let autosaveLastAt: string | null = null
+let autosaveTimer: NodeJS.Timeout | null = null
+const AUTOSAVE_INTERVAL_MS = 20 * 60 * 1000
+const AUTOSAVE_MAX_COPIES = 5
+
+function autosavePrefsPath(): string {
+  return join(app.getPath('userData'), 'autosave-prefs.json')
+}
+
+async function loadAutosavePrefs(): Promise<void> {
+  try {
+    const raw = await fs.readFile(autosavePrefsPath(), 'utf8')
+    const parsed = JSON.parse(raw) as { enabled?: unknown }
+    autosaveEnabled = typeof parsed.enabled === 'boolean' ? parsed.enabled : true
+  } catch {
+    autosaveEnabled = true
+  }
+}
+
+async function saveAutosavePrefs(): Promise<void> {
+  try {
+    await fs.writeFile(
+      autosavePrefsPath(),
+      JSON.stringify({ enabled: autosaveEnabled }, null, 2),
+      'utf8',
+    )
+  } catch {
+    // ignore write errors
+  }
+}
+
+function autosaveDirForProject(projectPath: string): string {
+  const folder = dirname(projectPath)
+  const base = basename(projectPath, extname(projectPath))
+  return join(folder, `${base}.autosaves`)
+}
+
+async function createAutosaveSnapshot(snapshot: { projectData: any; path: string }): Promise<void> {
+  const srcProjectPath = snapshot.path
+  const autosaveDir = autosaveDirForProject(srcProjectPath)
+  await fs.mkdir(autosaveDir, { recursive: true })
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const dstPath = join(autosaveDir, `${basename(srcProjectPath, extname(srcProjectPath))}-autosave-${stamp}.previewv`)
+  const projectData = snapshot.projectData
+  const items = (projectData?.items ?? []) as CanvasItem[]
+  if (!Array.isArray(items) || items.length === 0) return
+  const project = serializeProject({
+    items,
+    viewport: projectData.viewport,
+    meta: projectData.meta,
+    assetPathForImage: (item) => item.projectAssetPath ?? item.fileName ?? `${item.id}.png`,
+    previewAssetPathForImage: (item) => item.projectAssetPath,
+  })
+  await writeProjectToDisk(dstPath, project)
+  autosaveLastAt = new Date().toISOString()
+  activeWindow?.webContents.send('autosave:status', { lastAutosaveAt: autosaveLastAt })
+
+  const entries = await fs.readdir(autosaveDir, { withFileTypes: true })
+  const files = entries
+    .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.previewv'))
+    .map((e) => e.name)
+    .sort((a, b) => b.localeCompare(a))
+  const stale = files.slice(AUTOSAVE_MAX_COPIES)
+  await Promise.all(stale.map((name) => fs.unlink(join(autosaveDir, name)).catch(() => {})))
+}
+
+async function runAutosaveTick(): Promise<void> {
+  if (!autosaveEnabled || !activeWindow || activeWindow.isDestroyed()) return
+  let snapshot: { projectData: any; path: string } | null = null
+  try {
+    snapshot = await activeWindow.webContents.executeJavaScript(
+      `window.__previewvAutosaveSnapshot ? window.__previewvAutosaveSnapshot() : null`,
+      true,
+    )
+  } catch {
+    snapshot = null
+  }
+  if (!snapshot?.path) return
+  await createAutosaveSnapshot(snapshot)
+}
+
+function startAutosaveTimer(): void {
+  if (autosaveTimer) clearInterval(autosaveTimer)
+  autosaveTimer = setInterval(() => {
+    void runAutosaveTick()
+  }, AUTOSAVE_INTERVAL_MS)
+}
 
 function revealWindow(win: BrowserWindow): void {
   if (win.isMinimized()) {
@@ -702,22 +790,8 @@ function setupWindowCloseGuard(win: BrowserWindow): void {
       return
     }
     const fileLabel = state.path ? basename(state.path) : 'Untitled'
-    const { response } = await dialog.showMessageBox(win, {
-      type: 'warning',
-      buttons: ['Save', 'Don’t save', 'Cancel'],
-      defaultId: 0,
-      cancelId: 2,
-      title: 'PreviewV',
-      message: 'Save changes to the project?',
-      detail: fileLabel,
-    })
-    if (response === 2) return
-    if (response === 1) {
-      allowWindowClose.set(win, true)
-      win.close()
-      return
-    }
-    win.webContents.send('project:menu-action', { action: 'save-and-close' })
+    // Ask renderer to show themed close confirmation modal.
+    win.webContents.send('app:request-unsaved-close', { fileLabel })
   })
 }
 
@@ -843,6 +917,12 @@ async function refreshApplicationMenu() {
           accelerator: 'Delete',
           click: () => sendEdit('delete'),
         },
+        { type: 'separator' },
+        {
+          label: 'Settings',
+          accelerator: 'CmdOrCtrl+,',
+          click: () => activeWindow?.webContents.send('app:open-settings'),
+        },
       ],
     },
     {
@@ -852,24 +932,18 @@ async function refreshApplicationMenu() {
           label: 'Always on top',
           type: 'checkbox',
           checked: alwaysOnTopEnabled,
-          click: (menuItem) => {
+          click: (menuItem: any) => {
             if (!activeWindow) return
             applyAlwaysOnTop(activeWindow, menuItem.checked)
           },
         },
         { type: 'separator' },
         {
-          label: 'Pin window (Alt+Shift+A)',
+          label: 'Toggle always on top',
+          accelerator: 'CmdOrCtrl+Shift+A',
           click: () => {
             if (!activeWindow) return
-            applyAlwaysOnTop(activeWindow, true)
-          },
-        },
-        {
-          label: 'Unpin window (Alt+Shift+B)',
-          click: () => {
-            if (!activeWindow) return
-            applyAlwaysOnTop(activeWindow, false)
+            applyAlwaysOnTop(activeWindow, !alwaysOnTopEnabled)
           },
         },
       ],
@@ -926,24 +1000,21 @@ function createWindow(): void {
   activeWindow = mainWindow
   setupWindowCloseGuard(mainWindow)
   refreshApplicationMenu().catch(() => {})
+  mainWindow.webContents.once('did-finish-load', () => {
+    mainWindow.webContents.send('autosave:status', { lastAutosaveAt: autosaveLastAt })
+  })
 
-  // Alt+Shift+A / Alt+Shift+B: handled in main so they work over the canvas/video and aren’t eaten by Chromium shortcuts.
-  // Uses physical KeyA/KeyB (stable on common layouts). Ignores auto-repeat.
+  // Ctrl+Shift+A (Cmd+Shift+A on macOS): toggle always-on-top; handled in main so it works over canvas/video.
+  // Ignores auto-repeat. Physical KeyA for layout-stable binding.
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return
     if (input.isAutoRepeat) return
-    if (!input.alt || !input.shift) return
-    if (input.control || input.meta) return
-
-    if (input.code === 'KeyA') {
-      event.preventDefault()
-      applyAlwaysOnTop(mainWindow, true)
-      return
-    }
-    if (input.code === 'KeyB') {
-      event.preventDefault()
-      applyAlwaysOnTop(mainWindow, false)
-    }
+    if (!input.shift) return
+    if (!(input.control || input.meta)) return
+    if (input.alt) return
+    if (input.code !== 'KeyA') return
+    event.preventDefault()
+    applyAlwaysOnTop(mainWindow, !alwaysOnTopEnabled)
   })
 
   mainWindow.webContents.once('did-finish-load', () => {
@@ -981,6 +1052,12 @@ app.whenReady().then(() => {
   ipcMain.handle('window:set-always-on-top', (_e, enabled: unknown) => {
     if (!activeWindow) return
     applyAlwaysOnTop(activeWindow, Boolean(enabled))
+  })
+
+  ipcMain.handle('autosave:get-enabled', () => autosaveEnabled)
+  ipcMain.handle('autosave:set-enabled', (_e, enabled: unknown) => {
+    autosaveEnabled = Boolean(enabled)
+    void saveAutosavePrefs()
   })
 
   ipcMain.handle('pick-folder-dialog', async () => {
@@ -1258,7 +1335,10 @@ app.whenReady().then(() => {
     return saveToPath(result.filePath, payload.projectData)
   })
 
-  createWindow()
+  void loadAutosavePrefs().finally(() => {
+    createWindow()
+    startAutosaveTimer()
+  })
 
   // second-instance open flow
   app.on('second-instance', (_event, commandLine) => {
@@ -1276,5 +1356,9 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
+  if (autosaveTimer) {
+    clearInterval(autosaveTimer)
+    autosaveTimer = null
+  }
   if (process.platform !== 'darwin') app.quit()
 })
