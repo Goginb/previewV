@@ -58,24 +58,24 @@ export const HelpGuideModal: React.FC<{ onClose: () => void }> = ({ onClose }) =
         if (ev.target === ev.currentTarget) onClose()
       }}
     >
-      <div className="w-full max-w-lg max-h-[min(85vh,36rem)] flex flex-col rounded-xl border border-zinc-700 bg-zinc-950 shadow-2xl">
-        <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-zinc-800 shrink-0">
-          <h2 id="help-guide-title" className="text-base font-semibold text-zinc-100">
+      <div className="w-full max-w-lg max-h-[min(85vh,36rem)] flex flex-col rounded-xl border border-[var(--menu-border)] bg-[var(--menu-bg)] shadow-2xl">
+        <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-[var(--menu-border)] shrink-0">
+          <h2 id="help-guide-title" className="text-base font-semibold text-themeText-100">
             Инструкция — PreviewV
           </h2>
           <button
             type="button"
             onClick={onClose}
-            className="text-sm px-3 py-1.5 rounded-lg bg-zinc-800 text-zinc-200 hover:bg-zinc-700 border border-zinc-600"
+            className="text-sm px-3 py-1.5 rounded-lg bg-themeBg-active text-themeText-200 hover:bg-themeBg-hover border border-[var(--menu-border)]"
           >
             Закрыть
           </button>
         </div>
-        <div className="overflow-y-auto px-4 py-3 text-sm text-zinc-300 space-y-5">
+        <div className="overflow-y-auto px-4 py-3 text-sm text-themeText-300 space-y-5">
           {SECTIONS.map((s) => (
             <section key={s.title}>
               <h3 className="text-amber-400/95 font-medium mb-2">{s.title}</h3>
-              <ul className="list-disc pl-5 space-y-1.5 text-zinc-400">
+              <ul className="list-disc pl-5 space-y-1.5 text-themeText-400">
                 {s.body.map((line, i) => (
                   <li key={i}>{line}</li>
                 ))}

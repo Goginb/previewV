@@ -6,6 +6,7 @@ release/
 .idea/
 *.log
 .tmp-tests/
+.tmp-electron-unzip/
 electron.vite.config.*.mjs
 .DS_Store
 Thumbs.db

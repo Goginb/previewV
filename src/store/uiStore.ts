@@ -10,11 +10,24 @@ interface UiState {
   gridSizeY: number
   autosaveEnabled: boolean
   lastAutosaveAt: string | null
+  
+  dailiesYear: string
+  dailiesProject: string
+  dailiesScene: string
+  dailiesPriorities: string[]
+  isDailiesModalOpen: boolean
+
   setAlwaysOnTop: (v: boolean) => void
   setTheme: (theme: AppTheme) => void
   setGridSize: (x: number, y: number) => void
   setAutosaveEnabled: (enabled: boolean) => void
   setLastAutosaveAt: (iso: string | null) => void
+  
+  setDailiesYear: (year: string) => void
+  setDailiesProject: (project: string) => void
+  setDailiesScene: (scene: string) => void
+  setDailiesPriorities: (priorities: string[]) => void
+  setDailiesModalOpen: (open: boolean) => void
 }
 
 const UI_PREFS_KEY = 'previewv-ui-prefs-v1'
@@ -24,7 +37,7 @@ function clampGrid(v: number): number {
   return Math.max(8, Math.min(256, Math.round(v)))
 }
 
-function readPrefs(): Partial<Pick<UiState, 'theme' | 'gridSizeX' | 'gridSizeY' | 'autosaveEnabled'>> {
+function readPrefs(): Partial<Pick<UiState, 'theme' | 'gridSizeX' | 'gridSizeY' | 'autosaveEnabled' | 'dailiesYear' | 'dailiesProject' | 'dailiesScene' | 'dailiesPriorities'>> {
   try {
     const raw = localStorage.getItem(UI_PREFS_KEY)
     if (!raw) return {}
@@ -33,19 +46,27 @@ function readPrefs(): Partial<Pick<UiState, 'theme' | 'gridSizeX' | 'gridSizeY' 
       gridSizeX?: number
       gridSizeY?: number
       autosaveEnabled?: boolean
+      dailiesYear?: string
+      dailiesProject?: string
+      dailiesScene?: string
+      dailiesPriorities?: string[]
     }
     return {
       theme: parsed.theme ?? 'default',
       gridSizeX: clampGrid(parsed.gridSizeX ?? 32),
       gridSizeY: clampGrid(parsed.gridSizeY ?? 32),
       autosaveEnabled: parsed.autosaveEnabled ?? true,
+      dailiesYear: parsed.dailiesYear ?? new Date().getFullYear().toString(),
+      dailiesProject: parsed.dailiesProject ?? 'Volchok',
+      dailiesScene: parsed.dailiesScene ?? 'JMP',
+      dailiesPriorities: parsed.dailiesPriorities ?? ['comp', 'cln, clnp', '', '', ''],
     }
   } catch {
     return {}
   }
 }
 
-function savePrefs(state: Pick<UiState, 'theme' | 'gridSizeX' | 'gridSizeY' | 'autosaveEnabled'>): void {
+function savePrefs(state: Pick<UiState, 'theme' | 'gridSizeX' | 'gridSizeY' | 'autosaveEnabled' | 'dailiesYear' | 'dailiesProject' | 'dailiesScene' | 'dailiesPriorities'>): void {
   try {
     localStorage.setItem(UI_PREFS_KEY, JSON.stringify(state))
   } catch {
@@ -62,6 +83,12 @@ export const useUiStore = create<UiState>((set) => ({
   gridSizeY: boot.gridSizeY ?? 32,
   autosaveEnabled: boot.autosaveEnabled ?? true,
   lastAutosaveAt: null,
+  dailiesYear: boot.dailiesYear ?? new Date().getFullYear().toString(),
+  dailiesProject: boot.dailiesProject ?? 'Volchok',
+  dailiesScene: boot.dailiesScene ?? 'JMP',
+  dailiesPriorities: boot.dailiesPriorities ?? ['comp', 'cln, clnp', '', '', ''],
+  isDailiesModalOpen: false,
+  
   setAlwaysOnTop: (v) => set({ alwaysOnTop: v }),
   setTheme: (theme) =>
     set((state) => {
@@ -84,4 +111,10 @@ export const useUiStore = create<UiState>((set) => ({
       return { autosaveEnabled }
     }),
   setLastAutosaveAt: (lastAutosaveAt) => set({ lastAutosaveAt }),
+  
+  setDailiesYear: (dailiesYear) => set((s) => { savePrefs({ ...s, dailiesYear }); return { dailiesYear } }),
+  setDailiesProject: (dailiesProject) => set((s) => { savePrefs({ ...s, dailiesProject }); return { dailiesProject } }),
+  setDailiesScene: (dailiesScene) => set((s) => { savePrefs({ ...s, dailiesScene }); return { dailiesScene } }),
+  setDailiesPriorities: (dailiesPriorities) => set((s) => { savePrefs({ ...s, dailiesPriorities }); return { dailiesPriorities } }),
+  setDailiesModalOpen: (isDailiesModalOpen) => set({ isDailiesModalOpen }),
 }))

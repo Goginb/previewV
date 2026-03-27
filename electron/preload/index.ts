@@ -28,6 +28,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('enumerate-folder-media', folderPath),
     duplicateMediaImportDialog: (payload: { count: number }) =>
       ipcRenderer.invoke('duplicate-media-import-dialog', payload),
+    scanDailies: (payload: { year: string; project: string; scene: string; priorities: string[] }) =>
+      ipcRenderer.invoke('scan-dailies', payload),
+    getDailiesYears: () => ipcRenderer.invoke('dailies:get-years'),
+    getDailiesProjects: (year: string) => ipcRenderer.invoke('dailies:get-projects', { year }),
+    getDailiesScenes: (year: string, project: string) => ipcRenderer.invoke('dailies:get-scenes', { year, project }),
   },
 })
 

@@ -19,6 +19,7 @@ import { BackdropTile, createBackdropItem } from './BackdropTile'
 import { backdropHeaderHeight, computeAttachedVideoIds } from '../utils/backdrops'
 import type { CanvasItem, ImageItem, NoteItem, VideoItem } from '../types'
 import { useUiStore } from '../store/uiStore'
+import logoGreenFx from '../assets/logo-greenfx.png'
 
 // ── File helpers ──────────────────────────────────────────────────────────────
 
@@ -924,6 +925,31 @@ export const Canvas: React.FC = () => {
         }}
       />
 
+      {/* GreenFx theme watermark logo */}
+      {theme === 'greenFx' && (
+        <div
+          data-canvas-bg="true"
+          className="absolute inset-0 pointer-events-none flex items-center justify-center"
+          style={{ zIndex: 0 }}
+        >
+          <img
+            src={logoGreenFx}
+            alt=""
+            style={{
+              width: '36vw',
+              maxWidth: 480,
+              minWidth: 200,
+              opacity: 0.055,
+              filter: 'saturate(0.7) brightness(1.4)',
+              maskImage: 'radial-gradient(ellipse 70% 70% at 50% 50%, black 40%, transparent 100%)',
+              WebkitMaskImage: 'radial-gradient(ellipse 70% 70% at 50% 50%, black 40%, transparent 100%)',
+              userSelect: 'none',
+              pointerEvents: 'none',
+            }}
+          />
+        </div>
+      )}
+
       {marquee && (
         <div
           className="absolute z-[100] border border-indigo-400/90 bg-indigo-500/15 pointer-events-none rounded-sm"
@@ -987,7 +1013,7 @@ export const Canvas: React.FC = () => {
 
       {items.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none">
-          <div className="text-center text-zinc-600">
+          <div className="text-center text-themeText-500">
             <div className="text-5xl mb-4 opacity-40">▶</div>
             <p className="text-base font-medium tracking-wide">Перетащите сюда видео или изображения</p>
             <p className="text-sm mt-1 opacity-60">
@@ -1004,24 +1030,27 @@ export const Canvas: React.FC = () => {
         createPortal(
           <div
             data-canvas-ctx-menu="true"
-            className="fixed z-[10000] rounded-lg border shadow-2xl p-1.5 min-w-[220px]"
+            className="fixed z-[10000] rounded-lg border p-1.5 min-w-[220px]"
             style={{
               left: ctxMenu.x,
               top: ctxMenu.y,
               borderColor: 'var(--menu-border)',
               background: 'var(--menu-bg)',
+              boxShadow: 'var(--menu-shadow)',
             }}
             onMouseDown={(e) => e.stopPropagation()}
           >
-            <div className="px-2 py-1 text-[11px] text-zinc-400 select-none">
+            <div className="px-2 py-1 text-[11px] font-semibold text-themeText-400 select-none uppercase tracking-wide">
               {ctxMenu.kind === 'video' ? 'Video tile' : ctxMenu.kind === 'image' ? 'Image tile' : 'Canvas'}
             </div>
-            <div className="h-px bg-zinc-800/80 my-1" />
+            <div className="h-px my-1 mx-1" style={{ background: 'var(--theme-divider)' }} />
+
+            {/* --- SELECTION ACTIONS --- */}
             {(ctxMenu.kind === 'video' || ctxMenu.kind === 'image') && ctxMenu.itemId && (
               <>
                 <button
                   type="button"
-                  className="w-full text-left px-2 py-1.5 text-sm text-zinc-100 hover:bg-zinc-800/60 rounded"
+                  className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
                   onClick={() => {
                     const state = useCanvasStore.getState()
                     const ids = state.selectedIds.length ? state.selectedIds : [ctxMenu.itemId!]
@@ -1033,13 +1062,13 @@ export const Canvas: React.FC = () => {
                 </button>
                 <button
                   type="button"
-                  className="w-full text-left px-2 py-1.5 text-sm text-zinc-100 hover:bg-zinc-800/60 rounded"
+                  className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
                   onClick={() => {
                     const state = useCanvasStore.getState()
                     const ids = state.selectedIds.length ? state.selectedIds : [ctxMenu.itemId!]
                     const idSet = new Set(ids)
                     const selected = state.items.filter((i) => idSet.has(i.id))
-                    const copies: CanvasItem[] = selected.map(cloneCanvasItemForClipboard)
+                    const copies = selected.map(cloneCanvasItemForClipboard)
                     state.setClipboard(copies)
                     setCtxMenu(null)
                   }}
@@ -1049,7 +1078,7 @@ export const Canvas: React.FC = () => {
                 {ctxMenu.kind === 'video' ? (
                   <button
                     type="button"
-                    className="w-full text-left px-2 py-1.5 text-sm text-zinc-100 hover:bg-zinc-800/60 rounded"
+                    className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
                     onClick={() => {
                       const state = useCanvasStore.getState()
                       const vid = videoRegistry.get(ctxMenu.itemId!)
@@ -1084,7 +1113,7 @@ export const Canvas: React.FC = () => {
                 ) : (
                   <button
                     type="button"
-                    className="w-full text-left px-2 py-1.5 text-sm text-zinc-100 hover:bg-zinc-800/60 rounded"
+                    className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
                     onClick={() => {
                       setImageEditModeId(ctxMenu.itemId!)
                       setCtxMenu(null)
@@ -1093,40 +1122,14 @@ export const Canvas: React.FC = () => {
                     Draw mode (F4)
                   </button>
                 )}
-                <div className="h-px bg-zinc-800/80 my-1" />
+                <div className="h-px my-1 mx-1" style={{ background: 'var(--theme-divider)' }} />
               </>
             )}
-            <button
-              type="button"
-              className="w-full text-left px-2 py-1.5 text-sm text-zinc-100 hover:bg-zinc-800/60 rounded"
-              onClick={() => {
-                window.dispatchEvent(new CustomEvent('app-open-settings'))
-                setCtxMenu(null)
-              }}
-            >
-              Settings
-            </button>
-            {ctxMenu.kind === 'canvas' && (
-              <button
-                type="button"
-                className="w-full text-left px-2 py-1.5 text-sm text-zinc-100 hover:bg-zinc-800/60 rounded"
-                onClick={async () => {
-                  const next = !alwaysOnTop
-                  const wa = window.electronAPI?.windowAPI
-                  if (wa?.setAlwaysOnTop) {
-                    await wa.setAlwaysOnTop(next)
-                  }
-                  setAlwaysOnTop(next)
-                  setCtxMenu(null)
-                }}
-              >
-                {alwaysOnTop ? 'Disable always on top' : 'Enable always on top'}
-              </button>
-            )}
 
+            {/* --- CREATION ACTIONS --- */}
             <button
               type="button"
-              className="w-full text-left px-2 py-1.5 text-sm text-zinc-100 hover:bg-zinc-800/60 rounded"
+              className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
               onClick={() => {
                 const state = useCanvasStore.getState()
                 const { x: sx, y: sy } = lastMouseScreen.current
@@ -1149,46 +1152,29 @@ export const Canvas: React.FC = () => {
             >
               New note (Ctrl+N)
             </button>
-
             <button
               type="button"
-              className="w-full text-left px-2 py-1.5 text-sm text-zinc-100 hover:bg-zinc-800/60 rounded"
+              className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
               onClick={() => {
-                gridAlignTiles()
+                const state = useCanvasStore.getState()
+                const { x: sx, y: sy } = lastMouseScreen.current
+                const { x: vx, y: vy, scale } = state.viewport
+                const worldX = (sx - vx) / scale
+                const worldY = (sy - vy) / scale
+                const backdrop = createBackdropItem({ id: `backdrop-${Date.now()}`, x: worldX - 400, y: worldY - 300, width: 800, height: 600 })
+                addItem(backdrop)
+                selectOne(backdrop.id)
                 setCtxMenu(null)
               }}
             >
-              Grid align (\\)
+              Add backdrop (B)
             </button>
+            <div className="h-px my-1 mx-1" style={{ background: 'var(--theme-divider)' }} />
 
+            {/* --- VIEW & LAYOUT ACTIONS --- */}
             <button
               type="button"
-              className="w-full text-left px-2 py-1.5 text-sm text-zinc-100 hover:bg-zinc-800/60 rounded"
-              onClick={() => {
-                layoutMediaRow()
-                setCtxMenu(null)
-              }}
-            >
-              L — Layout media row
-            </button>
-
-            <button
-              type="button"
-              className="w-full text-left px-2 py-1.5 text-sm text-zinc-100 hover:bg-zinc-800/60 rounded"
-              onClick={() => {
-                const el = containerRef.current
-                if (!el) return
-                const { width, height } = el.getBoundingClientRect()
-                frameAllItemsInViewport(width, height)
-                setCtxMenu(null)
-              }}
-            >
-              Fit all (A)
-            </button>
-
-            <button
-              type="button"
-              className="w-full text-left px-2 py-1.5 text-sm text-zinc-100 hover:bg-zinc-800/60 rounded disabled:opacity-40"
+              className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors disabled:opacity-40"
               disabled={useCanvasStore.getState().clipboard.length === 0}
               onClick={() => {
                 const state = useCanvasStore.getState()
@@ -1199,6 +1185,75 @@ export const Canvas: React.FC = () => {
               }}
             >
               Paste (Ctrl+V)
+            </button>
+            <button
+              type="button"
+              className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
+              onClick={() => {
+                gridAlignTiles()
+                setCtxMenu(null)
+              }}
+            >
+              Grid align (\)
+            </button>
+            <button
+              type="button"
+              className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
+              onClick={() => {
+                layoutMediaRow()
+                setCtxMenu(null)
+              }}
+            >
+              Layout media row (L)
+            </button>
+            <button
+              type="button"
+              className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
+              onClick={() => {
+                const el = containerRef.current
+                if (!el) return
+                const { width, height } = el.getBoundingClientRect()
+                frameAllItemsInViewport(width, height)
+                setCtxMenu(null)
+              }}
+            >
+              Fit all (A)
+            </button>
+            <div className="h-px my-1 mx-1" style={{ background: 'var(--theme-divider)' }} />
+
+            {/* --- APP CONTROL --- */}
+            <button
+              type="button"
+              className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
+              onClick={() => {
+                window.dispatchEvent(new CustomEvent('app-open-settings'))
+                setCtxMenu(null)
+              }}
+            >
+              Settings
+            </button>
+            {ctxMenu.kind === 'canvas' && (
+              <button
+                type="button"
+                className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
+                onClick={async () => {
+                  const next = !alwaysOnTop
+                  setAlwaysOnTop(next)
+                  setCtxMenu(null)
+                }}
+              >
+                {alwaysOnTop ? 'Disable always on top' : 'Enable always on top'}
+              </button>
+            )}
+            <button
+              type="button"
+              className="w-full text-left px-2 py-1.5 text-sm text-red-500 hover:bg-red-500/10 rounded transition-colors font-medium mt-1"
+              onClick={() => {
+                window.electronAPI?.projectAPI.confirmCloseWindow()
+                setCtxMenu(null)
+              }}
+            >
+              Quit / Exit
             </button>
           </div>,
           document.body,

@@ -12,17 +12,39 @@
   --grid-major-color: rgba(113, 113, 122, 0.3);
   --menu-bg: rgba(9, 9, 11, 0.96);
   --menu-border: rgba(63, 63, 70, 0.8);
+  
+  --theme-text-100: #f4f4f5;
+  --theme-text-200: #e4e4e7;
+  --theme-text-300: #d4d4d8;
+  --theme-text-400: #a1a1aa;
+  --theme-text-500: #71717a;
+  --theme-bg-hover: rgba(63, 63, 70, 0.6);
+  --theme-bg-active: rgba(63, 63, 70, 1);
+  --menu-shadow: 0 8px 32px rgba(0,0,0,0.55), 0 2px 8px rgba(0,0,0,0.35);
+  --theme-divider: rgba(63, 63, 70, 0.6);
 }
 
 [data-theme='light'] {
-  --app-bg: #eef2f7;
-  --canvas-bg: #e8edf4;
-  --canvas-solid-bg: #f4f6fb;
-  --canvas-solid-border: #cbd5e1;
-  --grid-minor-color: rgba(100, 116, 139, 0.2);
-  --grid-major-color: rgba(51, 65, 85, 0.3);
-  --menu-bg: rgba(248, 250, 252, 0.96);
-  --menu-border: rgba(148, 163, 184, 0.7);
+  --app-bg: #cfd8e3;
+  --canvas-bg: #c8d3df;
+  --canvas-solid-bg: #dae2eb;
+  --canvas-solid-border: #a8b8c8;
+  --grid-minor-color: rgba(71, 85, 105, 0.18);
+  --grid-major-color: rgba(51, 65, 85, 0.32);
+
+  /* Menu — semi-transparent cool-gray tinted panel, not white */
+  --menu-bg: rgba(220, 228, 238, 0.97);
+  --menu-border: rgba(71, 85, 105, 0.55);
+  --menu-shadow: 0 8px 32px rgba(30, 41, 59, 0.28), 0 2px 8px rgba(30, 41, 59, 0.16);
+
+  --theme-text-100: #0c111a;
+  --theme-text-200: #1e293b;
+  --theme-text-300: #334155;
+  --theme-text-400: #475569;
+  --theme-text-500: #64748b;
+  --theme-bg-hover: rgba(71, 85, 105, 0.2);
+  --theme-bg-active: rgba(71, 85, 105, 0.38);
+  --theme-divider: rgba(71, 85, 105, 0.3);
 }
 
 [data-theme='pink'] {
@@ -56,6 +78,16 @@
   --grid-major-color: rgba(34, 197, 94, 0.24);
   --menu-bg: rgba(8, 23, 15, 0.96);
   --menu-border: rgba(34, 197, 94, 0.5);
+  --menu-shadow: 0 8px 32px rgba(0,0,0,0.55), 0 2px 8px rgba(0,0,0,0.35);
+  --theme-divider: rgba(34, 197, 94, 0.3);
+  --theme-text-100: #f0fdf4;
+  --theme-text-200: #dcfce7;
+  --theme-text-300: #bbf7d0;
+  --theme-text-400: #86efac;
+  --theme-text-500: #4ade80;
+  --theme-bg-hover: rgba(34, 197, 94, 0.15);
+  --theme-bg-active: rgba(34, 197, 94, 0.25);
+  --canvas-logo-url: url('/src/assets/logo-greenfx.png');
 }
 
 *,

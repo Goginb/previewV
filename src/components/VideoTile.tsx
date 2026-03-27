@@ -384,15 +384,15 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
           'relative rounded-lg overflow-hidden shadow-2xl bg-zinc-900 border box-border',
           isSelected
             ? 'border-indigo-300 ring-2 ring-indigo-400/80 shadow-[0_0_0_1px_rgba(99,102,241,0.35),0_0_28px_rgba(99,102,241,0.25)]'
-            : 'border-zinc-700/60',
+            : 'border-[var(--menu-border)]',
         ].join(' ')}
         style={{ width: tile.width, height: tile.height }}
       >
         <div
-          className="tile-drag-handle absolute left-0 right-0 top-0 z-20 flex items-center px-2 bg-zinc-800/90 cursor-grab active:cursor-grabbing"
+          className="tile-drag-handle absolute left-0 right-0 top-0 z-20 flex items-center px-2 bg-themeBg-active/90 cursor-grab active:cursor-grabbing"
           style={{ height: TITLE_H }}
         >
-          <span className="text-[11px] text-zinc-400 truncate leading-none select-none">
+          <span className="text-[11px] text-themeText-400 truncate leading-none select-none">
             {tile.fileName}
           </span>
         </div>
@@ -416,14 +416,14 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
         </div>
 
         <div
-          className="video-controls absolute left-0 right-0 bottom-0 z-30 flex items-center gap-1.5 px-2 bg-zinc-950/95 border-t border-zinc-800/80 pointer-events-auto"
+          className="video-controls absolute left-0 right-0 bottom-0 z-30 flex items-center gap-1.5 px-2 bg-[var(--menu-bg)]/95 border-t border-[var(--menu-border)]/80 pointer-events-auto"
           style={{ height: CONTROLS_H }}
           onPointerDown={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}
         >
           <button
             type="button"
-            className="shrink-0 w-7 h-7 flex items-center justify-center rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs"
+            className="shrink-0 w-7 h-7 flex items-center justify-center rounded bg-themeBg-active hover:bg-themeBg-hover text-themeText-200 text-xs"
             aria-label={paused ? 'Play' : 'Pause'}
             onClick={(e) => {
               e.stopPropagation()
@@ -436,7 +436,7 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
           {/* Custom timeline (no <input type="range"> — avoids Electron/Chromium seek + React bugs) */}
           <div
             ref={trackRef}
-            className="flex-1 min-w-0 h-2.5 rounded-full bg-zinc-800 relative cursor-pointer touch-none select-none"
+            className="flex-1 min-w-0 h-2.5 rounded-full bg-themeBg-active relative cursor-pointer touch-none select-none"
             onPointerDown={onTrackPointerDown}
             role="slider"
             aria-valuemin={0}
@@ -454,7 +454,7 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
             />
           </div>
 
-          <span className="shrink-0 text-[10px] text-zinc-400 tabular-nums w-[56px] text-right select-none">
+          <span className="shrink-0 text-[10px] text-themeText-400 tabular-nums w-[56px] text-right select-none">
             {formatTime(currentTime)} / {formatTime(duration)}
           </span>
         </div>

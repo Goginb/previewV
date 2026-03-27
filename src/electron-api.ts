@@ -29,6 +29,15 @@ export interface ElectronProjectAPI {
   duplicateMediaImportDialog: (payload: {
     count: number
   }) => Promise<'add' | 'skip' | 'cancel'>
+  scanDailies: (payload: {
+    year: string
+    project: string
+    scene: string
+    priorities: string[]
+  }) => Promise<string[]>
+  getDailiesYears: () => Promise<string[]>
+  getDailiesProjects: (year: string) => Promise<string[]>
+  getDailiesScenes: (year: string, project: string) => Promise<string[]>
 }
 
 export interface ResolvedImageImport {

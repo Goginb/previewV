@@ -24,11 +24,11 @@ export const ProjectTitleBar: React.FC = () => {
         style={{ background: 'color-mix(in oklab, var(--app-bg) 88%, black)', borderColor: 'var(--menu-border)' }}
       >
         <div
-          className="text-xs sm:text-sm text-zinc-300 font-medium truncate max-w-[min(90vw,42rem)] text-center"
+          className="text-xs sm:text-sm text-themeText-300 font-medium truncate max-w-[min(90vw,42rem)] text-center"
           title={path ?? 'Project not saved to disk'}
         >
-          <span className="text-zinc-500 font-normal mr-2">Project:</span>
-          <span className="font-mono text-zinc-100">{name}</span>
+          <span className="text-themeText-500 font-normal mr-2">Project:</span>
+          <span className="font-mono text-themeText-100">{name}</span>
           {alwaysOnTop && (
             <span
               className="text-sky-400 ml-2 text-[10px] uppercase tracking-wide border border-sky-500/50 rounded px-1 py-0.5"
@@ -43,6 +43,13 @@ export const ProjectTitleBar: React.FC = () => {
             </span>
           )}
         </div>
+        <button
+           type="button"
+           className="ml-4 px-3 py-1 rounded bg-indigo-500/20 hover:bg-indigo-500/40 text-indigo-300 text-xs font-semibold uppercase tracking-wider border border-indigo-500/40 pointer-events-auto transition-colors"
+           onClick={() => useUiStore.getState().setDailiesModalOpen(true)}
+        >
+           Import Dailies
+        </button>
       </div>
     </div>
   )

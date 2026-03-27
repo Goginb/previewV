@@ -4,6 +4,7 @@ import { ViewportHud } from './components/ViewportHud'
 import { ProjectTitleBar } from './components/ProjectTitleBar'
 import { HelpGuideModal } from './components/HelpGuideModal'
 import { SettingsModal } from './components/SettingsModal'
+import { DailiesImportModal } from './components/DailiesImportModal'
 import { useCanvasStore } from './store/canvasStore'
 import { useUiStore } from './store/uiStore'
 import { flushImageAnnotations } from './utils/flushImageAnnotations'
@@ -61,6 +62,8 @@ const App: React.FC = () => {
   const [helpOpen, setHelpOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [closePrompt, setClosePrompt] = useState<null | { fileLabel: string; busy: boolean }>(null)
+  
+  const isDailiesModalOpen = useUiStore((s) => s.isDailiesModalOpen)
   const loadProjectState = useCanvasStore((s) => s.loadProjectState)
   const getProjectDataForSave = useCanvasStore((s) => s.getProjectDataForSave)
   const syncSavedProjectState = useCanvasStore((s) => s.syncSavedProjectState)
@@ -293,19 +296,20 @@ const App: React.FC = () => {
     <div className="relative w-full h-full min-h-[100dvh]" style={{ background: 'var(--app-bg)' }}>
       {helpOpen && <HelpGuideModal onClose={() => setHelpOpen(false)} />}
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+      {isDailiesModalOpen && <DailiesImportModal />}
       {closePrompt && (
         <div className="fixed inset-0 z-[6500] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
           <div
             className="w-[min(92vw,500px)] rounded-xl border p-4"
             style={{ background: 'var(--menu-bg)', borderColor: 'var(--menu-border)' }}
           >
-            <h3 className="text-base font-semibold text-zinc-100">Save changes before closing?</h3>
-            <p className="text-sm text-zinc-300 mt-1">{closePrompt.fileLabel}</p>
+            <h3 className="text-base font-semibold text-themeText-100">Save changes before closing?</h3>
+            <p className="text-sm text-themeText-300 mt-1">{closePrompt.fileLabel}</p>
             <div className="mt-4 flex justify-end gap-2">
               <button
                 type="button"
                 disabled={closePrompt.busy}
-                className="px-3 py-1.5 rounded border border-zinc-700 text-zinc-200 hover:bg-zinc-800/60 disabled:opacity-50"
+                className="px-3 py-1.5 rounded border border-[var(--menu-border)] text-themeText-200 hover:bg-themeBg-hover disabled:opacity-50"
                 onClick={() => setClosePrompt(null)}
               >
                 Cancel
@@ -313,7 +317,7 @@ const App: React.FC = () => {
               <button
                 type="button"
                 disabled={closePrompt.busy}
-                className="px-3 py-1.5 rounded border border-zinc-700 text-zinc-100 hover:bg-zinc-800/70 disabled:opacity-50"
+                className="px-3 py-1.5 rounded border border-[var(--menu-border)] text-themeText-100 hover:bg-themeBg-hover disabled:opacity-50"
                 onClick={async () => {
                   const projectAPI = window.electronAPI?.projectAPI
                   if (!projectAPI) return

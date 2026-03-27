@@ -27,6 +27,7 @@ import {
 } from '../../src/utils/projectSerializer'
 import type { CanvasItem, ImageItem } from '../../src/types'
 import type { DeserializedProject, ProjectFile } from '../../src/types/project'
+import { scanDailiesFolder, getDailiesYears, getDailiesProjects, getDailiesScenes } from './dailiesScanner'
 
 const PROJECT_EXT = '.previewv'
 
@@ -1097,6 +1098,14 @@ app.whenReady().then(() => {
     }
     return resolveVideoSourceFromPath(filePath)
   })
+
+  ipcMain.handle('scan-dailies', async (_e, payload: any) => {
+    return await scanDailiesFolder(payload)
+  })
+
+  ipcMain.handle('dailies:get-years', async () => getDailiesYears())
+  ipcMain.handle('dailies:get-projects', async (_e, { year }) => getDailiesProjects(year))
+  ipcMain.handle('dailies:get-scenes', async (_e, { year, project }) => getDailiesScenes(year, project))
 
   ipcMain.handle(
     'duplicate-media-import-dialog',
