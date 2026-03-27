@@ -13,7 +13,8 @@
     "preview": "electron-vite preview",
     "build:win": "npm run ensure:ffmpeg && npm run build && electron-builder --win nsis",
     "build:win:portable": "npm run ensure:ffmpeg && npm run build && electron-builder --win portable",
-    "build:win:all": "npm run ensure:ffmpeg && npm run build && electron-builder --win nsis --win portable",
+    "build:win:zip": "npm run ensure:ffmpeg && npm run build && electron-builder --win zip",
+    "build:win:all": "npm run ensure:ffmpeg && npm run build && electron-builder --win nsis --win portable --win zip",
     "build:dist": "npm run build:win:all"
   },
   "devDependencies": {
@@ -71,6 +72,12 @@
         },
         {
           "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
           "arch": [
             "x64"
           ]
