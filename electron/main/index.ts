@@ -143,6 +143,8 @@ async function serveMediaProtocolRequest(request: Request): Promise<Response> {
 
 let pendingOpenPath: string | null = findPreviewVPathFromArgv(process.argv)
 
+app.commandLine.appendSwitch('no-sandbox')
+
 if (!app.requestSingleInstanceLock) {
   // In case electron-behaves oddly, keep app running. (Electron always has this API.)
 } else {
@@ -292,31 +294,11 @@ async function renderTiffPreview(filePath: string, outputPath: string): Promise<
   return { width, height }
 }
 
-async function renderViaFfmpegPreview(filePath: string, outputPath: string): Promise<{ width: number; height: number }> {
-  const ff = ffmpegStatic
-  if (!ff) {
-    throw new Error('ffmpeg-static not found (run npm install ffmpeg-static)')
-  }
+let _cachedFfmpegPath: string | null = null
 
-  await new Promise<void>((resolve, reject) => {
-    const p = spawn(ff, ['-y', '-i', filePath, '-frames:v', '1', outputPath], {
-      windowsHide: true,
-    })
-    let err = ''
-    p.stderr?.on('data', (d: Buffer) => {
-      err += d.toString()
-    })
-    p.on('error', reject)
-    p.on('close', (code) => {
-      if (code === 0) resolve()
-      else reject(new Error(err.trim() || `ffmpeg exited with code ${code}`))
-    })
-  })
+async function getFfmpegPath(): Promise<string> {
+  if (_cachedFfmpegPath) return _cachedFfmpegPath
 
-  return loadNativeImageSize(outputPath)
-}
-
-async function transcodeVideoProxy(filePath: string, outputPath: string): Promise<void> {
   const canExecuteFfmpeg = async (bin: string): Promise<boolean> => {
     return await new Promise<boolean>((resolve) => {
       const p = spawn(bin, ['-version'], { windowsHide: true })
@@ -373,6 +355,33 @@ async function transcodeVideoProxy(filePath: string, outputPath: string): Promis
   }
 
   if (!ff) ff = 'ffmpeg'
+  _cachedFfmpegPath = ff
+  return ff
+}
+
+async function renderViaFfmpegPreview(filePath: string, outputPath: string): Promise<{ width: number; height: number }> {
+  const ff = await getFfmpegPath()
+
+  await new Promise<void>((resolve, reject) => {
+    const p = spawn(ff, ['-y', '-i', filePath, '-frames:v', '1', outputPath], {
+      windowsHide: true,
+    })
+    let err = ''
+    p.stderr?.on('data', (d: Buffer) => {
+      err += d.toString()
+    })
+    p.on('error', reject)
+    p.on('close', (code) => {
+      if (code === 0) resolve()
+      else reject(new Error(err.trim() || `ffmpeg exited with code ${code}`))
+    })
+  })
+
+  return loadNativeImageSize(outputPath)
+}
+
+async function transcodeVideoProxy(filePath: string, outputPath: string): Promise<void> {
+  const ff = await getFfmpegPath()
 
   await new Promise<void>((resolve, reject) => {
     const p = spawn(

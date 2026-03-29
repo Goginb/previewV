@@ -42,7 +42,7 @@
   "build": {
     "appId": "com.nfamf.previewv",
     "productName": "PreviewV",
-    "asar": false,
+    "asar": true,
     "directories": {
       "output": "release"
     },
