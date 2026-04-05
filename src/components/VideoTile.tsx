@@ -79,20 +79,23 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
     durationRef.current = duration
   }, [duration])
 
-  const aspectAppliedRef = useRef(false)
+  // Track tiles that already had aspect applied — persists across remounts
+  // so we don't override user-resized tiles when video metadata re-fires.
+  const aspectAppliedForTile = useRef(false)
   useEffect(() => {
-    aspectAppliedRef.current = false
+    // Only reset when the tile is brand new (id changes)
+    aspectAppliedForTile.current = false
   }, [tile.id])
 
   useEffect(() => {
     const v = videoRef.current
     if (!v) return
     const applyAspect = () => {
-      if (aspectAppliedRef.current) return
+      if (aspectAppliedForTile.current) return
       const vw = v.videoWidth
       const vh = v.videoHeight
       if (!vw || !vh) return
-      aspectAppliedRef.current = true
+      aspectAppliedForTile.current = true
       const next = videoTileSizeFromVideo(vw, vh)
       if (Math.abs(tile.width - next.width) > 2 || Math.abs(tile.height - next.height) > 2) {
         updateItem(tile.id, { width: next.width, height: next.height })
@@ -100,12 +103,12 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
     }
     v.addEventListener('loadedmetadata', applyAspect)
     v.addEventListener('loadeddata', applyAspect)
-    applyAspect()
+    if (!aspectAppliedForTile.current) applyAspect()
     return () => {
       v.removeEventListener('loadedmetadata', applyAspect)
       v.removeEventListener('loadeddata', applyAspect)
     }
-  }, [tile.id, updateItem])
+  }, [tile.id, tile.width, tile.height, updateItem])
 
   const syncFromVideo = useCallback(() => {
     const v = videoRef.current
@@ -381,12 +384,11 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
         data-video-tile-root="true"
         data-item-id={tile.id}
         className={[
-          'relative rounded-lg overflow-hidden shadow-2xl bg-zinc-900 border box-border',
+          'w-full h-full relative rounded-lg overflow-hidden shadow-2xl bg-zinc-900 border box-border',
           isSelected
             ? 'border-indigo-300 ring-2 ring-indigo-400/80 shadow-[0_0_0_1px_rgba(99,102,241,0.35),0_0_28px_rgba(99,102,241,0.25)]'
             : 'border-[var(--menu-border)]',
         ].join(' ')}
-        style={{ width: tile.width, height: tile.height }}
       >
         <div
           className="tile-drag-handle absolute left-0 right-0 top-0 z-20 flex items-center px-2 bg-themeBg-active/90 cursor-grab active:cursor-grabbing"

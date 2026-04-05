@@ -429,27 +429,7 @@ export const Canvas: React.FC = () => {
         return
       }
 
-      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ' && !e.shiftKey && !isTypingTarget(e)) {
-        e.preventDefault()
-        const ids = useCanvasStore.getState().selectedIds
-        for (const id of ids) {
-          const drawUndo = imageDrawUndoRegistry.get(id)
-          if (drawUndo && drawUndo()) return
-        }
-        useCanvasStore.getState().undo()
-        return
-      }
 
-      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyZ' && e.shiftKey && !isTypingTarget(e)) {
-        e.preventDefault()
-        const ids = useCanvasStore.getState().selectedIds
-        for (const id of ids) {
-          const drawRedo = imageDrawRedoRegistry.get(id)
-          if (drawRedo && drawRedo()) return
-        }
-        useCanvasStore.getState().redo()
-        return
-      }
 
       if ((e.ctrlKey || e.metaKey) && e.code === 'KeyC' && !isTypingTarget(e)) {
         const state = useCanvasStore.getState()

@@ -33,6 +33,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getDailiesYears: () => ipcRenderer.invoke('dailies:get-years'),
     getDailiesProjects: (year: string) => ipcRenderer.invoke('dailies:get-projects', { year }),
     getDailiesScenes: (year: string, project: string) => ipcRenderer.invoke('dailies:get-scenes', { year, project }),
+    scanPrm: (payload: { year: string; project: string; scene: string; priorities: string[] }) =>
+      ipcRenderer.invoke('scan-prm', payload),
+    getPrmYears: () => ipcRenderer.invoke('prm:get-years'),
+    getPrmProjects: (year: string) => ipcRenderer.invoke('prm:get-projects', { year }),
+    getPrmScenes: (year: string, project: string) => ipcRenderer.invoke('prm:get-scenes', { year, project }),
   },
 })
 

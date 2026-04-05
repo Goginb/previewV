@@ -38,6 +38,15 @@ export interface ElectronProjectAPI {
   getDailiesYears: () => Promise<string[]>
   getDailiesProjects: (year: string) => Promise<string[]>
   getDailiesScenes: (year: string, project: string) => Promise<string[]>
+  scanPrm: (payload: {
+    year: string
+    project: string
+    scene: string
+    priorities: string[]
+  }) => Promise<string[]>
+  getPrmYears: () => Promise<string[]>
+  getPrmProjects: (year: string) => Promise<string[]>
+  getPrmScenes: (year: string, project: string) => Promise<string[]>
 }
 
 export interface ResolvedImageImport {

@@ -28,6 +28,7 @@ import {
 import type { CanvasItem, ImageItem } from '../../src/types'
 import type { DeserializedProject, ProjectFile } from '../../src/types/project'
 import { scanDailiesFolder, getDailiesYears, getDailiesProjects, getDailiesScenes } from './dailiesScanner'
+import { scanPrmFolder, getPrmYears, getPrmProjects, getPrmScenes } from './prmScanner'
 
 const PROJECT_EXT = '.previewv'
 
@@ -1115,6 +1116,14 @@ app.whenReady().then(() => {
   ipcMain.handle('dailies:get-years', async () => getDailiesYears())
   ipcMain.handle('dailies:get-projects', async (_e, { year }) => getDailiesProjects(year))
   ipcMain.handle('dailies:get-scenes', async (_e, { year, project }) => getDailiesScenes(year, project))
+
+  ipcMain.handle('scan-prm', async (_e, payload: any) => {
+    return await scanPrmFolder(payload)
+  })
+
+  ipcMain.handle('prm:get-years', async () => getPrmYears())
+  ipcMain.handle('prm:get-projects', async (_e, { year }) => getPrmProjects(year))
+  ipcMain.handle('prm:get-scenes', async (_e, { year, project }) => getPrmScenes(year, project))
 
   ipcMain.handle(
     'duplicate-media-import-dialog',

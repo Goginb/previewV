@@ -1,6 +1,7 @@
 import React from 'react'
 import { useCanvasStore } from '../store/canvasStore'
 import { useUiStore } from '../store/uiStore'
+import { videoRegistry } from '../utils/videoRegistry'
 
 function fileNameFromPath(path: string | null): string {
   if (!path) return 'Untitled'
@@ -49,6 +50,25 @@ export const ProjectTitleBar: React.FC = () => {
            onClick={() => useUiStore.getState().setDailiesModalOpen(true)}
         >
            Import Dailies
+        </button>
+        <button
+           type="button"
+           className="ml-2 px-3 py-1 rounded bg-teal-500/20 hover:bg-teal-500/40 text-teal-300 text-xs font-semibold uppercase tracking-wider border border-teal-500/40 pointer-events-auto transition-colors"
+           onClick={() => useUiStore.getState().setPrmModalOpen(true)}
+        >
+           Import PRM
+        </button>
+        <button
+           type="button"
+           className="ml-2 px-3 py-1 rounded bg-amber-500/20 hover:bg-amber-500/40 text-amber-300 text-xs font-semibold uppercase tracking-wider border border-amber-500/40 pointer-events-auto transition-colors"
+           onClick={() => {
+             for (const video of videoRegistry.values()) {
+               video.currentTime = 0
+             }
+           }}
+           title="Перемотать все видео на начало"
+        >
+           ⟲ Restart All
         </button>
       </div>
     </div>

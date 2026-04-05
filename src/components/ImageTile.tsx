@@ -169,13 +169,21 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
   useEffect(() => {
     const nw = item.naturalWidth
     const nh = item.naturalHeight
-    if (!nw || !nh) return
+    if (!nw || !nh) {
+      prevEditingRef.current = isEditing
+      return
+    }
     if (isEditing && !prevEditingRef.current) {
-      preEditRectRef.current = { x: item.x, y: item.y, width: item.width, height: item.height }
+      // Entering edit mode — snapshot current rect and enlarge
+      const state = useCanvasStore.getState()
+      const cur = state.items.find((i) => i.id === item.id)
+      if (cur) {
+        preEditRectRef.current = { x: cur.x, y: cur.y, width: cur.width, height: cur.height }
+      }
       const base = imageTileEditSize(nw, nh)
       const root = document.getElementById('previewv-canvas-root')
       const rect = root?.getBoundingClientRect()
-      const vp = useCanvasStore.getState().viewport
+      const vp = state.viewport
       if (!rect) {
         updateItem(item.id, { width: base.width, height: base.height })
       } else {
@@ -212,7 +220,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
       preEditRectRef.current = null
     }
     prevEditingRef.current = isEditing
-  }, [isEditing, item.id, item.naturalWidth, item.naturalHeight, item.x, item.y, item.width, item.height, updateItem])
+  }, [isEditing, item.id, item.naturalWidth, item.naturalHeight, updateItem])
 
   const naturalSyncRef = useRef(false)
   useEffect(() => {

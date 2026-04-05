@@ -4,17 +4,15 @@ import { useCanvasStore } from '../store/canvasStore'
 import { defaultVideoTileSizeForNew } from '../utils/tileSizing'
 import type { CanvasItem } from '../types'
 
-export const DailiesImportModal: React.FC = () => {
+export const PrmImportModal: React.FC = () => {
   const {
-    dailiesYear,
-    dailiesProject,
-    dailiesScene,
-    dailiesPriorities,
-    setDailiesYear,
-    setDailiesProject,
-    setDailiesScene,
-    setDailiesPriorities,
-    setDailiesModalOpen,
+    prmYear,
+    prmProject,
+    prmScene,
+    setPrmYear,
+    setPrmProject,
+    setPrmScene,
+    setPrmModalOpen,
   } = useUiStore()
 
   const [isScanning, setIsScanning] = useState(false)
@@ -24,40 +22,39 @@ export const DailiesImportModal: React.FC = () => {
   const [availableScenes, setAvailableScenes] = useState<string[]>([])
 
   useEffect(() => {
-    window.electronAPI?.projectAPI.getDailiesYears?.().then((res) => {
+    window.electronAPI?.projectAPI.getPrmYears?.().then((res) => {
       setAvailableYears(res ?? [])
-      // Auto-select if current is invalid, or if first load
-      if (res && res.length > 0 && !res.includes(useUiStore.getState().dailiesYear)) {
-        setDailiesYear(res[0])
+      if (res && res.length > 0 && !res.includes(useUiStore.getState().prmYear)) {
+        setPrmYear(res[0])
       }
     }).catch(() => {})
-  }, [setDailiesYear])
+  }, [setPrmYear])
 
   useEffect(() => {
-    if (dailiesYear) {
-      window.electronAPI?.projectAPI.getDailiesProjects?.(dailiesYear).then((res) => {
+    if (prmYear) {
+      window.electronAPI?.projectAPI.getPrmProjects?.(prmYear).then((res) => {
         setAvailableProjects(res ?? [])
-        if (res && res.length > 0 && !res.includes(useUiStore.getState().dailiesProject)) {
-          setDailiesProject(res[0])
+        if (res && res.length > 0 && !res.includes(useUiStore.getState().prmProject)) {
+          setPrmProject(res[0])
         }
       }).catch(() => {})
     } else {
       setAvailableProjects([])
     }
-  }, [dailiesYear, setDailiesProject])
+  }, [prmYear, setPrmProject])
 
   useEffect(() => {
-    if (dailiesYear && dailiesProject) {
-      window.electronAPI?.projectAPI.getDailiesScenes?.(dailiesYear, dailiesProject).then((res) => {
+    if (prmYear && prmProject) {
+      window.electronAPI?.projectAPI.getPrmScenes?.(prmYear, prmProject).then((res) => {
         setAvailableScenes(res ?? [])
-        if (res && res.length > 0 && !res.includes(useUiStore.getState().dailiesScene)) {
-          setDailiesScene(res[0])
+        if (res && res.length > 0 && !res.includes(useUiStore.getState().prmScene)) {
+          setPrmScene(res[0])
         }
       }).catch(() => {})
     } else {
       setAvailableScenes([])
     }
-  }, [dailiesYear, dailiesProject, setDailiesScene])
+  }, [prmYear, prmProject, setPrmScene])
 
   const handleImport = async () => {
     try {
@@ -65,15 +62,15 @@ export const DailiesImportModal: React.FC = () => {
       const api = window.electronAPI?.projectAPI
       if (!api) return
 
-      const paths = await api.scanDailies({
-        year: dailiesYear,
-        project: dailiesProject,
-        scene: dailiesScene,
-        priorities: dailiesPriorities,
+      const paths = await api.scanPrm({
+        year: prmYear,
+        project: prmProject,
+        scene: prmScene,
+        priorities: [],
       })
 
       if (paths.length === 0) {
-        alert('По заданным критериям дейлизы не найдены.')
+        alert('PRM файлы не найдены.')
         setIsScanning(false)
         return
       }
@@ -151,18 +148,12 @@ export const DailiesImportModal: React.FC = () => {
 
       state.addItems(newItems)
       state.setSelection(newItems.map((it) => it.id))
-      setDailiesModalOpen(false)
+      setPrmModalOpen(false)
     } catch (err: any) {
       alert(err?.message || String(err))
     } finally {
       setIsScanning(false)
     }
-  }
-
-  const handlePriorityChange = (index: number, val: string) => {
-    const nextArr = [...dailiesPriorities]
-    nextArr[index] = val
-    setDailiesPriorities(nextArr)
   }
 
   return (
@@ -177,11 +168,11 @@ export const DailiesImportModal: React.FC = () => {
         style={{ background: 'var(--menu-bg)', borderColor: 'var(--menu-border)', boxShadow: 'var(--menu-shadow)' }}
       >
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-themeText-100">Import Dailies</h2>
+          <h2 className="text-lg font-semibold text-themeText-100">Import PRM</h2>
           <button
             type="button"
             className="rounded px-2 py-1 text-sm text-themeText-200 hover:bg-themeBg-hover"
-            onClick={() => setDailiesModalOpen(false)}
+            onClick={() => setPrmModalOpen(false)}
           >
             Close
           </button>
@@ -194,18 +185,18 @@ export const DailiesImportModal: React.FC = () => {
               Год (Year)
               {availableYears.length > 0 ? (
                 <select
-                  value={dailiesYear}
-                  onChange={(e) => setDailiesYear(e.target.value)}
+                  value={prmYear}
+                  onChange={(e) => setPrmYear(e.target.value)}
                   className="rounded border border-[var(--menu-border)] bg-[var(--app-bg)] px-2 py-1.5 text-themeText-100"
                 >
-                  {!availableYears.includes(dailiesYear) && <option value={dailiesYear}>{dailiesYear}</option>}
+                  {!availableYears.includes(prmYear) && <option value={prmYear}>{prmYear}</option>}
                   {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
                 </select>
               ) : (
                 <input
                   type="text"
-                  value={dailiesYear}
-                  onChange={(e) => setDailiesYear(e.target.value)}
+                  value={prmYear}
+                  onChange={(e) => setPrmYear(e.target.value)}
                   className="rounded border border-[var(--menu-border)] bg-[var(--app-bg)] px-2 py-1.5 text-themeText-100"
                 />
               )}
@@ -214,18 +205,18 @@ export const DailiesImportModal: React.FC = () => {
               Проект (Project)
               {availableProjects.length > 0 ? (
                 <select
-                  value={dailiesProject}
-                  onChange={(e) => setDailiesProject(e.target.value)}
+                  value={prmProject}
+                  onChange={(e) => setPrmProject(e.target.value)}
                   className="rounded border border-[var(--menu-border)] bg-[var(--app-bg)] px-2 py-1.5 text-themeText-100"
                 >
-                  {!availableProjects.includes(dailiesProject) && <option value={dailiesProject}>{dailiesProject}</option>}
+                  {!availableProjects.includes(prmProject) && <option value={prmProject}>{prmProject}</option>}
                   {availableProjects.map(p => <option key={p} value={p}>{p}</option>)}
                 </select>
               ) : (
                 <input
                   type="text"
-                  value={dailiesProject}
-                  onChange={(e) => setDailiesProject(e.target.value)}
+                  value={prmProject}
+                  onChange={(e) => setPrmProject(e.target.value)}
                   className="rounded border border-[var(--menu-border)] bg-[var(--app-bg)] px-2 py-1.5 text-themeText-100"
                 />
               )}
@@ -234,52 +225,37 @@ export const DailiesImportModal: React.FC = () => {
               Сцена (Scene)
               {availableScenes.length > 0 ? (
                 <select
-                  value={dailiesScene}
-                  onChange={(e) => setDailiesScene(e.target.value)}
+                  value={prmScene}
+                  onChange={(e) => setPrmScene(e.target.value)}
                   className="rounded border border-[var(--menu-border)] bg-[var(--app-bg)] px-2 py-1.5 text-themeText-100"
                 >
-                  {!availableScenes.includes(dailiesScene) && <option value={dailiesScene}>{dailiesScene}</option>}
+                  {!availableScenes.includes(prmScene) && <option value={prmScene}>{prmScene}</option>}
                   {availableScenes.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
               ) : (
                 <input
                   type="text"
-                  value={dailiesScene}
-                  onChange={(e) => setDailiesScene(e.target.value)}
+                  value={prmScene}
+                  onChange={(e) => setPrmScene(e.target.value)}
                   className="rounded border border-[var(--menu-border)] bg-[var(--app-bg)] px-2 py-1.5 text-themeText-100"
                 />
               )}
             </label>
           </div>
           <div className="text-[10px] text-themeText-400 font-mono mt-1 break-all">
-            Z:\_Projects\{dailiesYear || '2024'}\{dailiesProject || 'Project'}\episodes\{dailiesScene || 'SCN'}\_dailies
+            Z:\_Projects\{prmYear || '2024'}\{prmProject || 'Project'}\episodes\{prmScene || 'SCN'}\_prm
           </div>
         </section>
 
-        <section className="mb-4 space-y-2">
-          <h3 className="text-sm border-b border-[var(--theme-divider)] pb-1 font-semibold text-themeText-200">Приоритеты имен (через запятую)</h3>
-          {[0, 1, 2, 3, 4].map((i) => (
-            <div key={i} className="flex items-center gap-2">
-              <span className="text-xs text-themeText-400 w-4">{i + 1}.</span>
-              <input
-                type="text"
-                value={dailiesPriorities[i] || ''}
-                onChange={(e) => handlePriorityChange(i, e.target.value)}
-                placeholder={i === 0 ? "Например: comp" : i === 1 ? "Например: cln, clnp" : ""}
-                className="flex-1 rounded border border-[var(--menu-border)] bg-[var(--app-bg)] px-2 py-1 text-sm text-themeText-100 focus:outline-none focus:border-indigo-500"
-              />
-            </div>
-          ))}
-          <p className="text-[11px] text-themeText-400 mt-2 leading-tight">
-            Скрипт зайдёт в папку каждой сцены, отфильтрует файлы по этим совпадениям (от 1 до 5) и возьмёт новейшую версию из самого высокого найденного приоритета.
-          </p>
-        </section>
+        <p className="text-[11px] text-themeText-400 leading-tight mb-4">
+          Будут импортированы все файлы из всех подпапок.
+        </p>
 
-        <div className="mt-5 flex justify-end gap-2 pt-2 border-t border-[var(--theme-divider)]">
+        <div className="flex justify-end gap-2 pt-2 border-t border-[var(--theme-divider)]">
           <button
             type="button"
             className="px-4 py-1.5 rounded border border-[var(--menu-border)] text-themeText-200 hover:bg-themeBg-hover disabled:opacity-50"
-            onClick={() => setDailiesModalOpen(false)}
+            onClick={() => setPrmModalOpen(false)}
             disabled={isScanning}
           >
             Отмена
@@ -288,7 +264,7 @@ export const DailiesImportModal: React.FC = () => {
             type="button"
             className="px-4 py-1.5 rounded bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-50 font-medium"
             onClick={handleImport}
-            disabled={isScanning || !dailiesYear || !dailiesProject || !dailiesScene}
+            disabled={isScanning || !prmYear || !prmProject || !prmScene}
           >
             {isScanning ? 'Поиск...' : 'Импортировать'}
           </button>

@@ -5,6 +5,7 @@ import { ProjectTitleBar } from './components/ProjectTitleBar'
 import { HelpGuideModal } from './components/HelpGuideModal'
 import { SettingsModal } from './components/SettingsModal'
 import { DailiesImportModal } from './components/DailiesImportModal'
+import { PrmImportModal } from './components/PrmImportModal'
 import { useCanvasStore } from './store/canvasStore'
 import { useUiStore } from './store/uiStore'
 import { flushImageAnnotations } from './utils/flushImageAnnotations'
@@ -64,6 +65,7 @@ const App: React.FC = () => {
   const [closePrompt, setClosePrompt] = useState<null | { fileLabel: string; busy: boolean }>(null)
   
   const isDailiesModalOpen = useUiStore((s) => s.isDailiesModalOpen)
+  const isPrmModalOpen = useUiStore((s) => s.isPrmModalOpen)
   const loadProjectState = useCanvasStore((s) => s.loadProjectState)
   const getProjectDataForSave = useCanvasStore((s) => s.getProjectDataForSave)
   const syncSavedProjectState = useCanvasStore((s) => s.syncSavedProjectState)
@@ -297,6 +299,7 @@ const App: React.FC = () => {
       {helpOpen && <HelpGuideModal onClose={() => setHelpOpen(false)} />}
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
       {isDailiesModalOpen && <DailiesImportModal />}
+      {isPrmModalOpen && <PrmImportModal />}
       {closePrompt && (
         <div className="fixed inset-0 z-[6500] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
           <div
