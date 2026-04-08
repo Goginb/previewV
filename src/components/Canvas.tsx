@@ -2,23 +2,34 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useCanvasStore } from '../store/canvasStore'
 import { useCanvasPanZoom, spacePanActiveRef } from '../hooks/useCanvasPanZoom'
+import { useClampedMenuPosition } from '../hooks/useClampedMenuPosition'
 import { useVideoPlaybackManager } from '../hooks/useVideoPlaybackManager'
 import { VideoTile } from './VideoTile'
 import { NoteTile } from './NoteTile'
 import { ImageTile } from './ImageTile'
+import { CanvasCommonMenuSection } from './CanvasCommonMenuSection'
 import { videoRegistry } from '../utils/videoRegistry'
 import { imageDrawUndoRegistry } from '../utils/imageDrawUndoRegistry'
 import { imageDrawRedoRegistry } from '../utils/imageDrawRedoRegistry'
 import { imageExportRegistry } from '../utils/imageExportRegistry'
 import { flushImageAnnotations } from '../utils/flushImageAnnotations'
 import { importImageFile, isRasterImportFile } from '../utils/imageImport'
+import { isTypingTarget } from '../utils/keyboard'
+import { getNoteCreationMetrics, getNoteCreationMetricsForText } from '../utils/noteCreation'
 import { defaultVideoTileSizeForNew, imageTileViewSize } from '../utils/tileSizing'
 import { setVideoPlaybackSuspended } from '../utils/videoGlobalPlayback'
 import { requestVideoWarmupEarly } from '../utils/warmupCanvasMedia'
-import { BackdropTile, createBackdropItem } from './BackdropTile'
-import { backdropHeaderHeight, computeAttachedVideoIds } from '../utils/backdrops'
+import { BACKDROP_COLOR_PRESETS, BackdropTile, createBackdropItem } from './BackdropTile'
+import {
+  backdropHeaderHeight,
+  computeAttachedItemIds,
+  computeBackdropDepthMap,
+  itemFullyInsideRect,
+  sortBackdropsForRender,
+} from '../utils/backdrops'
 import type { CanvasItem, ImageItem, NoteItem, VideoItem } from '../types'
 import { useUiStore } from '../store/uiStore'
+import { mediaUrlToLocalPath } from '../utils/projectSerializer'
 import logoGreenFx from '../assets/logo-greenfx.png'
 
 // ── File helpers ──────────────────────────────────────────────────────────────
@@ -60,37 +71,9 @@ async function resolveDroppedVideoUrl(file: File): Promise<string> {
 }
 
 const VIDEO_TILE_DEFAULT = defaultVideoTileSizeForNew()
-const NOTE_W  = 220
-const NOTE_H  = 160
+const DEFAULT_VIDEO_UI_COLOR = '#6366f1'
 
 const MARQUEE_CLICK_THRESHOLD = 4
-
-function isTypingTarget(e: KeyboardEvent): boolean {
-  const el = e.target as HTMLElement | null
-  if (!el) return false
-  if (el.isContentEditable) return true
-  const tag = el.tagName
-  if (tag === 'TEXTAREA') return true
-  if (tag === 'SELECT') return true
-  if (tag === 'INPUT') {
-    const type = (el as HTMLInputElement).type
-    // Sliders / toggles are not text fields — canvas shortcuts must still work
-    if (
-      type === 'range' ||
-      type === 'checkbox' ||
-      type === 'radio' ||
-      type === 'button' ||
-      type === 'submit' ||
-      type === 'reset' ||
-      type === 'file' ||
-      type === 'color'
-    ) {
-      return false
-    }
-    return true
-  }
-  return false
-}
 
 function captureVideoFrame(video: HTMLVideoElement): { dataUrl: string; width: number; height: number } {
   const maxDim = 1920
@@ -130,6 +113,50 @@ function cloneCanvasItemForClipboard(item: CanvasItem): CanvasItem {
   return { ...item }
 }
 
+function insertTextIntoEditableTarget(text: string, target: HTMLElement | null): boolean {
+  if (!target || !text) return false
+
+  if (target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement) {
+    const start = target.selectionStart ?? target.value.length
+    const end = target.selectionEnd ?? start
+    target.focus()
+    target.setRangeText(text, start, end, 'end')
+    target.dispatchEvent(new Event('input', { bubbles: true }))
+    return true
+  }
+
+  if (target.isContentEditable) {
+    target.focus()
+    try {
+      document.execCommand('insertText', false, text)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  return false
+}
+
+function isEditableElement(target: EventTarget | null): target is HTMLElement {
+  if (!(target instanceof HTMLElement)) return false
+  if (target.isContentEditable) return true
+  const tag = target.tagName
+  if (tag === 'TEXTAREA' || tag === 'SELECT') return true
+  if (tag !== 'INPUT') return false
+  const type = (target as HTMLInputElement).type
+  return !(
+    type === 'range' ||
+    type === 'checkbox' ||
+    type === 'radio' ||
+    type === 'button' ||
+    type === 'submit' ||
+    type === 'reset' ||
+    type === 'file' ||
+    type === 'color'
+  )
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export const Canvas: React.FC = () => {
@@ -157,7 +184,157 @@ export const Canvas: React.FC = () => {
 
   const containerRef    = useRef<HTMLDivElement>(null)
   const lastMouseScreen = useRef({ x: 0, y: 0 })
+  const lastCommandContextRef = useRef<'text' | 'canvas'>('canvas')
+  const internalClipboardTextSnapshotRef = useRef('')
   const [ctxMenu, setCtxMenu] = useState<null | { x: number; y: number; kind: 'canvas' | 'video' | 'image'; itemId?: string }>(null)
+  const { menuRef: canvasMenuRef, menuPosition: canvasMenuPosition } = useClampedMenuPosition(
+    ctxMenu ? { x: ctxMenu.x, y: ctxMenu.y } : null,
+  )
+  const [videoSearchOpen, setVideoSearchOpen] = useState(false)
+  const [videoSearchQuery, setVideoSearchQuery] = useState('')
+  const [videoSearchActiveIndex, setVideoSearchActiveIndex] = useState(0)
+  const videoSearchInputRef = useRef<HTMLInputElement>(null)
+  const [sourcePathModalOpen, setSourcePathModalOpen] = useState(false)
+  const sourcePathInputRef = useRef<HTMLInputElement>(null)
+
+  const readSystemClipboardText = useCallback(
+    () => window.electronAPI?.projectAPI.readClipboardText?.() ?? '',
+    [],
+  )
+
+  const markCanvasCommandContext = useCallback(() => {
+    lastCommandContextRef.current = 'canvas'
+  }, [])
+
+  const markTextCommandContext = useCallback(() => {
+    lastCommandContextRef.current = 'text'
+  }, [])
+
+  const shouldPreferTextCommands = useCallback((target: HTMLElement | null) => {
+    return !!target && isEditableElement(target) && lastCommandContextRef.current === 'text'
+  }, [])
+
+  const runEditableDocumentCommand = useCallback(
+    (command: 'undo' | 'redo' | 'copy' | 'cut' | 'selectAll', target: HTMLElement | null) => {
+      if (!shouldPreferTextCommands(target)) return false
+      target.focus()
+      try {
+        return document.execCommand(command)
+      } catch {
+        return false
+      }
+    },
+    [shouldPreferTextCommands],
+  )
+
+  const setInternalClipboard = useCallback((copies: CanvasItem[]) => {
+    internalClipboardTextSnapshotRef.current = readSystemClipboardText().trim()
+    useCanvasStore.getState().setClipboard(copies)
+    markCanvasCommandContext()
+  }, [markCanvasCommandContext, readSystemClipboardText])
+
+  const copyCanvasSelection = useCallback(() => {
+    const state = useCanvasStore.getState()
+    const ids = state.selectedIds
+    if (!ids.length) return false
+    const idSet = new Set(ids)
+    const selected = state.items.filter((i) => idSet.has(i.id))
+    if (!selected.length) return false
+    const copies: CanvasItem[] = selected.map(cloneCanvasItemForClipboard)
+    setInternalClipboard(copies)
+    return true
+  }, [setInternalClipboard])
+
+  const cutCanvasSelection = useCallback(() => {
+    const state = useCanvasStore.getState()
+    const ids = state.selectedIds
+    if (!ids.length) return false
+    const idSet = new Set(ids)
+    const selected = state.items.filter((i) => idSet.has(i.id))
+    if (!selected.length) return false
+    const copies: CanvasItem[] = selected.map(cloneCanvasItemForClipboard)
+    setInternalClipboard(copies)
+    removeItems(ids)
+    markCanvasCommandContext()
+    return true
+  }, [markCanvasCommandContext, removeItems, setInternalClipboard])
+
+  const createTextNoteAtScreenPoint = useCallback(
+    (screenX: number, screenY: number, text: string) => {
+      const state = useCanvasStore.getState()
+      const trimmedText = text.trim()
+      if (!trimmedText) return null
+      const { x: vx, y: vy, scale } = state.viewport
+      const noteMetrics = getNoteCreationMetricsForText(scale, trimmedText)
+      const note: NoteItem = {
+        type: 'note',
+        id: `note-${Date.now()}`,
+        x: (screenX - vx) / scale - noteMetrics.width / 2,
+        y: (screenY - vy) / scale - noteMetrics.height / 2,
+        width: noteMetrics.width,
+        height: noteMetrics.height,
+        fontSize: noteMetrics.fontSize,
+        text: trimmedText,
+      }
+      addItem(note)
+      selectOne(note.id)
+      return note
+    },
+    [addItem, selectOne],
+  )
+
+  const pasteUsingBestSource = useCallback((activeElement: HTMLElement | null) => {
+    const state = useCanvasStore.getState()
+    const clipboardText = readSystemClipboardText()
+    const trimmedText = clipboardText.trim()
+
+    if (shouldPreferTextCommands(activeElement)) {
+      if (insertTextIntoEditableTarget(clipboardText, activeElement)) {
+        markTextCommandContext()
+        return true
+      }
+      return false
+    }
+
+    const hasFreshExternalText =
+      trimmedText.length > 0 && trimmedText !== internalClipboardTextSnapshotRef.current
+
+    if (hasFreshExternalText) {
+      const { x: sx, y: sy } = lastMouseScreen.current
+      const note = createTextNoteAtScreenPoint(sx, sy, trimmedText)
+      if (note) {
+        markCanvasCommandContext()
+        return true
+      }
+      return false
+    }
+
+    if (state.clipboard.length) {
+      const { x: sx, y: sy } = lastMouseScreen.current
+      const { x: vx, y: vy, scale } = state.viewport
+      const worldX = (sx - vx) / scale
+      const worldY = (sy - vy) / scale
+      state.pasteClipboard(worldX, worldY)
+      markCanvasCommandContext()
+      return true
+    }
+
+    if (!trimmedText) return false
+
+    const { x: sx, y: sy } = lastMouseScreen.current
+    const note = createTextNoteAtScreenPoint(sx, sy, trimmedText)
+    if (note) {
+      markCanvasCommandContext()
+      return true
+    }
+    return false
+  }, [
+    createTextNoteAtScreenPoint,
+    markCanvasCommandContext,
+    markTextCommandContext,
+    readSystemClipboardText,
+    shouldPreferTextCommands,
+  ])
 
   // Ensure paste has a sane default position even if the user hasn't moved
   // the mouse after selecting items.
@@ -168,6 +345,30 @@ export const Canvas: React.FC = () => {
     lastMouseScreen.current = {
       x: rect.width / 2,
       y: rect.height / 2,
+    }
+  }, [])
+
+  useEffect(() => {
+    const onFocusIn = (e: FocusEvent) => {
+      if (isEditableElement(e.target)) {
+        lastCommandContextRef.current = 'text'
+      }
+    }
+    const onPointerDown = (e: PointerEvent) => {
+      const target = e.target
+      if (isEditableElement(target)) {
+        lastCommandContextRef.current = 'text'
+        return
+      }
+      if (target instanceof HTMLElement && target.closest('#previewv-canvas-root')) {
+        lastCommandContextRef.current = 'canvas'
+      }
+    }
+    window.addEventListener('focusin', onFocusIn, true)
+    window.addEventListener('pointerdown', onPointerDown, true)
+    return () => {
+      window.removeEventListener('focusin', onFocusIn, true)
+      window.removeEventListener('pointerdown', onPointerDown, true)
     }
   }, [])
 
@@ -189,7 +390,7 @@ export const Canvas: React.FC = () => {
   useCanvasPanZoom(containerRef)
   useVideoPlaybackManager(containerRef)
   const selectedIdSet = new Set(selectedIds)
-  const hiddenVideoIds = useMemo(() => {
+  const hiddenItemIds = useMemo(() => {
     const set = new Set<string>()
     for (const it of items) {
       if (it.type !== 'backdrop') continue
@@ -198,6 +399,200 @@ export const Canvas: React.FC = () => {
     }
     return set
   }, [items])
+  const backdropDepthMap = useMemo(
+    () => computeBackdropDepthMap(items.filter((item): item is Extract<CanvasItem, { type: 'backdrop' }> => item.type === 'backdrop')),
+    [items],
+  )
+  const renderItems = useMemo(() => {
+    const nonBackdrops = items.filter((item) => item.type !== 'backdrop')
+    const backdrops = sortBackdropsForRender(
+      items.filter((item): item is Extract<CanvasItem, { type: 'backdrop' }> => item.type === 'backdrop'),
+    )
+    return [...nonBackdrops, ...backdrops]
+  }, [items])
+  const videoSearchItems = useMemo(
+    () =>
+      items
+        .filter((item): item is VideoItem => item.type === 'video')
+        .slice()
+        .sort((a, b) => a.fileName.localeCompare(b.fileName, undefined, { sensitivity: 'base' }) || a.id.localeCompare(b.id)),
+    [items],
+  )
+  const filteredVideoSearchItems = useMemo(() => {
+    const query = videoSearchQuery.trim().toLowerCase()
+    if (!query) return videoSearchItems
+    return videoSearchItems.filter((item) => item.fileName.toLowerCase().includes(query))
+  }, [videoSearchItems, videoSearchQuery])
+  const activeVideoSearchItem = filteredVideoSearchItems[videoSearchActiveIndex] ?? null
+  const selectedSourcePath = useMemo(() => {
+    for (const id of selectedIds) {
+      const item = items.find((candidate) => candidate.id === id)
+      if (!item) continue
+      if (item.type === 'video') {
+        const path = mediaUrlToLocalPath(item.srcUrl)
+        if (path) return path
+      }
+      if (item.type === 'image') {
+        if (item.sourceFilePath) return item.sourceFilePath
+        if (item.projectAssetPath) return item.projectAssetPath
+      }
+    }
+    return ''
+  }, [items, selectedIds])
+  const ctxVideoItem =
+    ctxMenu?.kind === 'video' && ctxMenu.itemId
+      ? items.find((item): item is VideoItem => item.type === 'video' && item.id === ctxMenu.itemId) ?? null
+      : null
+
+  const applyVideoUiColor = useCallback((targetId: string, color: string) => {
+    const state = useCanvasStore.getState()
+    const selectedVideoIds = state.selectedIds.filter((id) =>
+      state.items.some((item) => item.id === id && item.type === 'video'),
+    )
+    const ids =
+      selectedVideoIds.length > 0 && selectedVideoIds.includes(targetId)
+        ? selectedVideoIds
+        : [targetId]
+    updateItemsBatch(
+      ids.map((id) => ({ id, updates: { uiColor: color } })),
+      { recordHistory: true },
+    )
+  }, [updateItemsBatch])
+
+  const runCommonMenuNewNote = useCallback(() => {
+    const state = useCanvasStore.getState()
+    const sx = ctxMenu?.x ?? lastMouseScreen.current.x
+    const sy = ctxMenu?.y ?? lastMouseScreen.current.y
+    const { x: vx, y: vy, scale } = state.viewport
+    const noteMetrics = getNoteCreationMetrics(scale)
+    const note: NoteItem = {
+      type: 'note',
+      id: `note-${Date.now()}`,
+      x: (sx - vx) / scale - noteMetrics.width / 2,
+      y: (sy - vy) / scale - noteMetrics.height / 2,
+      width: noteMetrics.width,
+      height: noteMetrics.height,
+      fontSize: noteMetrics.fontSize,
+      text: '',
+    }
+    addItem(note)
+    selectOne(note.id)
+    setCtxMenu(null)
+  }, [addItem, ctxMenu, selectOne])
+
+  const runCommonMenuAddBackdrop = useCallback(() => {
+    const state = useCanvasStore.getState()
+    const sx = ctxMenu?.x ?? lastMouseScreen.current.x
+    const sy = ctxMenu?.y ?? lastMouseScreen.current.y
+    const { x: vx, y: vy, scale } = state.viewport
+    const worldX = (sx - vx) / scale
+    const worldY = (sy - vy) / scale
+    const backdrop = createBackdropItem({
+      id: `backdrop-${Date.now()}`,
+      x: worldX - 400,
+      y: worldY - 300,
+      width: 800,
+      height: 600,
+    })
+    addItem(backdrop)
+    selectOne(backdrop.id)
+    setCtxMenu(null)
+  }, [addItem, ctxMenu, selectOne])
+
+  const runCommonMenuPaste = useCallback(() => {
+    const state = useCanvasStore.getState()
+    const sx = ctxMenu?.x ?? lastMouseScreen.current.x
+    const sy = ctxMenu?.y ?? lastMouseScreen.current.y
+    const { x: vx, y: vy, scale } = state.viewport
+    state.pasteClipboard((sx - vx) / scale, (sy - vy) / scale)
+    setCtxMenu(null)
+  }, [ctxMenu])
+
+  const runCommonMenuGridAlign = useCallback(() => {
+    gridAlignTiles()
+    setCtxMenu(null)
+  }, [gridAlignTiles])
+
+  const runCommonMenuLayoutMediaRow = useCallback(() => {
+    layoutMediaRow()
+    setCtxMenu(null)
+  }, [layoutMediaRow])
+
+  const runCommonMenuFitAll = useCallback(() => {
+    const el = containerRef.current
+    if (!el) return
+    const { width, height } = el.getBoundingClientRect()
+    frameAllItemsInViewport(width, height)
+    setCtxMenu(null)
+  }, [frameAllItemsInViewport])
+
+  const runCommonMenuSettings = useCallback(() => {
+    window.dispatchEvent(new CustomEvent('app-open-settings'))
+    setCtxMenu(null)
+  }, [])
+
+  const runCommonMenuToggleAlwaysOnTop = useCallback(() => {
+    setAlwaysOnTop(!alwaysOnTop)
+    setCtxMenu(null)
+  }, [alwaysOnTop, setAlwaysOnTop])
+
+  const runCommonMenuQuit = useCallback(() => {
+    window.electronAPI?.projectAPI.confirmCloseWindow()
+    setCtxMenu(null)
+  }, [])
+
+  const centerViewportOnItem = useCallback((itemId: string) => {
+    const state = useCanvasStore.getState()
+    const item = state.items.find((candidate) => candidate.id === itemId)
+    const container = containerRef.current
+    if (!item || !container) return
+    const rect = container.getBoundingClientRect()
+    const scale = state.viewport.scale
+    state.setViewport({
+      x: rect.width / 2 - (item.x + item.width / 2) * scale,
+      y: rect.height / 2 - (item.y + item.height / 2) * scale,
+    })
+  }, [])
+
+  const closeVideoSearch = useCallback(() => {
+    setVideoSearchOpen(false)
+    setVideoSearchQuery('')
+    setVideoSearchActiveIndex(0)
+  }, [])
+
+  const openVideoSearch = useCallback(() => {
+    setCtxMenu(null)
+    setVideoSearchQuery('')
+    setVideoSearchActiveIndex(0)
+    setVideoSearchOpen(true)
+  }, [])
+
+  const closeSourcePathModal = useCallback(() => {
+    setSourcePathModalOpen(false)
+  }, [])
+
+  const openSourcePathModal = useCallback(() => {
+    if (!selectedSourcePath) return
+    setCtxMenu(null)
+    setSourcePathModalOpen(true)
+  }, [selectedSourcePath])
+
+  useEffect(() => {
+    if (!videoSearchOpen) return
+    requestAnimationFrame(() => videoSearchInputRef.current?.focus())
+  }, [videoSearchOpen])
+
+  useEffect(() => {
+    if (!sourcePathModalOpen) return
+    requestAnimationFrame(() => {
+      sourcePathInputRef.current?.focus()
+      sourcePathInputRef.current?.select()
+    })
+  }, [sourcePathModalOpen])
+
+  useEffect(() => {
+    setVideoSearchActiveIndex(0)
+  }, [videoSearchQuery, videoSearchOpen])
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const rect = containerRef.current?.getBoundingClientRect()
@@ -212,24 +607,35 @@ export const Canvas: React.FC = () => {
     const onEditCommand = (e: Event) => {
       const detail = (e as CustomEvent).detail as { command: string }
       const state = useCanvasStore.getState()
+      const activeElement = document.activeElement as HTMLElement | null
 
       if (detail.command === 'undo') {
+        if (shouldPreferTextCommands(activeElement)) {
+          runEditableDocumentCommand('undo', activeElement)
+          return
+        }
         const ids = state.selectedIds
         for (const id of ids) {
           const drawUndo = imageDrawUndoRegistry.get(id)
           if (drawUndo && drawUndo()) return
         }
         state.undo()
+        markCanvasCommandContext()
         return
       }
 
       if (detail.command === 'redo') {
+        if (shouldPreferTextCommands(activeElement)) {
+          runEditableDocumentCommand('redo', activeElement)
+          return
+        }
         const ids = state.selectedIds
         for (const id of ids) {
           const drawRedo = imageDrawRedoRegistry.get(id)
           if (drawRedo && drawRedo()) return
         }
         state.redo()
+        markCanvasCommandContext()
         return
       }
 
@@ -238,29 +644,34 @@ export const Canvas: React.FC = () => {
         return
       }
 
+      if (detail.command === 'cut') {
+        if (shouldPreferTextCommands(activeElement)) {
+          if (runEditableDocumentCommand('cut', activeElement)) {
+            markTextCommandContext()
+          }
+          return
+        }
+        cutCanvasSelection()
+        return
+      }
+
       if (detail.command === 'copy') {
-        const ids = state.selectedIds
-        if (!ids.length) return
-        const idSet = new Set(ids)
-        const selected = state.items.filter((i) => idSet.has(i.id))
-        const copies: CanvasItem[] = selected.map(cloneCanvasItemForClipboard)
-        state.setClipboard(copies)
+        if (shouldPreferTextCommands(activeElement)) {
+          runEditableDocumentCommand('copy', activeElement)
+          return
+        }
+        copyCanvasSelection()
         return
       }
 
       if (detail.command === 'paste') {
-        if (!state.clipboard.length) return
-        const { x: sx, y: sy } = lastMouseScreen.current
-        const { x: vx, y: vy, scale } = state.viewport
-        const worldX = (sx - vx) / scale
-        const worldY = (sy - vy) / scale
-        state.pasteClipboard(worldX, worldY)
+        pasteUsingBestSource(activeElement)
         return
       }
 
       if (detail.command === 'select-all') {
         const ae = document.activeElement as HTMLElement | null
-        if (ae) {
+        if (shouldPreferTextCommands(ae)) {
           if (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT') {
             const inp = ae as HTMLInputElement | HTMLTextAreaElement
             inp.focus()
@@ -278,13 +689,22 @@ export const Canvas: React.FC = () => {
         }
         const { items, setSelection } = useCanvasStore.getState()
         setSelection(items.map((i) => i.id))
+        markCanvasCommandContext()
         return
       }
     }
 
     window.addEventListener('app-edit-command', onEditCommand)
     return () => window.removeEventListener('app-edit-command', onEditCommand)
-  }, [])
+  }, [
+    copyCanvasSelection,
+    cutCanvasSelection,
+    markCanvasCommandContext,
+    markTextCommandContext,
+    pasteUsingBestSource,
+    runEditableDocumentCommand,
+    shouldPreferTextCommands,
+  ])
 
   // ── Marquee: window listeners while dragging ─────────────────────────────
   useEffect(() => {
@@ -333,9 +753,15 @@ export const Canvas: React.FC = () => {
       const rh = Math.abs(wy2 - wy1)
 
       const picked = useCanvasStore.getState().items
-        .filter((item) =>
-          rectsIntersect(rx, ry, rw, rh, item.x, item.y, item.width, item.height),
-        )
+        .filter((item) => {
+          if (item.type === 'backdrop') {
+            return itemFullyInsideRect(
+              { x: rx, y: ry, width: rw, height: rh },
+              item,
+            )
+          }
+          return rectsIntersect(rx, ry, rw, rh, item.x, item.y, item.width, item.height)
+        })
         .map((i) => i.id)
 
       if (picked.length === 0) {
@@ -412,6 +838,19 @@ export const Canvas: React.FC = () => {
         return
       }
 
+      if (e.code === 'Slash' && !e.ctrlKey && !e.metaKey && !e.altKey && !isTypingTarget(e)) {
+        e.preventDefault()
+        openVideoSearch()
+        return
+      }
+
+      if (e.code === 'KeyQ' && !e.ctrlKey && !e.metaKey && !e.altKey && !isTypingTarget(e)) {
+        if (!selectedSourcePath) return
+        e.preventDefault()
+        openSourcePathModal()
+        return
+      }
+
       if ((e.ctrlKey || e.metaKey) && e.code === 'KeyA' && !e.shiftKey && !isTypingTarget(e)) {
         e.preventDefault()
         const { items, setSelection } = useCanvasStore.getState()
@@ -432,28 +871,20 @@ export const Canvas: React.FC = () => {
 
 
       if ((e.ctrlKey || e.metaKey) && e.code === 'KeyC' && !isTypingTarget(e)) {
-        const state = useCanvasStore.getState()
-        const ids = state.selectedIds
         e.preventDefault()
-        if (ids.length) {
-          const idSet = new Set(ids)
-          const selected = state.items.filter((i) => idSet.has(i.id))
-          const copies: CanvasItem[] = selected.map(cloneCanvasItemForClipboard)
-          state.setClipboard(copies)
-        }
+        copyCanvasSelection()
+        return
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyX' && !isTypingTarget(e)) {
+        e.preventDefault()
+        cutCanvasSelection()
         return
       }
 
       if ((e.ctrlKey || e.metaKey) && e.code === 'KeyV' && !e.shiftKey && !isTypingTarget(e)) {
-        const state = useCanvasStore.getState()
         e.preventDefault()
-        if (state.clipboard.length) {
-          const { x: sx, y: sy } = lastMouseScreen.current
-          const { x: vx, y: vy, scale } = state.viewport
-          const worldX = (sx - vx) / scale
-          const worldY = (sy - vy) / scale
-          state.pasteClipboard(worldX, worldY)
-        }
+        pasteUsingBestSource(document.activeElement as HTMLElement | null)
         return
       }
 
@@ -504,10 +935,10 @@ export const Canvas: React.FC = () => {
         e.preventDefault()
         const state = useCanvasStore.getState()
         const idSet = new Set(state.selectedIds)
-        const selectedTiles = state.items.filter(
+        const selectedItems = state.items.filter(
           (it) =>
             idSet.has(it.id) &&
-            (it.type === 'video' || it.type === 'image' || it.type === 'note'),
+            (it.type === 'video' || it.type === 'image' || it.type === 'note' || it.type === 'backdrop'),
         )
 
         const PAD_X = 28
@@ -515,12 +946,12 @@ export const Canvas: React.FC = () => {
         const PAD_TOP = 28 + backdropHeaderHeight('md') + 16 // padding + default header + label room
         let rect: { x: number; y: number; width: number; height: number }
 
-        if (selectedTiles.length > 0) {
+        if (selectedItems.length > 0) {
           let minX = Infinity
           let minY = Infinity
           let maxX = -Infinity
           let maxY = -Infinity
-          for (const it of selectedTiles) {
+          for (const it of selectedItems) {
             minX = Math.min(minX, it.x)
             minY = Math.min(minY, it.y)
             maxX = Math.max(maxX, it.x + it.width)
@@ -542,13 +973,14 @@ export const Canvas: React.FC = () => {
           rect = { x: worldX - w / 2, y: worldY - h / 2, width: w, height: h }
         }
 
-        const attachedVideoIds = computeAttachedVideoIds(
-          rect,
-          state.items.filter((i): i is VideoItem => i.type === 'video'),
+        const backdropId = `backdrop-${Date.now()}`
+        const attachedVideoIds = computeAttachedItemIds(
+          { id: backdropId, ...rect },
+          state.items,
         )
 
         const backdrop = createBackdropItem({
-          id: `backdrop-${Date.now()}`,
+          id: backdropId,
           x: rect.x,
           y: rect.y,
           width: rect.width,
@@ -570,18 +1002,20 @@ export const Canvas: React.FC = () => {
         return
       }
 
-      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyN' && !isTypingTarget(e)) {
+      if (e.code === 'KeyN' && !e.ctrlKey && !e.metaKey && !e.altKey && !isTypingTarget(e)) {
         e.preventDefault()
         const { x: sx, y: sy } = lastMouseScreen.current
         const { x: vx, y: vy, scale } = useCanvasStore.getState().viewport
+        const noteMetrics = getNoteCreationMetrics(scale)
         const note: NoteItem = {
           type: 'note',
           id:   `note-${Date.now()}`,
           text: '',
-          x: (sx - vx) / scale - NOTE_W / 2,
-          y: (sy - vy) / scale - NOTE_H / 2,
-          width:  NOTE_W,
-          height: NOTE_H,
+          x: (sx - vx) / scale - noteMetrics.width / 2,
+          y: (sy - vy) / scale - noteMetrics.height / 2,
+          width:  noteMetrics.width,
+          height: noteMetrics.height,
+          fontSize: noteMetrics.fontSize,
         }
         addItem(note)
         selectOne(note.id)
@@ -649,6 +1083,12 @@ export const Canvas: React.FC = () => {
     layoutMediaRow,
     gridAlignTiles,
     frameAllItemsInViewport,
+    pasteUsingBestSource,
+    copyCanvasSelection,
+    cutCanvasSelection,
+    openVideoSearch,
+    openSourcePathModal,
+    selectedSourcePath,
     theme,
   ])
 
@@ -832,13 +1272,24 @@ export const Canvas: React.FC = () => {
       if (spacePanActiveRef.current) return
 
       const t = e.target as HTMLElement
+      const isBackdropBody = !!t.closest('.backdrop-body-hit-area')
+      const isResizeHandle = !!t.closest('.react-resizable-handle')
       const isBg =
         t === containerRef.current ||
-        t.getAttribute('data-canvas-bg') === 'true'
+        t.getAttribute('data-canvas-bg') === 'true' ||
+        (isBackdropBody && !isResizeHandle)
 
       if (!isBg) return
 
+      // Blur currently focused element (like textareas) when clicking canvas background
+      if (document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur()
+      }
+
       e.preventDefault()
+      if (!(e.ctrlKey || e.metaKey)) {
+        clearSelection()
+      }
       const rect = containerRef.current?.getBoundingClientRect()
       if (!rect) return
       const ax = e.clientX - rect.left
@@ -852,18 +1303,7 @@ export const Canvas: React.FC = () => {
       }
       setMarquee({ ax, ay, bx: ax, by: ay })
     },
-    [],
-  )
-
-  const handleDoubleClick = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
-      const t = e.target as HTMLElement
-      const isBg =
-        t === containerRef.current ||
-        t.getAttribute('data-canvas-bg') === 'true'
-      if (isBg) resetViewport()
-    },
-    [resetViewport],
+    [clearSelection],
   )
 
   return (
@@ -876,7 +1316,6 @@ export const Canvas: React.FC = () => {
       tabIndex={-1}
       onMouseMove={handleMouseMove}
       onMouseDown={handleMouseDown}
-      onDoubleClick={handleDoubleClick}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
@@ -965,7 +1404,7 @@ export const Canvas: React.FC = () => {
           />
         )}
         {/* Tiles first, backdrops last so backdrop headers stack above videos/images/notes (z-index + paint order). */}
-        {[...items.filter((i) => i.type !== 'backdrop'), ...items.filter((i) => i.type === 'backdrop')].map((item: CanvasItem) => {
+        {renderItems.map((item: CanvasItem) => {
           const sel = selectedIdSet.has(item.id)
           if (item.type === 'video') {
             return (
@@ -974,18 +1413,44 @@ export const Canvas: React.FC = () => {
                 tile={item}
                 scale={viewport.scale}
                 isSelected={sel}
-                isHidden={hiddenVideoIds.has(item.id)}
+                isHidden={hiddenItemIds.has(item.id)}
               />
             )
           }
           if (item.type === 'note') {
-            return <NoteTile key={item.id} note={item} scale={viewport.scale} isSelected={sel} />
+            return (
+              <NoteTile 
+                key={item.id} 
+                note={item} 
+                scale={viewport.scale} 
+                isSelected={sel} 
+                isHidden={hiddenItemIds.has(item.id)}
+              />
+            )
           }
           if (item.type === 'image') {
-            return <ImageTile key={item.id} item={item} scale={viewport.scale} isSelected={sel} />
+            return (
+              <ImageTile 
+                key={item.id} 
+                item={item} 
+                scale={viewport.scale} 
+                isSelected={sel} 
+                isHidden={hiddenItemIds.has(item.id)}
+              />
+            )
           }
           if (item.type === 'backdrop') {
-            return <BackdropTile key={item.id} backdrop={item} scale={viewport.scale} isSelected={sel} />
+            return (
+              <BackdropTile
+                key={item.id}
+                backdrop={item}
+                scale={viewport.scale}
+                isSelected={sel}
+                isHidden={hiddenItemIds.has(item.id)}
+                nestingDepth={backdropDepthMap.get(item.id) ?? 0}
+                hiddenItemIds={hiddenItemIds}
+              />
+            )
           }
           return null
         })}
@@ -1000,20 +1465,184 @@ export const Canvas: React.FC = () => {
               Видео: MP4, WebM, MOV… · Изображения: JPEG, PNG, TIFF, EXR, DPX…
             </p>
             <p className="text-xs mt-3 opacity-40">
-              Ctrl+A · A · Ctrl+O · L · B · \ · Ctrl+N / F3 · F4
+              Ctrl+A · A · Ctrl+O · L · B · \ · N / F3 · F4
             </p>
           </div>
         </div>
       )}
 
+      {videoSearchOpen &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[11000] flex items-start justify-center p-4"
+            style={{ background: 'rgba(0,0,0,0.52)' }}
+            role="dialog"
+            aria-modal="true"
+            onMouseDown={() => closeVideoSearch()}
+          >
+            <div
+              className="w-[min(92vw,720px)] mt-[10vh] rounded-xl border p-3 shadow-2xl"
+              style={{
+                background: 'var(--menu-bg)',
+                borderColor: 'var(--menu-border)',
+                boxShadow: 'var(--menu-shadow)',
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between gap-3 px-1 pb-2">
+                <div>
+                  <div className="text-sm font-semibold text-themeText-100">Find Video</div>
+                  <div className="text-[11px] text-themeText-400">
+                    {filteredVideoSearchItems.length} / {videoSearchItems.length}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="rounded px-2 py-1 text-sm text-themeText-200 hover:bg-themeBg-hover"
+                  onClick={closeVideoSearch}
+                >
+                  Close
+                </button>
+              </div>
+
+              <input
+                ref={videoSearchInputRef}
+                type="text"
+                value={videoSearchQuery}
+                placeholder="Search by file name..."
+                className="w-full rounded-lg border bg-[var(--app-bg)] px-3 py-2 text-sm text-themeText-100 outline-none"
+                style={{ borderColor: 'var(--menu-border)' }}
+                onChange={(e) => setVideoSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    e.preventDefault()
+                    closeVideoSearch()
+                    return
+                  }
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault()
+                    setVideoSearchActiveIndex((index) =>
+                      filteredVideoSearchItems.length === 0
+                        ? 0
+                        : Math.min(index + 1, filteredVideoSearchItems.length - 1),
+                    )
+                    return
+                  }
+                  if (e.key === 'ArrowUp') {
+                    e.preventDefault()
+                    setVideoSearchActiveIndex((index) =>
+                      filteredVideoSearchItems.length === 0 ? 0 : Math.max(index - 1, 0),
+                    )
+                    return
+                  }
+                  if (e.key === 'Enter' && activeVideoSearchItem) {
+                    e.preventDefault()
+                    centerViewportOnItem(activeVideoSearchItem.id)
+                    closeVideoSearch()
+                  }
+                }}
+              />
+
+              <div className="mt-3 max-h-[56vh] overflow-y-auto rounded-lg border" style={{ borderColor: 'var(--theme-divider)' }}>
+                {filteredVideoSearchItems.length === 0 ? (
+                  <div className="px-3 py-8 text-center text-sm text-themeText-400">No videos found</div>
+                ) : (
+                  <div className="p-1">
+                    {filteredVideoSearchItems.map((item, index) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className="w-full rounded-md px-3 py-2 text-left transition-colors"
+                        style={{
+                          background: index === videoSearchActiveIndex ? 'var(--theme-bg-active)' : 'transparent',
+                        }}
+                        onMouseEnter={() => setVideoSearchActiveIndex(index)}
+                        onClick={() => {
+                          centerViewportOnItem(item.id)
+                          closeVideoSearch()
+                        }}
+                      >
+                        <div className="truncate text-sm text-themeText-100">{item.fileName}</div>
+                        <div className="text-[11px] text-themeText-400">
+                          x {Math.round(item.x)} · y {Math.round(item.y)} · {Math.round(item.width)}x{Math.round(item.height)}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
+
+      {sourcePathModalOpen &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[11010] flex items-start justify-center p-4"
+            style={{ background: 'rgba(0,0,0,0.52)' }}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="selected-source-path-title"
+            onMouseDown={() => closeSourcePathModal()}
+          >
+            <div
+              className="w-[min(92vw,760px)] mt-[14vh] rounded-xl border p-3 shadow-2xl"
+              style={{
+                background: 'var(--menu-bg)',
+                borderColor: 'var(--menu-border)',
+                boxShadow: 'var(--menu-shadow)',
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between gap-3 px-1 pb-2">
+                <div>
+                  <div id="selected-source-path-title" className="text-sm font-semibold text-themeText-100">
+                    Selected File Path
+                  </div>
+                  <div className="text-[11px] text-themeText-400">
+                    Path is already selected, so you can copy it immediately.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="rounded px-2 py-1 text-sm text-themeText-200 hover:bg-themeBg-hover"
+                  onClick={closeSourcePathModal}
+                >
+                  Close
+                </button>
+              </div>
+
+              <input
+                ref={sourcePathInputRef}
+                type="text"
+                readOnly
+                value={selectedSourcePath}
+                className="w-full rounded-lg border bg-[var(--app-bg)] px-3 py-2 text-sm text-themeText-100 outline-none"
+                style={{ borderColor: 'var(--menu-border)' }}
+                onFocus={(e) => e.currentTarget.select()}
+                onClick={(e) => e.currentTarget.select()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape' || e.key === 'Enter') {
+                    e.preventDefault()
+                    closeSourcePathModal()
+                  }
+                }}
+              />
+            </div>
+          </div>,
+          document.body,
+        )}
+
       {ctxMenu &&
         createPortal(
           <div
+            ref={canvasMenuRef}
             data-canvas-ctx-menu="true"
             className="fixed z-[10000] rounded-lg border p-1.5 min-w-[220px]"
             style={{
-              left: ctxMenu.x,
-              top: ctxMenu.y,
+              left: canvasMenuPosition?.left ?? ctxMenu.x,
+              top: canvasMenuPosition?.top ?? ctxMenu.y,
               borderColor: 'var(--menu-border)',
               background: 'var(--menu-bg)',
               boxShadow: 'var(--menu-shadow)',
@@ -1056,40 +1685,67 @@ export const Canvas: React.FC = () => {
                   Copy
                 </button>
                 {ctxMenu.kind === 'video' ? (
-                  <button
-                    type="button"
-                    className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
-                    onClick={() => {
-                      const state = useCanvasStore.getState()
-                      const vid = videoRegistry.get(ctxMenu.itemId!)
-                      if (!vid) return
-                      const cap = captureVideoFrame(vid)
-                      const { x: sx, y: sy } = lastMouseScreen.current
-                      const { x: vx, y: vy, scale } = state.viewport
-                      const worldX = (sx - vx) / scale
-                      const worldY = (sy - vy) / scale
-                      const view = imageTileViewSize(cap.width, cap.height)
-                      const img: ImageItem = {
-                        type: 'image',
-                        id: `image-${Date.now()}`,
-                        x: worldX + 24,
-                        y: worldY + 24,
-                        width: view.width,
-                        height: view.height,
-                        srcUrl: cap.dataUrl,
-                        storage: 'legacy-inline',
-                        sourceVideoId: ctxMenu.itemId!,
-                        naturalWidth: cap.width,
-                        naturalHeight: cap.height,
-                        fileName: 'Frame',
-                      }
-                      addItem(img)
-                      setSelection([img.id])
-                      setCtxMenu(null)
-                    }}
-                  >
-                    Capture frame (F3)
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
+                      onClick={() => {
+                        const state = useCanvasStore.getState()
+                        const vid = videoRegistry.get(ctxMenu.itemId!)
+                        if (!vid) return
+                        const cap = captureVideoFrame(vid)
+                        const { x: sx, y: sy } = lastMouseScreen.current
+                        const { x: vx, y: vy, scale } = state.viewport
+                        const worldX = (sx - vx) / scale
+                        const worldY = (sy - vy) / scale
+                        const view = imageTileViewSize(cap.width, cap.height)
+                        const img: ImageItem = {
+                          type: 'image',
+                          id: `image-${Date.now()}`,
+                          x: worldX + 24,
+                          y: worldY + 24,
+                          width: view.width,
+                          height: view.height,
+                          srcUrl: cap.dataUrl,
+                          storage: 'legacy-inline',
+                          sourceVideoId: ctxMenu.itemId!,
+                          naturalWidth: cap.width,
+                          naturalHeight: cap.height,
+                          fileName: 'Frame',
+                        }
+                        addItem(img)
+                        setSelection([img.id])
+                        setCtxMenu(null)
+                      }}
+                    >
+                      Capture frame (F3)
+                    </button>
+                    <div className="px-2 pt-2 pb-1 text-[11px] text-themeText-400 select-none">Palette</div>
+                    <div className="px-2 pb-1 grid grid-cols-5 gap-1.5">
+                      {BACKDROP_COLOR_PRESETS.map((color) => {
+                        const isActive = (ctxVideoItem?.uiColor ?? DEFAULT_VIDEO_UI_COLOR).toLowerCase() === color.toLowerCase()
+                        return (
+                          <button
+                            key={color}
+                            type="button"
+                            className={[
+                              'h-7 w-7 rounded-md border transition-transform hover:scale-105',
+                              isActive ? 'ring-2 ring-zinc-100/70' : '',
+                            ].join(' ')}
+                            style={{
+                              background: color,
+                              borderColor: isActive ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.12)',
+                            }}
+                            title={color}
+                            onClick={() => {
+                              applyVideoUiColor(ctxMenu.itemId!, color)
+                              setCtxMenu(null)
+                            }}
+                          />
+                        )
+                      })}
+                    </div>
+                  </>
                 ) : (
                   <button
                     type="button"
@@ -1106,135 +1762,19 @@ export const Canvas: React.FC = () => {
               </>
             )}
 
-            {/* --- CREATION ACTIONS --- */}
-            <button
-              type="button"
-              className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
-              onClick={() => {
-                const state = useCanvasStore.getState()
-                const { x: sx, y: sy } = lastMouseScreen.current
-                const { x: vx, y: vy, scale } = state.viewport
-                const x = (sx - vx) / scale - NOTE_W / 2
-                const y = (sy - vy) / scale - NOTE_H / 2
-                const note: NoteItem = {
-                  type: 'note',
-                  id: `note-${Date.now()}`,
-                  x,
-                  y,
-                  width: NOTE_W,
-                  height: NOTE_H,
-                  text: '',
-                }
-                addItem(note)
-                selectOne(note.id)
-                setCtxMenu(null)
-              }}
-            >
-              New note (Ctrl+N)
-            </button>
-            <button
-              type="button"
-              className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
-              onClick={() => {
-                const state = useCanvasStore.getState()
-                const { x: sx, y: sy } = lastMouseScreen.current
-                const { x: vx, y: vy, scale } = state.viewport
-                const worldX = (sx - vx) / scale
-                const worldY = (sy - vy) / scale
-                const backdrop = createBackdropItem({ id: `backdrop-${Date.now()}`, x: worldX - 400, y: worldY - 300, width: 800, height: 600 })
-                addItem(backdrop)
-                selectOne(backdrop.id)
-                setCtxMenu(null)
-              }}
-            >
-              Add backdrop (B)
-            </button>
-            <div className="h-px my-1 mx-1" style={{ background: 'var(--theme-divider)' }} />
-
-            {/* --- VIEW & LAYOUT ACTIONS --- */}
-            <button
-              type="button"
-              className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors disabled:opacity-40"
-              disabled={useCanvasStore.getState().clipboard.length === 0}
-              onClick={() => {
-                const state = useCanvasStore.getState()
-                const { x: sx, y: sy } = lastMouseScreen.current
-                const { x: vx, y: vy, scale } = state.viewport
-                state.pasteClipboard((sx - vx) / scale, (sy - vy) / scale)
-                setCtxMenu(null)
-              }}
-            >
-              Paste (Ctrl+V)
-            </button>
-            <button
-              type="button"
-              className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
-              onClick={() => {
-                gridAlignTiles()
-                setCtxMenu(null)
-              }}
-            >
-              Grid align (\)
-            </button>
-            <button
-              type="button"
-              className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
-              onClick={() => {
-                layoutMediaRow()
-                setCtxMenu(null)
-              }}
-            >
-              Layout media row (L)
-            </button>
-            <button
-              type="button"
-              className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
-              onClick={() => {
-                const el = containerRef.current
-                if (!el) return
-                const { width, height } = el.getBoundingClientRect()
-                frameAllItemsInViewport(width, height)
-                setCtxMenu(null)
-              }}
-            >
-              Fit all (A)
-            </button>
-            <div className="h-px my-1 mx-1" style={{ background: 'var(--theme-divider)' }} />
-
-            {/* --- APP CONTROL --- */}
-            <button
-              type="button"
-              className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
-              onClick={() => {
-                window.dispatchEvent(new CustomEvent('app-open-settings'))
-                setCtxMenu(null)
-              }}
-            >
-              Settings
-            </button>
-            {ctxMenu.kind === 'canvas' && (
-              <button
-                type="button"
-                className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
-                onClick={async () => {
-                  const next = !alwaysOnTop
-                  setAlwaysOnTop(next)
-                  setCtxMenu(null)
-                }}
-              >
-                {alwaysOnTop ? 'Disable always on top' : 'Enable always on top'}
-              </button>
-            )}
-            <button
-              type="button"
-              className="w-full text-left px-2 py-1.5 text-sm text-red-500 hover:bg-red-500/10 rounded transition-colors font-medium mt-1"
-              onClick={() => {
-                window.electronAPI?.projectAPI.confirmCloseWindow()
-                setCtxMenu(null)
-              }}
-            >
-              Quit / Exit
-            </button>
+            <CanvasCommonMenuSection
+              clipboardAvailable={useCanvasStore.getState().clipboard.length > 0}
+              alwaysOnTop={alwaysOnTop}
+              onNewNote={runCommonMenuNewNote}
+              onAddBackdrop={runCommonMenuAddBackdrop}
+              onPaste={runCommonMenuPaste}
+              onGridAlign={runCommonMenuGridAlign}
+              onLayoutMediaRow={runCommonMenuLayoutMediaRow}
+              onFitAll={runCommonMenuFitAll}
+              onSettings={runCommonMenuSettings}
+              onToggleAlwaysOnTop={runCommonMenuToggleAlwaysOnTop}
+              onQuit={runCommonMenuQuit}
+            />
           </div>,
           document.body,
         )}

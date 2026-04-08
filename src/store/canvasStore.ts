@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { CanvasItem, ItemUpdate } from '../types'
 import type { DeserializedProject, ProjectMeta, ViewportState } from '../types/project'
+import { computeAttachedItemIds } from '../utils/backdrops'
 import { requestMediaWarmup } from '../utils/warmupCanvasMedia'
 import { useUiStore } from './uiStore'
 
@@ -38,6 +39,27 @@ function sortByCanvasReadingOrder<T extends { x: number; y: number }>(items: T[]
   return [...items].sort((a, b) => (a.y === b.y ? a.x - b.x : a.y - b.y))
 }
 
+function normalizeBackdropAttachments(items: CanvasItem[]): CanvasItem[] {
+  return items.map((item) => {
+    if (item.type !== 'backdrop') return item
+    const attachmentBoundsHeight = item.collapsed ? (item.expandedHeight ?? item.height) : item.height
+    return {
+      ...item,
+      attachedVideoIds: computeAttachedItemIds(
+        {
+          id: item.id,
+          x: item.x,
+          y: item.y,
+          width: item.width,
+          height: attachmentBoundsHeight,
+          labelSize: item.labelSize,
+        },
+        items.filter((candidate) => candidate.id !== item.id),
+      ),
+    }
+  })
+}
+
 interface CanvasState {
   items: CanvasItem[]
   selectedIds: string[]
@@ -67,6 +89,7 @@ interface CanvasState {
   setViewport: (v: Partial<Viewport>) => void
   resetViewport: () => void
   frameAllItemsInViewport: (containerWidth: number, containerHeight: number) => void
+  frameItemInViewport: (id: string, containerWidth: number, containerHeight: number, pad?: number) => void
   layoutMediaRow: () => void
   gridAlignTiles: () => void
   undo: () => void
@@ -224,6 +247,30 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     const ch = Math.max(1, containerHeight)
     const availW = Math.max(1, cw - 2 * pad)
     const availH = Math.max(1, ch - 2 * pad)
+
+    let scale = Math.min(availW / bw, availH / bh)
+    scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale))
+
+    const x = cw / 2 - cx * scale
+    const y = ch / 2 - cy * scale
+
+    set({ viewport: { x, y, scale } })
+  },
+
+  frameItemInViewport: (id, containerWidth, containerHeight, pad = 24) => {
+    const state = get()
+    const item = state.items.find((i) => i.id === id)
+    if (!item) return
+
+    const cw = Math.max(1, containerWidth)
+    const ch = Math.max(1, containerHeight)
+    const availW = Math.max(1, cw - 2 * pad)
+    const availH = Math.max(1, ch - 2 * pad)
+
+    const bw = Math.max(1, item.width)
+    const bh = Math.max(1, item.height)
+    const cx = item.x + item.width / 2
+    const cy = item.y + item.height / 2
 
     let scale = Math.min(availW / bw, availH / bh)
     scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale))
@@ -526,6 +573,6 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       updatedAt: now,
     }
     set({ projectMeta: meta })
-    return { items: state.items, viewport: state.viewport, meta }
+    return { items: normalizeBackdropAttachments(state.items), viewport: state.viewport, meta }
   },
 }))

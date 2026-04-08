@@ -34,9 +34,10 @@ interface ImageTileProps {
   item: ImageItem
   scale: number
   isSelected: boolean
+  isHidden?: boolean
 }
 
-export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected }) => {
+export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected, isHidden }) => {
   const updateItem   = useCanvasStore((s) => s.updateItem)
   const updateItemsBatch = useCanvasStore((s) => s.updateItemsBatch)
   const selectOne    = useCanvasStore((s) => s.selectOne)
@@ -55,9 +56,11 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
   // Smooth resize: keep store synced while dragging resize handles (throttled to rAF).
   const resizeRafRef = useRef<number>(0)
   const pendingResizeRef = useRef<null | { x: number; y: number; width: number; height: number }>(null)
+  const resizeActiveRef = useRef(false)
 
   const scheduleResizeUpdate = useCallback(
     (next: { x: number; y: number; width: number; height: number }) => {
+      if (!resizeActiveRef.current) return
       pendingResizeRef.current = next
       if (resizeRafRef.current) return
       resizeRafRef.current = requestAnimationFrame(() => {
@@ -164,6 +167,12 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
       tileDomRegistry.delete(item.id)
     }
   }, [item.id])
+
+  const handleSelect = useCallback((e: React.MouseEvent<HTMLElement>) => {
+    if (e.ctrlKey || e.metaKey) toggleSelect(item.id)
+    else if (!isSelected) selectOne(item.id)
+  }, [isSelected, item.id, selectOne, toggleSelect])
+  const dragHandleClassName = isEditing ? 'img-drag-handle' : 'image-root-drag-handle'
 
   const prevEditingRef = useRef(false)
   useEffect(() => {
@@ -427,6 +436,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
       scale={scale}
       minWidth={isEditing ? 200 : 120}
       minHeight={isEditing ? 160 : 100}
+      cancel=".image-no-drag, button, canvas"
       onDragStart={() => {
         const state = useCanvasStore.getState()
         if (!isSelected || state.selectedIds.length <= 1) {
@@ -457,12 +467,12 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
       onDragStop={(_, d) => {
         const origins = dragOriginsRef.current
         if (!origins || origins.size <= 1) {
-          updateItem(item.id, { x: d.x, y: d.y })
+          updateItemsBatch([{ id: item.id, updates: { x: d.x, y: d.y } }], { recordHistory: true })
           return
         }
         const currentOrigin = origins.get(item.id)
         if (!currentOrigin) {
-          updateItem(item.id, { x: d.x, y: d.y })
+          updateItemsBatch([{ id: item.id, updates: { x: d.x, y: d.y } }], { recordHistory: true })
           return
         }
         const dx = d.x - currentOrigin.x
@@ -489,19 +499,41 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
         if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return
         scheduleResizeUpdate({ x: position.x, y: position.y, width: w, height: h })
       }}
-      onResizeStop={(_, __, ref, ___, pos) =>
-        updateItem(item.id, {
-          x: pos.x, y: pos.y,
-          width:  parseInt(ref.style.width,  10),
-          height: parseInt(ref.style.height, 10),
-        })
-      }
-      style={{ zIndex: isEditing ? 30 : 15, pointerEvents: 'auto' }}
-      dragHandleClassName="img-drag-handle"
-      onMouseDown={(e) => {
+      onResizeStart={(e) => {
+        if ('button' in e && typeof e.button === 'number' && e.button !== 0) return false
+        resizeActiveRef.current = true
+        updateItemsBatch([{ id: item.id, updates: {} }], { recordHistory: true })
+      }}
+      onResizeStop={(_, __, ref, ___, pos) => {
+        if (!resizeActiveRef.current) return
+        resizeActiveRef.current = false
+        updateItemsBatch(
+          [{
+            id: item.id,
+            updates: {
+              x: pos.x, y: pos.y,
+              width:  parseInt(ref.style.width,  10),
+              height: parseInt(ref.style.height, 10),
+            },
+          }],
+          { recordHistory: false },
+        )
+      }}
+      enableResizing={true}
+      style={{ 
+        zIndex: isEditing ? 30 : 15, 
+        pointerEvents: isHidden ? 'none' : 'auto',
+        visibility: isHidden ? 'hidden' : 'visible'
+      }}
+      dragHandleClassName={dragHandleClassName}
+      onMouseDown={handleSelect}
+      onDoubleClick={(e: any) => {
         e.stopPropagation()
-        if (e.ctrlKey || e.metaKey) toggleSelect(item.id)
-        else if (!isSelected) selectOne(item.id)
+        const root = document.getElementById('previewv-canvas-root')
+        if (root) {
+          const rect = root.getBoundingClientRect()
+          useCanvasStore.getState().frameItemInViewport(item.id, rect.width, rect.height)
+        }
       }}
     >
       <div
@@ -509,15 +541,23 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
         data-image-tile-root="true"
         data-item-id={item.id}
         className={[
+          dragHandleClassName,
           'w-full h-full flex flex-col rounded-lg overflow-hidden shadow-2xl bg-zinc-900 border',
           isSelected
             ? 'border-emerald-300 ring-2 ring-emerald-400/80 shadow-[0_0_0_1px_rgba(16,185,129,0.30),0_0_26px_rgba(16,185,129,0.22)]'
             : 'border-zinc-700/60',
         ].join(' ')}
+        onMouseDown={handleSelect}
       >
 
         {/* ── Toolbar / drag handle ──────────────────────────────────── */}
-        <div className="img-drag-handle flex items-center gap-1 px-2 h-8 min-h-[32px] bg-zinc-800/90 cursor-grab active:cursor-grabbing shrink-0 select-none overflow-hidden">
+        <div
+          className={[
+            isEditing ? 'img-drag-handle' : '',
+            !isEditing ? 'image-no-drag' : '',
+            'flex items-center gap-1 px-2 h-8 min-h-[32px] bg-zinc-800/90 cursor-grab active:cursor-grabbing shrink-0 select-none overflow-hidden',
+          ].filter(Boolean).join(' ')}
+        >
 
           <span className="text-[10px] font-semibold text-emerald-500 shrink-0">IMG</span>
           <div className="w-px h-4 bg-zinc-700 mx-0.5 shrink-0" />
@@ -537,7 +577,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
               title={{ pencil: 'Pencil  (draw)', line: 'Line', eraser: 'Eraser' }[t]}
               onMouseDown={(e) => { e.stopPropagation(); setTool(t) }}
               className={[
-                'w-6 h-6 flex items-center justify-center rounded text-sm shrink-0',
+                'image-no-drag w-6 h-6 flex items-center justify-center rounded text-sm shrink-0',
                 tool === t ? 'bg-zinc-600 text-white' : 'text-zinc-400 hover:text-zinc-200',
               ].join(' ')}
             >
@@ -556,7 +596,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected })
                 key={c}
                 title={c}
                 onMouseDown={(e) => { e.stopPropagation(); setColor(c) }}
-                className="w-3.5 h-3.5 rounded-full border border-zinc-600 hover:scale-125 transition-transform shrink-0"
+                className="image-no-drag w-3.5 h-3.5 rounded-full border border-zinc-600 hover:scale-125 transition-transform shrink-0"
                 style={{
                   backgroundColor: c,
                   boxShadow: color === c ? '0 0 0 2px white' : 'none',

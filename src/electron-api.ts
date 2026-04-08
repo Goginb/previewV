@@ -10,6 +10,7 @@ export interface ElectronWindowAPI {
 
 /** Типы API, проброшенные из electron/preload (см. contextBridge). */
 export interface ElectronProjectAPI {
+  readClipboardText: () => string
   openProjectDialog: () => Promise<{ path: string; project: DeserializedProject } | null>
   openProjectByPath: (path: string) => Promise<{ path: string; project: DeserializedProject } | null>
   saveProject: (payload: {

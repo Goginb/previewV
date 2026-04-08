@@ -1,8 +1,10 @@
 import { useEffect, useRef, useCallback } from 'react'
 import { useCanvasStore, MIN_SCALE, MAX_SCALE } from '../store/canvasStore'
+import { isTypingTarget } from '../utils/keyboard'
 
 const ZOOM_SENSITIVITY = 0.001
 const ZOOM_FACTOR_WHEEL = 0.12
+const PAN_WHEEL_GUARD_MS = 120
 
 /** Shared with Canvas so marquee selection does not start while Space-panning */
 export const spacePanActiveRef = { current: false }
@@ -27,9 +29,9 @@ export function useCanvasPanZoom(containerRef: React.RefObject<HTMLElement | nul
     (nextViewport: Partial<{ x: number; y: number; scale: number }>) => {
       const current = viewportRef.current
       const merged = {
-        x: Number.isFinite(nextViewport.x) ? nextViewport.x : current.x,
-        y: Number.isFinite(nextViewport.y) ? nextViewport.y : current.y,
-        scale: Number.isFinite(nextViewport.scale) ? nextViewport.scale : current.scale,
+        x: Number.isFinite(nextViewport.x) ? (nextViewport.x as number) : current.x,
+        y: Number.isFinite(nextViewport.y) ? (nextViewport.y as number) : current.y,
+        scale: Number.isFinite(nextViewport.scale) ? (nextViewport.scale as number) : current.scale,
       }
       pendingViewportRef.current = merged
       viewportRef.current = merged
@@ -49,10 +51,12 @@ export function useCanvasPanZoom(containerRef: React.RefObject<HTMLElement | nul
   const panStart = useRef({ x: 0, y: 0 })
   const panOrigin = useRef({ x: 0, y: 0 })
   const spaceDown = useRef(false)
+  const wheelGuardUntilRef = useRef(0)
 
   const handleWheel = useCallback(
     (e: WheelEvent) => {
       e.preventDefault()
+      if (isPanning.current || Date.now() < wheelGuardUntilRef.current) return
 
       const { x, y, scale } = viewportRef.current
       if (!Number.isFinite(scale) || scale <= 0) return
@@ -89,6 +93,7 @@ export function useCanvasPanZoom(containerRef: React.RefObject<HTMLElement | nul
     (e: MouseEvent) => {
       if (e.button === 1) {
         e.preventDefault()
+        wheelGuardUntilRef.current = Date.now() + PAN_WHEEL_GUARD_MS
         startPan(e.clientX, e.clientY)
         return
       }
@@ -116,11 +121,12 @@ export function useCanvasPanZoom(containerRef: React.RefObject<HTMLElement | nul
   const stopPan = useCallback(() => {
     if (!isPanning.current) return
     isPanning.current = false
+    wheelGuardUntilRef.current = Math.max(wheelGuardUntilRef.current, Date.now() + PAN_WHEEL_GUARD_MS)
     document.body.style.cursor = ''
   }, [])
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    if (e.code === 'Space' && !e.repeat) {
+    if (e.code === 'Space' && !e.repeat && !isTypingTarget(e)) {
       e.preventDefault()
       spaceDown.current = true
       spacePanActiveRef.current = true

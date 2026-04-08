@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { clipboard, contextBridge, ipcRenderer } from 'electron'
 
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setAutosaveEnabled: (enabled: boolean) => ipcRenderer.invoke('autosave:set-enabled', enabled),
   },
   projectAPI: {
+    readClipboardText: () => clipboard.readText(),
     openProjectDialog: () => ipcRenderer.invoke('open-project-dialog'),
     openProjectByPath: (path: string) =>
       ipcRenderer.invoke('open-project-by-path', { path }),

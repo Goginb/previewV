@@ -904,7 +904,8 @@ async function refreshApplicationMenu() {
         { type: 'separator' },
         {
           label: 'Cut',
-          enabled: false,
+          accelerator: 'CmdOrCtrl+X',
+          click: () => sendEdit('cut'),
         },
         {
           label: 'Copy',

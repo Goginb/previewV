@@ -38,6 +38,8 @@ export type ProjectCanvasItemV1 =
       fileName: string
       /** local absolute path on disk */
       videoPath: string
+      aspectApplied?: boolean
+      uiColor?: string
     }
   | {
       type: 'image'
@@ -62,6 +64,7 @@ export type ProjectCanvasItemV1 =
       width: number
       height: number
       text: string
+      fontSize?: number
     }
 
 export type ProjectCanvasItemV2 =
@@ -75,6 +78,8 @@ export type ProjectCanvasItemV2 =
       fileName: string
       /** local absolute path on disk */
       videoPath: string
+      aspectApplied?: boolean
+      uiColor?: string
     }
   | {
       type: 'image'
@@ -116,6 +121,7 @@ export type ProjectCanvasItemV2 =
       width: number
       height: number
       text: string
+      fontSize?: number
     }
   | {
       type: 'backdrop'
@@ -131,6 +137,7 @@ export type ProjectCanvasItemV2 =
       labelSize: 'sm' | 'md' | 'lg'
       collapsed: boolean
       expandedHeight?: number
+      displayMode?: 'solid' | 'frame'
       attachedVideoIds: string[]
     }
 

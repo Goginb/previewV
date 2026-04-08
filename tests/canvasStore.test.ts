@@ -99,3 +99,61 @@ test('syncSavedProjectState replaces runtime items while clearing dirty state', 
   assert.equal(state.items[0]?.x, 500)
   assert.deepEqual(state.selectedIds, ['note-a'])
 })
+
+test('getProjectDataForSave refreshes nested backdrop attachments from geometry', () => {
+  resetStore()
+  useCanvasStore.setState({
+    items: [
+      {
+        type: 'backdrop',
+        id: 'outer-bd',
+        x: 0,
+        y: 0,
+        width: 1000,
+        height: 800,
+        color: '#1f2937',
+        brightness: 40,
+        saturation: 100,
+        label: 'Outer',
+        labelSize: 'md',
+        displayMode: 'solid',
+        collapsed: false,
+        expandedHeight: 800,
+        attachedVideoIds: [],
+      },
+      {
+        type: 'backdrop',
+        id: 'inner-bd',
+        x: 100,
+        y: 180,
+        width: 400,
+        height: 280,
+        color: '#0f766e',
+        brightness: 40,
+        saturation: 100,
+        label: 'Inner',
+        labelSize: 'sm',
+        displayMode: 'frame',
+        collapsed: false,
+        expandedHeight: 280,
+        attachedVideoIds: [],
+      },
+      {
+        type: 'note',
+        id: 'note-a',
+        x: 140,
+        y: 300,
+        width: 160,
+        height: 120,
+        text: 'nested',
+      },
+    ],
+  })
+
+  const projectData = useCanvasStore.getState().getProjectDataForSave()
+  const outer = projectData.items.find((item) => item.id === 'outer-bd') as Extract<CanvasItem, { type: 'backdrop' }>
+  const inner = projectData.items.find((item) => item.id === 'inner-bd') as Extract<CanvasItem, { type: 'backdrop' }>
+
+  assert.deepEqual(outer.attachedVideoIds, ['inner-bd', 'note-a'])
+  assert.deepEqual(inner.attachedVideoIds, ['note-a'])
+})

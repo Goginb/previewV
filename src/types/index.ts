@@ -4,6 +4,7 @@ interface BaseItem {
   y: number
   width: number
   height: number
+  aspectApplied?: boolean
 }
 
 export type ImageStorage = 'linked' | 'asset' | 'legacy-inline'
@@ -12,11 +13,13 @@ export interface VideoItem extends BaseItem {
   type: 'video'
   srcUrl: string
   fileName: string
+  uiColor?: string
 }
 
 export interface NoteItem extends BaseItem {
   type: 'note'
   text: string
+  fontSize?: number
 }
 
 export interface ImageItem extends BaseItem {
@@ -60,7 +63,9 @@ export interface BackdropItem extends BaseItem {
   collapsed: boolean
   /** Height before collapse, used to restore on expand. */
   expandedHeight?: number
-  /** Video ids attached to this backdrop (moved together when backdrop is dragged normally). */
+  /** Visual mode: solid fill or frame only. */
+  displayMode: 'solid' | 'frame'
+  /** Descendant item ids attached to this backdrop subtree (moved/hidden together). */
   attachedVideoIds: string[]
 }
 
@@ -74,6 +79,7 @@ export type ItemUpdate = {
   height?: number
   // NoteItem
   text?: string
+  fontSize?: number
   // ImageItem
   srcUrl?: string
   storage?: ImageStorage
@@ -85,13 +91,16 @@ export type ItemUpdate = {
   projectAssetPath?: string
   // BackdropItem
   color?: string
+  uiColor?: string
   brightness?: number
   saturation?: number
   label?: string
   labelSize?: 'sm' | 'md' | 'lg'
   collapsed?: boolean
   expandedHeight?: number
+  displayMode?: 'solid' | 'frame'
   attachedVideoIds?: string[]
+  aspectApplied?: boolean
 }
 
 // Backward-compat alias

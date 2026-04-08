@@ -46,6 +46,8 @@ test('serializeProject writes v2 linked preview images and asset images distinct
       height: 180,
       fileName: 'clip.mp4',
       srcUrl: localPathToMediaUrl('C:\\media\\clip.mp4'),
+      aspectApplied: true,
+      uiColor: '#0f766e',
     } satisfies VideoItem,
     {
       type: 'image',
@@ -89,6 +91,22 @@ test('serializeProject writes v2 linked preview images and asset images distinct
   })
 
   assert.equal(serialized.version, 2)
+
+  const video = serialized.items.find(
+    (item) => item.type === 'video' && item.id === 'video-1',
+  )
+  assert.deepEqual(video, {
+    type: 'video',
+    id: 'video-1',
+    x: 0,
+    y: 0,
+    width: 320,
+    height: 180,
+    fileName: 'clip.mp4',
+    videoPath: 'C:\\media\\clip.mp4',
+    aspectApplied: true,
+    uiColor: '#0f766e',
+  })
 
   const linked = serialized.items.find(
     (item) => item.type === 'image' && item.id === 'img-linked',
@@ -193,6 +211,7 @@ test('serializeProject preserves backdrop items', () => {
       saturation: 130,
       label: 'Group A',
       labelSize: 'md',
+      displayMode: 'solid',
       collapsed: false,
       expandedHeight: 120,
       attachedVideoIds: ['tile-1', 'tile-2'],
@@ -219,6 +238,7 @@ test('serializeProject preserves backdrop items', () => {
     saturation: 130,
     label: 'Group A',
     labelSize: 'md',
+    displayMode: 'solid',
     collapsed: false,
     expandedHeight: 120,
     attachedVideoIds: ['tile-1', 'tile-2'],
@@ -243,6 +263,7 @@ test('deserializeProject maps v2 backdrops', () => {
         saturation: 160,
         label: 'Group A',
         labelSize: 'lg',
+        displayMode: 'frame',
         collapsed: true,
         expandedHeight: 120,
         attachedVideoIds: ['tile-1'],
@@ -257,4 +278,101 @@ test('deserializeProject maps v2 backdrops', () => {
   assert.equal(backdrop.labelSize, 'lg')
   assert.equal(backdrop.brightness, 80)
   assert.equal(backdrop.saturation, 160)
+  assert.equal(backdrop.displayMode, 'frame')
+})
+
+test('serialize/deserialize preserves nested backdrops', () => {
+  const items: CanvasItem[] = [
+    {
+      type: 'backdrop',
+      id: 'outer-bd',
+      x: 0,
+      y: 0,
+      width: 1200,
+      height: 900,
+      color: '#1f2937',
+      brightness: 50,
+      saturation: 110,
+      label: 'Outer',
+      labelSize: 'md',
+      displayMode: 'frame',
+      collapsed: false,
+      expandedHeight: 900,
+      attachedVideoIds: ['inner-bd', 'video-1'],
+    },
+    {
+      type: 'backdrop',
+      id: 'inner-bd',
+      x: 120,
+      y: 180,
+      width: 640,
+      height: 420,
+      color: '#0f766e',
+      brightness: 60,
+      saturation: 120,
+      label: 'Inner',
+      labelSize: 'sm',
+      displayMode: 'solid',
+      collapsed: false,
+      expandedHeight: 420,
+      attachedVideoIds: ['video-1'],
+    },
+    {
+      type: 'video',
+      id: 'video-1',
+      x: 180,
+      y: 320,
+      width: 320,
+      height: 180,
+      fileName: 'clip.mp4',
+      srcUrl: localPathToMediaUrl('C:\\media\\clip.mp4'),
+      aspectApplied: true,
+    } satisfies VideoItem,
+  ]
+
+  const serialized = serializeProject({
+    items,
+    viewport: { x: 0, y: 0, scale: 1 },
+    meta: META,
+    assetPathForImage: () => 'unused.png',
+  })
+
+  const reopened = deserializeProject(serialized)
+  const outer = reopened.items.find((item) => item.type === 'backdrop' && item.id === 'outer-bd') as any
+  const inner = reopened.items.find((item) => item.type === 'backdrop' && item.id === 'inner-bd') as any
+
+  assert.ok(outer)
+  assert.ok(inner)
+  assert.deepEqual(outer.attachedVideoIds, ['inner-bd', 'video-1'])
+  assert.deepEqual(inner.attachedVideoIds, ['video-1'])
+  assert.equal(outer.displayMode, 'frame')
+  assert.equal(inner.displayMode, 'solid')
+})
+
+test('deserializeProject preserves video aspectApplied flag', () => {
+  const project = deserializeProject({
+    version: 2,
+    viewport: { x: 0, y: 0, scale: 1 },
+    meta: META,
+    items: [
+      {
+        type: 'video',
+        id: 'video-1',
+        x: 10,
+        y: 20,
+        width: 500,
+        height: 240,
+        fileName: 'clip.mp4',
+        videoPath: 'C:\\media\\clip.mp4',
+        aspectApplied: true,
+        uiColor: '#b45309',
+      },
+    ],
+  })
+
+  const video = project.items[0] as VideoItem
+  assert.equal(video.aspectApplied, true)
+  assert.equal(video.uiColor, '#b45309')
+  assert.equal(video.width, 500)
+  assert.equal(video.height, 240)
 })

@@ -66,6 +66,12 @@ function optionalBackdropLabelSize(v: unknown): 'sm' | 'md' | 'lg' | undefined {
   return undefined
 }
 
+function optionalBackdropDisplayMode(v: unknown): 'solid' | 'frame' | undefined {
+  if (v === undefined) return undefined
+  if (v === 'solid' || v === 'frame') return v
+  return undefined
+}
+
 function optionalBackdropBrightness(v: unknown): number | undefined {
   if (v === undefined) return undefined
   if (typeof v !== 'number' || Number.isNaN(v)) return undefined
@@ -132,7 +138,23 @@ function validateItemV1(raw: unknown): ProjectCanvasItemV1 {
   if (type === 'video') {
     const fileName = mustBeString(raw.fileName, 'item.fileName')
     const videoPath = mustBeString(raw.videoPath, 'item.videoPath')
-    return { type: 'video', id, x, y, width, height, fileName, videoPath }
+    const aspectApplied = raw.aspectApplied
+    const uiColor = optionalString(raw.uiColor, 'item.uiColor')
+    if (aspectApplied !== undefined && typeof aspectApplied !== 'boolean') {
+      throw new Error('Invalid project: field "item.aspectApplied" must be a boolean')
+    }
+    return {
+      type: 'video',
+      id,
+      x,
+      y,
+      width,
+      height,
+      fileName,
+      videoPath,
+      ...(aspectApplied !== undefined ? { aspectApplied } : {}),
+      ...(uiColor !== undefined ? { uiColor } : {}),
+    }
   }
 
   if (type === 'image') {
@@ -163,7 +185,8 @@ function validateItemV1(raw: unknown): ProjectCanvasItemV1 {
 
   if (type === 'note') {
     const text = mustBeString(raw.text, 'item.text')
-    return { type: 'note', id, x, y, width, height, text }
+    const fontSize = optionalNumber(raw.fontSize, 'item.fontSize')
+    return { type: 'note', id, x, y, width, height, text, ...(fontSize ? { fontSize } : {}) }
   }
 
   throw new Error(`Invalid project: unknown item.type "${type}"`)
@@ -182,7 +205,23 @@ function validateItemV2(raw: unknown): ProjectCanvasItemV2 {
   if (type === 'video') {
     const fileName = mustBeString(raw.fileName, 'item.fileName')
     const videoPath = mustBeString(raw.videoPath, 'item.videoPath')
-    return { type: 'video', id, x, y, width, height, fileName, videoPath }
+    const aspectApplied = raw.aspectApplied
+    const uiColor = optionalString(raw.uiColor, 'item.uiColor')
+    if (aspectApplied !== undefined && typeof aspectApplied !== 'boolean') {
+      throw new Error('Invalid project: field "item.aspectApplied" must be a boolean')
+    }
+    return {
+      type: 'video',
+      id,
+      x,
+      y,
+      width,
+      height,
+      fileName,
+      videoPath,
+      ...(aspectApplied !== undefined ? { aspectApplied } : {}),
+      ...(uiColor !== undefined ? { uiColor } : {}),
+    }
   }
 
   if (type === 'image') {
@@ -238,13 +277,15 @@ function validateItemV2(raw: unknown): ProjectCanvasItemV2 {
 
   if (type === 'note') {
     const text = mustBeString(raw.text, 'item.text')
-    return { type: 'note', id, x, y, width, height, text }
+    const fontSize = optionalNumber(raw.fontSize, 'item.fontSize')
+    return { type: 'note', id, x, y, width, height, text, ...(fontSize ? { fontSize } : {}) }
   }
 
   if (type === 'backdrop') {
     const color = mustBeString(raw.color, 'item.color')
     const label = mustBeString(raw.label, 'item.label')
     const labelSize = optionalBackdropLabelSize(raw.labelSize) ?? 'md'
+    const displayMode = optionalBackdropDisplayMode(raw.displayMode) ?? 'solid'
     const brightness = optionalBackdropBrightness(raw.brightness) ?? 40
     const saturation = optionalBackdropSaturation(raw.saturation) ?? 100
     const collapsed = raw.collapsed
@@ -273,6 +314,7 @@ function validateItemV2(raw: unknown): ProjectCanvasItemV2 {
       saturation,
       label,
       labelSize,
+      displayMode,
       collapsed,
       ...(expandedHeight !== undefined ? { expandedHeight } : {}),
       attachedVideoIds,
@@ -314,6 +356,8 @@ export function serializeProject(params: SerializeProjectOptions): ProjectFileV2
         height: item.height,
         fileName: item.fileName,
         videoPath,
+        ...(item.aspectApplied !== undefined ? { aspectApplied: item.aspectApplied } : {}),
+        ...(item.uiColor !== undefined ? { uiColor: item.uiColor } : {}),
       }
     }
 
@@ -368,6 +412,7 @@ export function serializeProject(params: SerializeProjectOptions): ProjectFileV2
         saturation: typeof item.saturation === 'number' ? Math.max(0, Math.min(200, item.saturation)) : 100,
         label: item.label,
         labelSize: item.labelSize ?? 'md',
+        displayMode: item.displayMode ?? 'solid',
         collapsed: item.collapsed,
         ...(expandedHeight !== undefined ? { expandedHeight } : {}),
         attachedVideoIds: item.attachedVideoIds,
@@ -382,6 +427,7 @@ export function serializeProject(params: SerializeProjectOptions): ProjectFileV2
       width: item.width,
       height: item.height,
       text: item.text,
+      ...(item.fontSize ? { fontSize: item.fontSize } : {}),
     }
   })
 
@@ -422,6 +468,8 @@ export function deserializeProject(
           height: validated.height,
           fileName: validated.fileName,
           srcUrl: localPathToMediaUrl(validated.videoPath),
+          ...(validated.aspectApplied !== undefined ? { aspectApplied: validated.aspectApplied } : {}),
+          ...(validated.uiColor !== undefined ? { uiColor: validated.uiColor } : {}),
         }
         return video
       }
@@ -454,6 +502,7 @@ export function deserializeProject(
         width: validated.width,
         height: validated.height,
         text: validated.text,
+        ...(validated.fontSize ? { fontSize: validated.fontSize } : {}),
       }
       return note
     })
@@ -473,6 +522,8 @@ export function deserializeProject(
         height: validated.height,
         fileName: validated.fileName,
         srcUrl: localPathToMediaUrl(validated.videoPath),
+        ...(validated.aspectApplied !== undefined ? { aspectApplied: validated.aspectApplied } : {}),
+        ...(validated.uiColor !== undefined ? { uiColor: validated.uiColor } : {}),
       }
       return video
     }
@@ -533,6 +584,7 @@ export function deserializeProject(
         saturation: validated.saturation ?? 100,
         label: validated.label,
         labelSize: validated.labelSize ?? 'md',
+        displayMode: validated.displayMode ?? 'solid',
         collapsed: validated.collapsed,
         ...(validated.expandedHeight !== undefined ? { expandedHeight: validated.expandedHeight } : {}),
         attachedVideoIds: validated.attachedVideoIds,
@@ -548,6 +600,7 @@ export function deserializeProject(
       width: validated.width,
       height: validated.height,
       text: validated.text,
+      ...(validated.fontSize ? { fontSize: validated.fontSize } : {}),
     }
     return note
   })
