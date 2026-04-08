@@ -11,7 +11,7 @@ export function collectExistingSourcePaths(items: CanvasItem[]): Set<string> {
   const set = new Set<string>()
   for (const it of items) {
     if (it.type === 'video') {
-      const p = mediaUrlToLocalPath(it.srcUrl)
+      const p = it.sourceFilePath ?? mediaUrlToLocalPath(it.srcUrl)
       if (p) set.add(normalizePathKey(p))
     }
     if (it.type === 'image' && it.sourceFilePath) {

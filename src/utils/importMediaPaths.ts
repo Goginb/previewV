@@ -107,6 +107,7 @@ export async function importMediaPathsToCanvas(
       id: nextId('tile', i),
       srcUrl,
       fileName: pathBasename(p),
+      sourceFilePath: p,
       x: originX + col * cellW,
       y: originY + row * cellH,
       width: defaultVid.width,

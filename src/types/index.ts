@@ -13,6 +13,8 @@ export interface VideoItem extends BaseItem {
   type: 'video'
   srcUrl: string
   fileName: string
+  /** Absolute path to the original source file on disk, even if srcUrl points to a proxy. */
+  sourceFilePath?: string
   uiColor?: string
 }
 

@@ -29,7 +29,6 @@ import {
 } from '../utils/backdrops'
 import type { CanvasItem, ImageItem, NoteItem, VideoItem } from '../types'
 import { useUiStore } from '../store/uiStore'
-import { mediaUrlToLocalPath } from '../utils/projectSerializer'
 import logoGreenFx from '../assets/logo-greenfx.png'
 
 // ── File helpers ──────────────────────────────────────────────────────────────
@@ -163,6 +162,7 @@ export const Canvas: React.FC = () => {
   const items           = useCanvasStore((s) => s.items)
   const selectedIds     = useCanvasStore((s) => s.selectedIds)
   const viewport        = useCanvasStore((s) => s.viewport)
+  const currentProjectPath = useCanvasStore((s) => s.currentProjectPath)
   const addItem         = useCanvasStore((s) => s.addItem)
   const addItems        = useCanvasStore((s) => s.addItems)
   const updateItemsBatch = useCanvasStore((s) => s.updateItemsBatch)
@@ -424,21 +424,7 @@ export const Canvas: React.FC = () => {
     return videoSearchItems.filter((item) => item.fileName.toLowerCase().includes(query))
   }, [videoSearchItems, videoSearchQuery])
   const activeVideoSearchItem = filteredVideoSearchItems[videoSearchActiveIndex] ?? null
-  const selectedSourcePath = useMemo(() => {
-    for (const id of selectedIds) {
-      const item = items.find((candidate) => candidate.id === id)
-      if (!item) continue
-      if (item.type === 'video') {
-        const path = mediaUrlToLocalPath(item.srcUrl)
-        if (path) return path
-      }
-      if (item.type === 'image') {
-        if (item.sourceFilePath) return item.sourceFilePath
-        if (item.projectAssetPath) return item.projectAssetPath
-      }
-    }
-    return ''
-  }, [items, selectedIds])
+  const projectPathValue = currentProjectPath ?? ''
   const ctxVideoItem =
     ctxMenu?.kind === 'video' && ctxMenu.itemId
       ? items.find((item): item is VideoItem => item.type === 'video' && item.id === ctxMenu.itemId) ?? null
@@ -572,10 +558,9 @@ export const Canvas: React.FC = () => {
   }, [])
 
   const openSourcePathModal = useCallback(() => {
-    if (!selectedSourcePath) return
     setCtxMenu(null)
     setSourcePathModalOpen(true)
-  }, [selectedSourcePath])
+  }, [])
 
   useEffect(() => {
     if (!videoSearchOpen) return
@@ -845,7 +830,6 @@ export const Canvas: React.FC = () => {
       }
 
       if (e.code === 'KeyQ' && !e.ctrlKey && !e.metaKey && !e.altKey && !isTypingTarget(e)) {
-        if (!selectedSourcePath) return
         e.preventDefault()
         openSourcePathModal()
         return
@@ -1088,7 +1072,6 @@ export const Canvas: React.FC = () => {
     cutCanvasSelection,
     openVideoSearch,
     openSourcePathModal,
-    selectedSourcePath,
     theme,
   ])
 
@@ -1194,6 +1177,7 @@ export const Canvas: React.FC = () => {
         const dw = VIDEO_TILE_DEFAULT.width
         const dh = VIDEO_TILE_DEFAULT.height
         const srcUrl = fileToUrl(file)
+        const nativePath = (file as File & { path?: string }).path
         droppedVideoUrls.push(srcUrl)
         const tileId = `tile-${Date.now()}-${i}`
         const tile: VideoItem = {
@@ -1201,6 +1185,7 @@ export const Canvas: React.FC = () => {
           id:       tileId,
           srcUrl,
           fileName: file.name,
+          ...(nativePath ? { sourceFilePath: nativePath } : {}),
           x:        wx - dw / 2 + i * 24,
           y:        wy - dh / 2 + i * 24,
           width:    dw,
@@ -1598,10 +1583,12 @@ export const Canvas: React.FC = () => {
               <div className="flex items-center justify-between gap-3 px-1 pb-2">
                 <div>
                   <div id="selected-source-path-title" className="text-sm font-semibold text-themeText-100">
-                    Selected File Path
+                    Project Path
                   </div>
                   <div className="text-[11px] text-themeText-400">
-                    Path is already selected, so you can copy it immediately.
+                    {projectPathValue
+                      ? 'Path is already selected, so you can copy it immediately.'
+                      : 'The project has not been saved yet, so the path field is empty.'}
                   </div>
                 </div>
                 <button
@@ -1617,7 +1604,8 @@ export const Canvas: React.FC = () => {
                 ref={sourcePathInputRef}
                 type="text"
                 readOnly
-                value={selectedSourcePath}
+                value={projectPathValue}
+                placeholder="Project is not saved yet"
                 className="w-full rounded-lg border bg-[var(--app-bg)] px-3 py-2 text-sm text-themeText-100 outline-none"
                 style={{ borderColor: 'var(--menu-border)' }}
                 onFocus={(e) => e.currentTarget.select()}

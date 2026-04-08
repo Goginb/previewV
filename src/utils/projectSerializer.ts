@@ -341,7 +341,7 @@ function resolveAssetMediaUrl(
 export function serializeProject(params: SerializeProjectOptions): ProjectFileV2 {
   const items: ProjectCanvasItemV2[] = params.items.map((item) => {
     if (item.type === 'video') {
-      const videoPath = mediaUrlToLocalPath(item.srcUrl)
+      const videoPath = item.sourceFilePath ?? mediaUrlToLocalPath(item.srcUrl)
       if (!videoPath) {
         throw new Error(
           `Can't serialize video "${item.fileName}": video source is not a local media:// URL`,
@@ -468,6 +468,7 @@ export function deserializeProject(
           height: validated.height,
           fileName: validated.fileName,
           srcUrl: localPathToMediaUrl(validated.videoPath),
+          sourceFilePath: validated.videoPath,
           ...(validated.aspectApplied !== undefined ? { aspectApplied: validated.aspectApplied } : {}),
           ...(validated.uiColor !== undefined ? { uiColor: validated.uiColor } : {}),
         }
@@ -522,6 +523,7 @@ export function deserializeProject(
         height: validated.height,
         fileName: validated.fileName,
         srcUrl: localPathToMediaUrl(validated.videoPath),
+        sourceFilePath: validated.videoPath,
         ...(validated.aspectApplied !== undefined ? { aspectApplied: validated.aspectApplied } : {}),
         ...(validated.uiColor !== undefined ? { uiColor: validated.uiColor } : {}),
       }

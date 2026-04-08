@@ -118,6 +118,7 @@ export const DailiesImportModal: React.FC = () => {
             id: `tile-${Date.now()}-${i}`,
             srcUrl: resolved.srcUrl,
             fileName,
+            sourceFilePath: resolved.sourceFilePath,
             x: startX + i * (dw + 40),
             y: startY,
             width: dw,

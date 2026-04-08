@@ -45,7 +45,8 @@ test('serializeProject writes v2 linked preview images and asset images distinct
       width: 320,
       height: 180,
       fileName: 'clip.mp4',
-      srcUrl: localPathToMediaUrl('C:\\media\\clip.mp4'),
+      srcUrl: localPathToMediaUrl('C:\\cache\\clip-proxy.mp4'),
+      sourceFilePath: 'C:\\media\\clip.mp4',
       aspectApplied: true,
       uiColor: '#0f766e',
     } satisfies VideoItem,
@@ -375,4 +376,5 @@ test('deserializeProject preserves video aspectApplied flag', () => {
   assert.equal(video.uiColor, '#b45309')
   assert.equal(video.width, 500)
   assert.equal(video.height, 240)
+  assert.equal(video.sourceFilePath, 'C:\\media\\clip.mp4')
 })
