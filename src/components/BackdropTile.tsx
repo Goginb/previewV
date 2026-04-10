@@ -344,15 +344,6 @@ export const BackdropTile: React.FC<BackdropTileProps> = ({ backdrop, scale, isS
     startItems: Map<string, { x: number; y: number }>
   }>(null)
 
-  const dragVisualRafRef = useRef(0)
-  const pendingDragVisualRef = useRef<{ dx: number; dy: number } | null>(null)
-  const clearDragVisualScheduling = useCallback(() => {
-    if (dragVisualRafRef.current) {
-      cancelAnimationFrame(dragVisualRafRef.current)
-      dragVisualRafRef.current = 0
-    }
-  }, [])
-
   const clearLiveDragTransforms = useCallback(
     (session: { startItems: Map<string, { x: number; y: number }> } | null) => {
       if (bgRootRef.current) {
@@ -382,6 +373,35 @@ export const BackdropTile: React.FC<BackdropTileProps> = ({ backdrop, scale, isS
       }
     },
     [],
+  )
+
+  const applyLiveDragTransforms = useCallback(
+    (session: { startItems: Map<string, { x: number; y: number }> } | null, dx: number, dy: number) => {
+      if (!session) return
+      const t = `translate3d(${dx}px, ${dy}px, 0)`
+      if (bgRootRef.current) {
+        bgRootRef.current.style.transform = t
+        bgRootRef.current.style.willChange = 'transform'
+      }
+      for (const [id] of session.startItems) {
+        if (id === backdrop.id) continue
+        const backdropDom = backdropDomRegistry.get(id)
+        if (backdropDom?.body) {
+          backdropDom.body.style.transform = t
+          backdropDom.body.style.willChange = 'transform'
+        }
+        if (backdropDom?.header) {
+          backdropDom.header.style.transform = t
+          backdropDom.header.style.willChange = 'transform'
+        }
+        const el = tileDomRegistry.get(id)
+        if (el) {
+          el.style.transform = t
+          el.style.willChange = 'transform'
+        }
+      }
+    },
+    [backdrop.id],
   )
 
   const resizeRafRef = useRef<number>(0)
@@ -416,8 +436,6 @@ export const BackdropTile: React.FC<BackdropTileProps> = ({ backdrop, scale, isS
     (ev: React.MouseEvent | React.TouchEvent | MouseEvent | TouchEvent, d: { x: number; y: number }) => {
       const ctrl = (ev as any)?.ctrlKey || (ev as any)?.metaKey
       const state = useCanvasStore.getState()
-      const cur = state.items.find((i): i is BackdropItem => i.type === 'backdrop' && i.id === backdrop.id)
-      if (!cur) return
       const selectedBackdropIds = state.selectedIds.filter((id) =>
         state.items.some((item) => item.id === id && item.type === 'backdrop'),
       )
@@ -427,7 +445,6 @@ export const BackdropTile: React.FC<BackdropTileProps> = ({ backdrop, scale, isS
           : [backdrop.id]
 
       const movingIdSet = new Set<string>()
-      const attachmentRefreshUpdates: Array<{ id: string; updates: { attachedVideoIds: string[] } }> = []
       for (const movingBackdropId of movingBackdropIds) {
         const movingBackdrop = state.items.find(
           (item): item is BackdropItem => item.type === 'backdrop' && item.id === movingBackdropId,
@@ -447,20 +464,9 @@ export const BackdropTile: React.FC<BackdropTileProps> = ({ backdrop, scale, isS
               },
               state.items.filter((item) => item.id !== movingBackdrop.id),
             )
-        const prevAttached = movingBackdrop.attachedVideoIds ?? []
-        const sameAttached =
-          prevAttached.length === liveAttached.length &&
-          prevAttached.every((id, idx) => id === liveAttached[idx])
-        if (!sameAttached) {
-          attachmentRefreshUpdates.push({ id: movingBackdrop.id, updates: { attachedVideoIds: liveAttached } })
-        }
         if (!ctrl) {
           for (const id of liveAttached) movingIdSet.add(id)
         }
-      }
-
-      if (attachmentRefreshUpdates.length) {
-        updateItemsBatch(attachmentRefreshUpdates, { markDirty: false, recordHistory: false })
       }
 
       const startItems = new Map<string, { x: number; y: number }>()
@@ -474,7 +480,7 @@ export const BackdropTile: React.FC<BackdropTileProps> = ({ backdrop, scale, isS
         startItems,
       }
     },
-    [backdrop.id, updateItemsBatch],
+    [backdrop.id],
   )
 
   const onCollapseToggle = useCallback(() => {
@@ -655,8 +661,6 @@ export const BackdropTile: React.FC<BackdropTileProps> = ({ backdrop, scale, isS
         cancel=".backdrop-no-drag"
         onDragStart={(e, d) => {
           e.stopPropagation()
-          clearDragVisualScheduling()
-          pendingDragVisualRef.current = null
           startDrag(e, { x: d.x, y: d.y })
         }}
         onDrag={(_, d) => {
@@ -664,45 +668,10 @@ export const BackdropTile: React.FC<BackdropTileProps> = ({ backdrop, scale, isS
           if (!drag) return
           const dx = d.x - drag.startBackdrop.x
           const dy = d.y - drag.startBackdrop.y
-          pendingDragVisualRef.current = { dx, dy }
-          if (dragVisualRafRef.current) return
-          dragVisualRafRef.current = requestAnimationFrame(() => {
-            dragVisualRafRef.current = 0
-            const dragNow = dragRef.current
-            const p = pendingDragVisualRef.current
-            if (!dragNow || !p) return
-            const t = `translate3d(${p.dx}px, ${p.dy}px, 0)`
-          if (bgRootRef.current) {
-            bgRootRef.current.style.transform = t
-            bgRootRef.current.style.willChange = 'transform'
-          }
-          if (headerRootRef.current) {
-            headerRootRef.current.style.transform = ''
-            headerRootRef.current.style.willChange = ''
-          }
-          for (const [id] of dragNow.startItems) {
-            if (id === backdrop.id) continue
-            const backdropDom = backdropDomRegistry.get(id)
-            if (backdropDom?.body) {
-              backdropDom.body.style.transform = t
-              backdropDom.body.style.willChange = 'transform'
-            }
-            if (backdropDom?.header) {
-              backdropDom.header.style.transform = t
-              backdropDom.header.style.willChange = 'transform'
-            }
-            const el = tileDomRegistry.get(id)
-            if (el) {
-              el.style.transform = t
-              el.style.willChange = 'transform'
-            }
-          }
-        })
+          applyLiveDragTransforms(drag, dx, dy)
         }}
         onDragStop={(e, d) => {
           e.stopPropagation()
-          clearDragVisualScheduling()
-          pendingDragVisualRef.current = null
           const drag = dragRef.current
           dragRef.current = null
 
@@ -727,7 +696,7 @@ export const BackdropTile: React.FC<BackdropTileProps> = ({ backdrop, scale, isS
           }))
 
           const movedIdSet = new Set(drag.startItems.keys())
-          const nextItems = items.map((item) => {
+          const nextItems = useCanvasStore.getState().items.map((item) => {
             const start = drag.startItems.get(item.id)
             return start ? { ...item, x: start.x + dx, y: start.y + dy } : item
           })

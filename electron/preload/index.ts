@@ -3,6 +3,7 @@ import { clipboard, contextBridge, ipcRenderer } from 'electron'
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
   windowAPI: {
+    getRuntimeInfo: () => ipcRenderer.invoke('app:get-runtime-info'),
     getAlwaysOnTop: () => ipcRenderer.invoke('window:get-always-on-top'),
     getAutosaveEnabled: () => ipcRenderer.invoke('autosave:get-enabled'),
     setAutosaveEnabled: (enabled: boolean) => ipcRenderer.invoke('autosave:set-enabled', enabled),

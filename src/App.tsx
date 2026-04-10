@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { Canvas } from './components/Canvas'
 import { ViewportHud } from './components/ViewportHud'
 import { ProjectTitleBar } from './components/ProjectTitleBar'
@@ -6,12 +6,19 @@ import { HelpGuideModal } from './components/HelpGuideModal'
 import { SettingsModal } from './components/SettingsModal'
 import { DailiesImportModal } from './components/DailiesImportModal'
 import { PrmImportModal } from './components/PrmImportModal'
+import { ProjectLoadingOverlay } from './components/ProjectLoadingOverlay'
 import { useCanvasStore } from './store/canvasStore'
 import { useUiStore } from './store/uiStore'
 import { flushImageAnnotations } from './utils/flushImageAnnotations'
 import { createEmptyProject } from './utils/emptyProject'
 import { importMediaPathsToCanvas } from './utils/importMediaPaths'
 import { collectExistingSourcePaths, normalizePathKey } from './utils/sourcePaths'
+import {
+  beginProjectOpenProgress,
+  cancelProjectOpenProgress,
+  finishProjectOpenProgress,
+  updateProjectOpenProgress,
+} from './utils/warmupCanvasMedia'
 import type { ElectronProjectAPI } from './electron-api'
 
 type ProjectAPI = ElectronProjectAPI
@@ -23,7 +30,11 @@ function fileLabelFromStore(): string {
   return seg[seg.length - 1] ?? currentProjectPath
 }
 
-/** Before switching project: save / discard / cancel. false = stay. */
+function fileLabelFromPath(path: string): string {
+  const seg = path.split(/[/\\]/).filter(Boolean)
+  return seg[seg.length - 1] ?? path
+}
+
 async function ensureCanLeaveProject(projectAPI: ProjectAPI): Promise<boolean> {
   const { isDirty } = useCanvasStore.getState()
   if (!isDirty) return true
@@ -56,14 +67,16 @@ function syncDocumentTitle(): void {
   const s = useCanvasStore.getState()
   const name = fileLabelFromStore()
   const star = s.isDirty ? ' *' : ''
-  document.title = `${name}${star} — PreviewV`
+  document.title = `${name}${star} - PreviewV`
 }
 
 const App: React.FC = () => {
   const [helpOpen, setHelpOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [closePrompt, setClosePrompt] = useState<null | { fileLabel: string; busy: boolean }>(null)
-  
+  const [closePrompt, setClosePrompt] = useState<null | { fileLabel: string; busy: boolean }>(
+    null,
+  )
+
   const isDailiesModalOpen = useUiStore((s) => s.isDailiesModalOpen)
   const isPrmModalOpen = useUiStore((s) => s.isPrmModalOpen)
   const loadProjectState = useCanvasStore((s) => s.loadProjectState)
@@ -73,6 +86,36 @@ const App: React.FC = () => {
   const setAutosaveEnabled = useUiStore((s) => s.setAutosaveEnabled)
   const setLastAutosaveAt = useUiStore((s) => s.setLastAutosaveAt)
   const theme = useUiStore((s) => s.theme)
+
+  const openProjectWithProgress = useCallback(
+    async (
+      initialLine: string,
+      action: () => Promise<{ path: string; project: any } | null>,
+    ) => {
+      const sessionId = beginProjectOpenProgress(initialLine)
+      try {
+        updateProjectOpenProgress(sessionId, 24, 'Reading project file...')
+        const res = await action()
+        if (!res) {
+          cancelProjectOpenProgress(sessionId)
+          return null
+        }
+        updateProjectOpenProgress(sessionId, 60, 'Restoring canvas...')
+        loadProjectState(res.project, res.path)
+        updateProjectOpenProgress(sessionId, 88, 'Preparing media...')
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            finishProjectOpenProgress(sessionId)
+          })
+        })
+        return res
+      } catch (error) {
+        cancelProjectOpenProgress(sessionId)
+        throw error
+      }
+    },
+    [loadProjectState],
+  )
 
   useEffect(() => {
     const onHelp = () => setHelpOpen(true)
@@ -163,9 +206,10 @@ const App: React.FC = () => {
         if (detail.action === 'open') {
           const ok = await ensureCanLeaveProject(projectAPI)
           if (!ok) return
-          const res = await projectAPI.openProjectDialog()
+          const res = await openProjectWithProgress('Opening project...', () =>
+            projectAPI.openProjectDialog(),
+          )
           if (!res) return
-          loadProjectState(res.project, res.path)
           return
         }
         if (detail.action === 'add-folder') {
@@ -192,7 +236,7 @@ const App: React.FC = () => {
             if (choice === 'skip') {
               toImport = paths.filter((p) => !existing.has(normalizePathKey(p)))
               if (toImport.length === 0) {
-                alert('Nothing new to add — all files were already on the canvas.')
+                alert('Nothing new to add - all files were already on the canvas.')
                 return
               }
             }
@@ -249,9 +293,11 @@ const App: React.FC = () => {
         if (detail.action === 'open-recent' && detail.path) {
           const ok = await ensureCanLeaveProject(projectAPI)
           if (!ok) return
-          const res = await projectAPI.openProjectByPath(detail.path)
+          const res = await openProjectWithProgress(
+            `Opening ${fileLabelFromPath(detail.path)}...`,
+            () => projectAPI.openProjectByPath(detail.path!),
+          )
           if (!res) return
-          loadProjectState(res.project, res.path)
           return
         }
       } catch (err: any) {
@@ -261,9 +307,8 @@ const App: React.FC = () => {
 
     window.addEventListener('project-menu-action', handler)
     return () => window.removeEventListener('project-menu-action', handler)
-  }, [getProjectDataForSave, loadProjectState, syncSavedProjectState])
+  }, [getProjectDataForSave, loadProjectState, openProjectWithProgress, syncSavedProjectState])
 
-  // Open-on-launch / double-click flow:
   useEffect(() => {
     const openByPath = async (path: string) => {
       const projectAPI = window.electronAPI?.projectAPI
@@ -271,9 +316,11 @@ const App: React.FC = () => {
       try {
         const ok = await ensureCanLeaveProject(projectAPI)
         if (!ok) return
-        const res = await projectAPI.openProjectByPath(path)
+        const res = await openProjectWithProgress(
+          `Opening ${fileLabelFromPath(path)}...`,
+          () => projectAPI.openProjectByPath(path),
+        )
         if (!res) return
-        loadProjectState(res.project, res.path)
       } catch (err: any) {
         alert(err?.message ?? String(err))
       }
@@ -292,27 +339,30 @@ const App: React.FC = () => {
 
     window.addEventListener('app-open-project-by-path', onOpen as any)
     return () => window.removeEventListener('app-open-project-by-path', onOpen as any)
-  }, [loadProjectState])
+  }, [openProjectWithProgress])
 
   return (
     <div className="relative w-full h-full min-h-[100dvh]" style={{ background: 'var(--app-bg)' }}>
+      <ProjectLoadingOverlay />
       {helpOpen && <HelpGuideModal onClose={() => setHelpOpen(false)} />}
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
       {isDailiesModalOpen && <DailiesImportModal />}
       {isPrmModalOpen && <PrmImportModal />}
       {closePrompt && (
-        <div className="fixed inset-0 z-[6500] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+        <div className="fixed inset-0 z-[6500] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
           <div
             className="w-[min(92vw,500px)] rounded-xl border p-4"
             style={{ background: 'var(--menu-bg)', borderColor: 'var(--menu-border)' }}
           >
-            <h3 className="text-base font-semibold text-themeText-100">Save changes before closing?</h3>
-            <p className="text-sm text-themeText-300 mt-1">{closePrompt.fileLabel}</p>
+            <h3 className="text-base font-semibold text-themeText-100">
+              Save changes before closing?
+            </h3>
+            <p className="mt-1 text-sm text-themeText-300">{closePrompt.fileLabel}</p>
             <div className="mt-4 flex justify-end gap-2">
               <button
                 type="button"
                 disabled={closePrompt.busy}
-                className="px-3 py-1.5 rounded border border-[var(--menu-border)] text-themeText-200 hover:bg-themeBg-hover disabled:opacity-50"
+                className="rounded border border-[var(--menu-border)] px-3 py-1.5 text-themeText-200 hover:bg-themeBg-hover disabled:opacity-50"
                 onClick={() => setClosePrompt(null)}
               >
                 Cancel
@@ -320,7 +370,7 @@ const App: React.FC = () => {
               <button
                 type="button"
                 disabled={closePrompt.busy}
-                className="px-3 py-1.5 rounded border border-[var(--menu-border)] text-themeText-100 hover:bg-themeBg-hover disabled:opacity-50"
+                className="rounded border border-[var(--menu-border)] px-3 py-1.5 text-themeText-100 hover:bg-themeBg-hover disabled:opacity-50"
                 onClick={async () => {
                   const projectAPI = window.electronAPI?.projectAPI
                   if (!projectAPI) return
@@ -332,12 +382,12 @@ const App: React.FC = () => {
                   }
                 }}
               >
-                Don’t save
+                Don't save
               </button>
               <button
                 type="button"
                 disabled={closePrompt.busy}
-                className="px-3 py-1.5 rounded bg-emerald-700 text-white hover:bg-emerald-600 disabled:opacity-50"
+                className="rounded bg-emerald-700 px-3 py-1.5 text-white hover:bg-emerald-600 disabled:opacity-50"
                 onClick={async () => {
                   const projectAPI = window.electronAPI?.projectAPI
                   if (!projectAPI) return
@@ -366,7 +416,7 @@ const App: React.FC = () => {
         </div>
       )}
       <ProjectTitleBar />
-      <div className="absolute inset-x-0 top-11 bottom-0 min-h-0">
+      <div className="absolute inset-x-0 bottom-0 top-11 min-h-0">
         <Canvas />
       </div>
       <ViewportHud />

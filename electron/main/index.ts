@@ -33,6 +33,51 @@ import { scanPrmFolder, getPrmYears, getPrmProjects, getPrmScenes } from './prmS
 const PROJECT_EXT = '.previewv'
 
 const PROJECT_OPEN_CHANNEL = 'app-open-project-by-path'
+const VERSION_MARKER_FILE = 'version'
+const LEGACY_VERSION_MARKER_PREFIX = 'PreviewV version '
+const LEGACY_VERSION_MARKER_SUFFIX = '.txt'
+
+async function syncVersionMarker(targetDir: string, version: string): Promise<string | null> {
+  const markerPath = join(targetDir, VERSION_MARKER_FILE)
+  const markerContent = `${version}\n`
+
+  try {
+    const entries = await fs.readdir(targetDir, { withFileTypes: true })
+    await Promise.all(
+      entries
+        .filter(
+          (entry) =>
+            entry.isFile() &&
+            (entry.name === VERSION_MARKER_FILE ||
+              (entry.name.startsWith(LEGACY_VERSION_MARKER_PREFIX) &&
+                entry.name.endsWith(LEGACY_VERSION_MARKER_SUFFIX))) &&
+            entry.name !== VERSION_MARKER_FILE,
+        )
+        .map((entry) => fs.rm(join(targetDir, entry.name), { force: true })),
+    )
+
+    let currentContent: string | null = null
+    try {
+      currentContent = await fs.readFile(markerPath, 'utf8')
+    } catch {
+      currentContent = null
+    }
+
+    if (currentContent !== markerContent) {
+      await fs.writeFile(markerPath, markerContent, 'utf8')
+    }
+
+    return markerPath
+  } catch (error) {
+    console.warn('[PreviewV] Failed to sync version marker:', error)
+    return null
+  }
+}
+
+async function syncInstalledVersionMarker(): Promise<string | null> {
+  if (!app.isPackaged) return null
+  return syncVersionMarker(dirname(process.execPath), app.getVersion())
+}
 
 function isKnownWebStreamCloseError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false
@@ -145,6 +190,11 @@ async function serveMediaProtocolRequest(request: Request): Promise<Response> {
 let pendingOpenPath: string | null = findPreviewVPathFromArgv(process.argv)
 
 app.commandLine.appendSwitch('no-sandbox')
+if (process.platform === 'win32') {
+  // On Windows, Chromium's DirectComposition video overlays can produce
+  // black video surfaces while playback/timeline continues on transformed UIs.
+  app.commandLine.appendSwitch('disable-direct-composition-video-overlays')
+}
 
 if (!app.requestSingleInstanceLock) {
   // In case electron-behaves oddly, keep app running. (Electron always has this API.)
@@ -1059,7 +1109,19 @@ app.whenReady().then(() => {
   // URL example: media:///C:/Users/user/video.mp4
   protocol.handle('media', (request) => serveMediaProtocolRequest(request))
 
+  void syncInstalledVersionMarker()
+
   ipcMain.handle('window:get-always-on-top', () => alwaysOnTopEnabled)
+
+  ipcMain.handle('app:get-runtime-info', async () => {
+    const versionMarkerPath = await syncInstalledVersionMarker()
+    return {
+      version: app.getVersion(),
+      isPackaged: app.isPackaged,
+      installDirectory: app.isPackaged ? dirname(process.execPath) : null,
+      versionMarkerPath,
+    }
+  })
 
   ipcMain.handle('window:set-always-on-top', (_e, enabled: unknown) => {
     if (!activeWindow) return
@@ -1322,11 +1384,7 @@ app.whenReady().then(() => {
     }
 
     await writeProjectToDisk(finalPath, project)
-    const raw = await fs.readFile(finalPath, 'utf8')
-    const parsed = JSON.parse(raw)
-    const reopened = deserializeProject(parsed, {
-      resolveAssetPath: (relativePath) => resolveProjectAssetPath(finalPath, relativePath),
-    })
+    const { project: reopened } = await readProjectFromDisk(finalPath)
     if (reopened.items.length !== project.items.length) {
       throw new Error('Project save verification failed (items mismatch after reload)')
     }

@@ -76,6 +76,8 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
   const endScrubRef = useRef<() => void>(() => {})
   const frameDurationRef = useRef(DEFAULT_FRAME_DURATION)
   const lastFrameSampleRef = useRef<null | { mediaTime: number; presentedFrames: number }>(null)
+  const recoveryCooldownUntilRef = useRef(0)
+  const recoveryTimeoutRef = useRef<number | null>(null)
 
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
@@ -257,6 +259,104 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
       requestAnimationFrame(run)
     }
   }, [syncFromVideo])
+
+  useEffect(() => {
+    const v = videoRef.current
+    if (!v) return
+
+    const clearRecoveryTimeout = () => {
+      if (recoveryTimeoutRef.current !== null) {
+        window.clearTimeout(recoveryTimeoutRef.current)
+        recoveryTimeoutRef.current = null
+      }
+    }
+
+    const attemptRecovery = (reason: string) => {
+      if (isHidden) return
+      if (scrubRef.current) return
+
+      const now = Date.now()
+      if (now < recoveryCooldownUntilRef.current) return
+
+      const savedTime = Number.isFinite(v.currentTime) ? v.currentTime : 0
+      const shouldResume = !v.paused
+      recoveryCooldownUntilRef.current = now + 2000
+
+      const restore = () => {
+        v.removeEventListener('loadeddata', restore)
+        v.removeEventListener('canplay', restore)
+        clearRecoveryTimeout()
+
+        if (savedTime > 0) {
+          try {
+            const maxTime =
+              Number.isFinite(v.duration) && v.duration > 0
+                ? Math.max(0, v.duration - 0.001)
+                : savedTime
+            v.currentTime = Math.min(savedTime, maxTime)
+          } catch {
+            // ignore seek restore failures
+          }
+        }
+
+        scheduleSyncAfterSeek()
+
+        if (shouldResume) {
+          if (getVideoPlaybackSuspended()) {
+            setManualPlaybackAllowedInSuspended(tile.id, true)
+          }
+          void v.play().catch(() => {})
+        }
+      }
+
+      v.addEventListener('loadeddata', restore, { once: true })
+      v.addEventListener('canplay', restore, { once: true })
+
+      clearRecoveryTimeout()
+      recoveryTimeoutRef.current = window.setTimeout(() => {
+        recoveryTimeoutRef.current = null
+        restore()
+      }, 1200)
+
+      try {
+        v.load()
+      } catch {
+        restore()
+      }
+
+      console.warn(`[PreviewV] Recovering video tile "${tile.fileName}" after ${reason}`)
+    }
+
+    const onLoadedData = () => {
+      clearRecoveryTimeout()
+      syncFromVideo()
+    }
+    const onCanPlay = () => syncFromVideo()
+    const onPlaying = () => {
+      clearRecoveryTimeout()
+      syncFromVideo()
+    }
+    const onStalled = () => attemptRecovery('stalled')
+    const onEmptied = () => attemptRecovery('emptied')
+    const onError = () => attemptRecovery('error')
+
+    v.addEventListener('loadeddata', onLoadedData)
+    v.addEventListener('canplay', onCanPlay)
+    v.addEventListener('playing', onPlaying)
+    v.addEventListener('stalled', onStalled)
+    v.addEventListener('emptied', onEmptied)
+    v.addEventListener('error', onError)
+
+    return () => {
+      clearRecoveryTimeout()
+      v.removeEventListener('loadeddata', onLoadedData)
+      v.removeEventListener('canplay', onCanPlay)
+      v.removeEventListener('playing', onPlaying)
+      v.removeEventListener('stalled', onStalled)
+      v.removeEventListener('emptied', onEmptied)
+      v.removeEventListener('error', onError)
+    }
+  }, [isHidden, scheduleSyncAfterSeek, syncFromVideo, tile.fileName, tile.id])
 
   const beginScrub = useCallback(() => {
     const v = videoRef.current

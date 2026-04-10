@@ -1,4 +1,5 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
+import type { AppRuntimeInfo } from '../electron-api'
 import { useUiStore, type AppTheme } from '../store/uiStore'
 
 export const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
@@ -10,6 +11,13 @@ export const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) =>
   const autosaveEnabled = useUiStore((s) => s.autosaveEnabled)
   const setAutosaveEnabled = useUiStore((s) => s.setAutosaveEnabled)
   const lastAutosaveAt = useUiStore((s) => s.lastAutosaveAt)
+  const [runtimeInfo, setRuntimeInfo] = useState<AppRuntimeInfo | null>(null)
+
+  useEffect(() => {
+    const api = window.electronAPI?.windowAPI
+    if (!api?.getRuntimeInfo) return
+    api.getRuntimeInfo().then(setRuntimeInfo).catch(() => {})
+  }, [])
 
   return (
     <div
@@ -20,9 +28,13 @@ export const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) =>
     >
       <div
         className="w-[min(92vw,680px)] max-h-[85vh] overflow-auto rounded-xl border p-4"
-        style={{ background: 'var(--menu-bg)', borderColor: 'var(--menu-border)', boxShadow: 'var(--menu-shadow)' }}
+        style={{
+          background: 'var(--menu-bg)',
+          borderColor: 'var(--menu-border)',
+          boxShadow: 'var(--menu-shadow)',
+        }}
       >
-        <div className="flex items-center justify-between mb-3">
+        <div className="mb-3 flex items-center justify-between">
           <h2 className="text-lg font-semibold text-themeText-100">Settings</h2>
           <button
             type="button"
@@ -33,9 +45,9 @@ export const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) =>
           </button>
         </div>
 
-        <section className="mb-4 border border-[var(--menu-border)] rounded-lg p-3">
-          <h3 className="text-sm font-semibold text-themeText-200 mb-2">Visual</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <section className="mb-4 rounded-lg border border-[var(--menu-border)] p-3">
+          <h3 className="mb-2 text-sm font-semibold text-themeText-200">Visual</h3>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <label className="flex flex-col gap-1 text-sm text-themeText-300">
               Theme
               <select
@@ -77,8 +89,8 @@ export const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) =>
           </div>
         </section>
 
-        <section className="border border-[var(--menu-border)] rounded-lg p-3">
-          <h3 className="text-sm font-semibold text-themeText-200 mb-2">General</h3>
+        <section className="rounded-lg border border-[var(--menu-border)] p-3">
+          <h3 className="mb-2 text-sm font-semibold text-themeText-200">General</h3>
           <label className="flex items-center gap-2 text-sm text-themeText-200">
             <input
               type="checkbox"
@@ -87,15 +99,25 @@ export const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) =>
             />
             Enable autosave
           </label>
-          <div className="mt-2 text-xs text-themeText-400">
-            Interval: 20 min (fixed)
-          </div>
+          <div className="mt-2 text-xs text-themeText-400">Interval: 20 min (fixed)</div>
           <div className="mt-1 text-xs text-themeText-400">
-            Last autosave: {lastAutosaveAt ? new Date(lastAutosaveAt).toLocaleString() : '—'}
+            App version: {runtimeInfo?.version ?? '...'}
+          </div>
+          {runtimeInfo?.versionMarkerPath ? (
+            <div className="mt-1 break-all text-xs text-themeText-400">
+              Folder marker: {runtimeInfo.versionMarkerPath}
+            </div>
+          ) : null}
+          {runtimeInfo?.installDirectory ? (
+            <div className="mt-1 break-all text-xs text-themeText-400">
+              Install folder: {runtimeInfo.installDirectory}
+            </div>
+          ) : null}
+          <div className="mt-1 text-xs text-themeText-400">
+            Last autosave: {lastAutosaveAt ? new Date(lastAutosaveAt).toLocaleString() : '-'}
           </div>
         </section>
       </div>
     </div>
   )
 }
-
