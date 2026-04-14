@@ -5,8 +5,6 @@ import type { DeserializedProject } from './types/project'
 export interface ElectronWindowAPI {
   getRuntimeInfo: () => Promise<AppRuntimeInfo>
   getAlwaysOnTop: () => Promise<boolean>
-  getAutosaveEnabled: () => Promise<boolean>
-  setAutosaveEnabled: (enabled: boolean) => Promise<void>
 }
 
 export interface AppRuntimeInfo {
@@ -19,6 +17,8 @@ export interface AppRuntimeInfo {
 /** Типы API, проброшенные из electron/preload (см. contextBridge). */
 export interface ElectronProjectAPI {
   readClipboardText: () => string
+  writeClipboardText: (text: string) => void
+  revealFileInFolder: (path: string) => Promise<boolean>
   openProjectDialog: () => Promise<{ path: string; project: DeserializedProject } | null>
   openProjectByPath: (path: string) => Promise<{ path: string; project: DeserializedProject } | null>
   saveProject: (payload: {
@@ -27,6 +27,7 @@ export interface ElectronProjectAPI {
   }) => Promise<{ path: string; project: DeserializedProject } | null>
   saveProjectAs: (payload: {
     projectData: unknown
+    currentPath?: string | null
   }) => Promise<{ path: string; project: DeserializedProject } | null>
   getRecentProjects: () => Promise<string[]>
   showUnsavedDialog: (opts?: { fileLabel?: string }) => Promise<'save' | 'discard' | 'cancel'>

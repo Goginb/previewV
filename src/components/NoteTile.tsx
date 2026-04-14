@@ -86,6 +86,7 @@ export const NoteTile: React.FC<NoteTileProps> = ({ note, scale, isSelected, isH
       minHeight={80}
       cancel=".note-no-drag, textarea, button"
       onDragStart={() => {
+        window.dispatchEvent(new CustomEvent('canvas-history-action'))
         const state = useCanvasStore.getState()
         if (!isSelected || state.selectedIds.length <= 1) {
           dragOriginsRef.current = null
@@ -150,6 +151,7 @@ export const NoteTile: React.FC<NoteTileProps> = ({ note, scale, isSelected, isH
       }}
       onResizeStart={(e) => {
         if ('button' in e && typeof e.button === 'number' && e.button !== 0) return false
+        window.dispatchEvent(new CustomEvent('canvas-history-action'))
         resizeActiveRef.current = true
         updateItemsBatch([{ id: note.id, updates: {} }], { recordHistory: true })
       }}

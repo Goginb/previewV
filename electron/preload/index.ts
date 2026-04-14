@@ -5,17 +5,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   windowAPI: {
     getRuntimeInfo: () => ipcRenderer.invoke('app:get-runtime-info'),
     getAlwaysOnTop: () => ipcRenderer.invoke('window:get-always-on-top'),
-    getAutosaveEnabled: () => ipcRenderer.invoke('autosave:get-enabled'),
-    setAutosaveEnabled: (enabled: boolean) => ipcRenderer.invoke('autosave:set-enabled', enabled),
   },
   projectAPI: {
     readClipboardText: () => clipboard.readText(),
+    writeClipboardText: (text: string) => clipboard.writeText(text),
+    revealFileInFolder: (path: string) => ipcRenderer.invoke('reveal-file-in-folder', { path }),
     openProjectDialog: () => ipcRenderer.invoke('open-project-dialog'),
     openProjectByPath: (path: string) =>
       ipcRenderer.invoke('open-project-by-path', { path }),
     saveProject: (payload: { projectData: unknown; path: string | null }) =>
       ipcRenderer.invoke('save-project', payload),
-    saveProjectAs: (payload: { projectData: unknown }) =>
+    saveProjectAs: (payload: { projectData: unknown; currentPath?: string | null }) =>
       ipcRenderer.invoke('save-project-as', payload),
     getRecentProjects: () => ipcRenderer.invoke('get-recent-projects'),
     showUnsavedDialog: (opts?: { fileLabel?: string }) =>
@@ -79,14 +79,6 @@ ipcRenderer.on('app:request-unsaved-close', (_event, payload: { fileLabel?: stri
 ipcRenderer.on('window:always-on-top-changed', (_event, payload: { value: boolean }) => {
   window.dispatchEvent(
     new CustomEvent('previewv-always-on-top', {
-      detail: payload,
-    }),
-  )
-})
-
-ipcRenderer.on('autosave:status', (_event, payload: { lastAutosaveAt: string | null }) => {
-  window.dispatchEvent(
-    new CustomEvent('previewv-autosave-status', {
       detail: payload,
     }),
   )

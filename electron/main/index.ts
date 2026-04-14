@@ -36,6 +36,24 @@ const PROJECT_OPEN_CHANNEL = 'app-open-project-by-path'
 const VERSION_MARKER_FILE = 'version'
 const LEGACY_VERSION_MARKER_PREFIX = 'PreviewV version '
 const LEGACY_VERSION_MARKER_SUFFIX = '.txt'
+const VIDEO_DEBUG_LOG_FILE = 'video-debug.log'
+
+function videoDebugLogPath(): string {
+  return join(app.getPath('userData'), VIDEO_DEBUG_LOG_FILE)
+}
+
+async function appendVideoDebugLog(message: string): Promise<void> {
+  try {
+    const line = `[${new Date().toISOString()}] ${message}\n`
+    await fs.appendFile(videoDebugLogPath(), line, 'utf8')
+    if (app.isPackaged) {
+      const installLogPath = join(dirname(process.execPath), VIDEO_DEBUG_LOG_FILE)
+      await fs.appendFile(installLogPath, line, 'utf8').catch(() => {})
+    }
+  } catch {
+    // ignore log write errors
+  }
+}
 
 async function syncVersionMarker(targetDir: string, version: string): Promise<string | null> {
   const markerPath = join(targetDir, VERSION_MARKER_FILE)
@@ -194,6 +212,8 @@ if (process.platform === 'win32') {
   // On Windows, Chromium's DirectComposition video overlays can produce
   // black video surfaces while playback/timeline continues on transformed UIs.
   app.commandLine.appendSwitch('disable-direct-composition-video-overlays')
+  // On heterogeneous user GPUs/drivers this is more stable than hardware decode.
+  app.commandLine.appendSwitch('disable-accelerated-video-decode')
 }
 
 if (!app.requestSingleInstanceLock) {
@@ -223,8 +243,6 @@ protocol.registerSchemesAsPrivileged([
 const RECENTS_FILE = 'recent-projects.json'
 const PROJECT_ASSET_DIR_SUFFIX = '.assets'
 const PREVIEW_CACHE_DIR = join(tmpdir(), 'previewv-raster-cache')
-const VIDEO_PROXY_CACHE_DIR = join(tmpdir(), 'previewv-video-proxy-cache')
-const FFMPEG_RUNTIME_CACHE_DIR = join(tmpdir(), 'previewv-ffmpeg-runtime')
 const PREVIEW_IMAGE_EXT = new Set(['.tif', '.tiff', '.dpx', '.exr'])
 const DIRECT_IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'])
 const VIDEO_PROXY_EXT = new Set(['.mov', '.mkv', '.avi', '.m4v'])
@@ -265,6 +283,10 @@ function projectAssetDir(projectPath: string): string {
 function resolveProjectAssetPath(projectPath: string, relativePath: string): string {
   const parts = relativePath.split('/').filter(Boolean)
   return join(projectAssetDir(projectPath), ...parts)
+}
+
+function projectVideoSnapshotDir(projectPath: string): string {
+  return `${projectPath}.video-proxy-cache`
 }
 
 function sanitizeAssetSegment(value: string): string {
@@ -310,11 +332,11 @@ async function ensurePreviewCacheDir(): Promise<void> {
 }
 
 async function ensureVideoProxyCacheDir(): Promise<void> {
-  await fs.mkdir(VIDEO_PROXY_CACHE_DIR, { recursive: true })
+  await fs.mkdir(getVideoProxyCacheDir(), { recursive: true })
 }
 
 async function ensureFfmpegRuntimeCacheDir(): Promise<void> {
-  await fs.mkdir(FFMPEG_RUNTIME_CACHE_DIR, { recursive: true })
+  await fs.mkdir(getFfmpegRuntimeCacheDir(), { recursive: true })
 }
 
 function previewCacheFilePath(filePath: string): string {
@@ -324,7 +346,47 @@ function previewCacheFilePath(filePath: string): string {
 
 function videoProxyCacheFilePath(filePath: string): string {
   const hash = createHash('sha1').update(normalizePathKey(filePath)).digest('hex').slice(0, 16)
-  return join(VIDEO_PROXY_CACHE_DIR, `${hash}.mp4`)
+  return join(getVideoProxyCacheDir(), `${hash}.mp4`)
+}
+
+function projectVideoSnapshotProxyPath(projectPath: string, sourceFilePath: string): string {
+  const hash = createHash('sha1').update(normalizePathKey(sourceFilePath)).digest('hex').slice(0, 16)
+  return join(projectVideoSnapshotDir(projectPath), `${hash}.mp4`)
+}
+
+function getVideoProxyCacheDir(): string {
+  // Keep proxies in per-user data to avoid cross-machine stale paths when running
+  // from a shared distribution folder.
+  return join(app.getPath('userData'), 'cache', 'video-proxy')
+}
+
+function isLegacyTempProxyPath(filePath: string): boolean {
+  const n = normalize(filePath).toLowerCase()
+  return n.includes(`${normalize('\\previewv-video-proxy-cache\\').toLowerCase()}`)
+}
+
+async function resolveExistingVideoPath(filePath: string): Promise<string> {
+  const normalizedPath = normalize(filePath)
+  try {
+    await fs.access(normalizedPath)
+    return normalizedPath
+  } catch {
+    // continue to compatibility fallback
+  }
+
+  if (isLegacyTempProxyPath(normalizedPath) && app.isPackaged) {
+    const migratedPath = join(getVideoProxyCacheDir(), basename(normalizedPath))
+    await appendVideoDebugLog(`migrated legacy temp proxy path "${normalizedPath}" -> "${migratedPath}"`)
+    return migratedPath
+  }
+
+  return normalizedPath
+}
+
+function getFfmpegRuntimeCacheDir(): string {
+  // Keep runtime ffmpeg in userData to avoid endpoint policies that often block
+  // execution from temp/network locations.
+  return join(app.getPath('userData'), 'ffmpeg-runtime')
 }
 
 async function renderTiffPreview(filePath: string, outputPath: string): Promise<{ width: number; height: number }> {
@@ -395,7 +457,7 @@ async function getFfmpegPath(): Promise<string> {
     try {
       await fs.access(bundled)
       await ensureFfmpegRuntimeCacheDir()
-      const runtimeFfmpeg = join(FFMPEG_RUNTIME_CACHE_DIR, 'ffmpeg.exe')
+      const runtimeFfmpeg = join(getFfmpegRuntimeCacheDir(), 'ffmpeg.exe')
       await fs.copyFile(bundled, runtimeFfmpeg)
       if (await canExecuteFfmpeg(runtimeFfmpeg)) {
         ff = runtimeFfmpeg
@@ -414,17 +476,33 @@ async function renderViaFfmpegPreview(filePath: string, outputPath: string): Pro
   const ff = await getFfmpegPath()
 
   await new Promise<void>((resolve, reject) => {
-    const p = spawn(ff, ['-y', '-i', filePath, '-frames:v', '1', outputPath], {
-      windowsHide: true,
-    })
+    const p = spawn(ff, ['-y', '-i', filePath, '-frames:v', '1', outputPath], { windowsHide: true })
     let err = ''
+    let settled = false
+    const finish = (fn: () => void) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeoutId)
+      fn()
+    }
+    const timeoutId = setTimeout(() => {
+      try {
+        p.kill()
+      } catch {
+        // ignore
+      }
+      finish(() => reject(new Error(`ffmpeg preview timeout for "${basename(filePath)}"`)))
+    }, 45_000)
     p.stderr?.on('data', (d: Buffer) => {
       err += d.toString()
     })
-    p.on('error', reject)
+    p.on('error', (error) => finish(() => reject(error)))
     p.on('close', (code) => {
-      if (code === 0) resolve()
-      else reject(new Error(err.trim() || `ffmpeg exited with code ${code}`))
+      if (settled) return
+      finish(() => {
+        if (code === 0) resolve()
+        else reject(new Error(err.trim() || `ffmpeg exited with code ${code}`))
+      })
     })
   })
 
@@ -460,13 +538,31 @@ async function transcodeVideoProxy(filePath: string, outputPath: string): Promis
       { windowsHide: true },
     )
     let err = ''
+    let settled = false
+    const finish = (fn: () => void) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeoutId)
+      fn()
+    }
+    const timeoutId = setTimeout(() => {
+      try {
+        p.kill()
+      } catch {
+        // ignore
+      }
+      finish(() => reject(new Error(`ffmpeg proxy timeout for "${basename(filePath)}"`)))
+    }, 180_000)
     p.stderr?.on('data', (d: Buffer) => {
       err += d.toString()
     })
-    p.on('error', reject)
+    p.on('error', (error) => finish(() => reject(error)))
     p.on('close', (code) => {
-      if (code === 0) resolve()
-      else reject(new Error(err.trim() || `ffmpeg exited with code ${code}`))
+      if (settled) return
+      finish(() => {
+        if (code === 0) resolve()
+        else reject(new Error(err.trim() || `ffmpeg exited with code ${code}`))
+      })
     })
   })
 }
@@ -476,12 +572,15 @@ async function resolveVideoSourceFromPath(filePath: string): Promise<{
   sourceFilePath: string
   transcoded: boolean
 }> {
-  const normalizedPath = normalize(filePath)
+  const requestedPath = normalize(filePath)
+  const normalizedPath = await resolveExistingVideoPath(requestedPath)
+  await appendVideoDebugLog(`resolve-video-source request "${requestedPath}" -> "${normalizedPath}"`)
   const stat = await fs.stat(normalizedPath)
   if (!stat.isFile()) throw new Error('Not a file')
 
   const ext = extname(normalizedPath).toLowerCase()
   if (!VIDEO_PROXY_EXT.has(ext)) {
+    await appendVideoDebugLog(`using direct media url for "${normalizedPath}"`)
     return {
       srcUrl: localPathToMediaUrl(normalizedPath),
       sourceFilePath: normalizedPath,
@@ -495,6 +594,7 @@ async function resolveVideoSourceFromPath(filePath: string): Promise<{
   if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
     try {
       await fs.access(cached.proxyPath)
+      await appendVideoDebugLog(`using in-memory cached proxy "${cached.proxyPath}"`)
       return {
         srcUrl: localPathToMediaUrl(cached.proxyPath),
         sourceFilePath: normalizedPath,
@@ -511,6 +611,7 @@ async function resolveVideoSourceFromPath(filePath: string): Promise<{
   try {
     const proxyStat = await fs.stat(proxyPath)
     if (proxyStat.isFile() && proxyStat.mtimeMs >= stat.mtimeMs) {
+      await appendVideoDebugLog(`using persisted proxy "${proxyPath}"`)
       videoProxyCache.set(cacheKey, {
         mtimeMs: stat.mtimeMs,
         size: stat.size,
@@ -527,7 +628,41 @@ async function resolveVideoSourceFromPath(filePath: string): Promise<{
   }
 
   await ensureVideoProxyCacheDir()
-  await transcodeVideoProxy(normalizedPath, proxyPath)
+  try {
+    await appendVideoDebugLog(`transcoding to proxy "${proxyPath}"`)
+    await transcodeVideoProxy(normalizedPath, proxyPath)
+    await appendVideoDebugLog(`transcode success "${proxyPath}"`)
+  } catch (error) {
+    await appendVideoDebugLog(
+      `transcode failed for "${normalizedPath}": ${error instanceof Error ? error.message : String(error)}`,
+    )
+    // If proxy regeneration fails on this machine (codec/policy/permissions),
+    // keep using an already existing proxy file instead of breaking the tile.
+    try {
+      const existingProxy = await fs.stat(proxyPath)
+      if (existingProxy.isFile()) {
+        await appendVideoDebugLog(`using existing proxy fallback "${proxyPath}" for "${normalizedPath}"`)
+        videoProxyCache.set(cacheKey, {
+          mtimeMs: stat.mtimeMs,
+          size: stat.size,
+          proxyPath,
+        })
+        return {
+          srcUrl: localPathToMediaUrl(proxyPath),
+          sourceFilePath: normalizedPath,
+          transcoded: true,
+        }
+      }
+    } catch {
+      // no existing proxy to reuse
+    }
+    await appendVideoDebugLog(`falling back to direct media url for "${normalizedPath}"`)
+    return {
+      srcUrl: localPathToMediaUrl(normalizedPath),
+      sourceFilePath: normalizedPath,
+      transcoded: false,
+    }
+  }
   videoProxyCache.set(cacheKey, {
     mtimeMs: stat.mtimeMs,
     size: stat.size,
@@ -683,22 +818,96 @@ async function touchRecentProject(userDataDir: string, projectPath: string) {
   return [projectPath, ...filtered].slice(0, 10)
 }
 
-async function readProjectFromDisk(projectPath: string): Promise<{ project: DeserializedProject; rawItemsCount: number | null }> {
+async function readProjectFromDisk(
+  projectPath: string,
+  options?: { resolveVideoSources?: boolean },
+): Promise<{ project: DeserializedProject; rawItemsCount: number | null }> {
   const raw = await fs.readFile(projectPath, 'utf8')
   const parsed: unknown = JSON.parse(raw)
   const rawItemsCount = isRecord(parsed) && Array.isArray((parsed as any).items) ? (parsed as any).items.length : null
   const project = deserializeProject(parsed, {
     resolveAssetPath: (relativePath) => resolveProjectAssetPath(projectPath, relativePath),
   })
+
+  // Fast-path: if a local proxy for the original source already exists, use it
+  // immediately to avoid long post-open hydration.
   for (const item of project.items) {
-    if (item.type !== 'video') continue
-    const sourcePath = mediaUrlToLocalPath(item.srcUrl)
-    if (!sourcePath) continue
+    if (item.type !== 'video' || !item.sourceFilePath) continue
+    const ext = extname(item.sourceFilePath).toLowerCase()
+    if (!VIDEO_PROXY_EXT.has(ext)) continue
+    const snapshotProxyPath = projectVideoSnapshotProxyPath(projectPath, item.sourceFilePath)
     try {
-      const resolved = await resolveVideoSourceFromPath(sourcePath)
-      item.srcUrl = resolved.srcUrl
+      await fs.access(snapshotProxyPath)
+      item.srcUrl = localPathToMediaUrl(snapshotProxyPath)
+      continue
     } catch {
-      // Keep original source URL if proxy generation failed.
+      // No project-level snapshot yet.
+    }
+    const cachedProxyPath = videoProxyCacheFilePath(item.sourceFilePath)
+    try {
+      await fs.access(cachedProxyPath)
+      item.srcUrl = localPathToMediaUrl(cachedProxyPath)
+    } catch {
+      // No local proxy cache yet on this machine.
+    }
+  }
+
+  if (options?.resolveVideoSources !== false) {
+    const knownVideoDirs = new Set<string>()
+    for (const item of project.items) {
+      if (item.type !== 'video') continue
+      if (!item.sourceFilePath || isLegacyTempProxyPath(item.sourceFilePath)) continue
+      knownVideoDirs.add(dirname(item.sourceFilePath))
+    }
+
+    const tryResolveByFilename = async (fileName: string): Promise<string | null> => {
+      for (const dir of knownVideoDirs) {
+        const candidate = join(dir, fileName)
+        try {
+          const st = await fs.stat(candidate)
+          if (st.isFile()) return candidate
+        } catch {
+          // continue
+        }
+      }
+      return null
+    }
+
+    for (const item of project.items) {
+      if (item.type !== 'video') continue
+      const primarySourcePath = item.sourceFilePath ?? mediaUrlToLocalPath(item.srcUrl)
+      if (!primarySourcePath) continue
+      try {
+        const resolved = await resolveVideoSourceFromPath(primarySourcePath)
+        item.srcUrl = resolved.srcUrl
+        item.sourceFilePath = resolved.sourceFilePath
+        if (!isLegacyTempProxyPath(resolved.sourceFilePath)) {
+          knownVideoDirs.add(dirname(resolved.sourceFilePath))
+        }
+      } catch {
+        if (
+          primarySourcePath &&
+          isLegacyTempProxyPath(primarySourcePath) &&
+          item.fileName
+        ) {
+          const repaired = await tryResolveByFilename(item.fileName)
+          if (repaired) {
+            try {
+              const resolved = await resolveVideoSourceFromPath(repaired)
+              item.srcUrl = resolved.srcUrl
+              item.sourceFilePath = resolved.sourceFilePath
+              knownVideoDirs.add(dirname(resolved.sourceFilePath))
+              await appendVideoDebugLog(
+                `repaired legacy proxy item by filename "${item.fileName}" -> "${resolved.sourceFilePath}"`,
+              )
+              continue
+            } catch {
+              // keep fallback below
+            }
+          }
+        }
+        // Keep original source URL if proxy generation/repair failed.
+      }
     }
   }
   return { project, rawItemsCount }
@@ -712,98 +921,67 @@ async function writeProjectToDisk(projectPath: string, project: ProjectFile) {
   await fs.writeFile(projectPath, JSON.stringify(project, null, 2), 'utf8')
 }
 
+async function persistProjectVideoSnapshot(projectPath: string, items: CanvasItem[]): Promise<void> {
+  const videoItems = items.filter((item): item is Extract<CanvasItem, { type: 'video' }> => item.type === 'video')
+  if (videoItems.length === 0) return
+
+  await fs.mkdir(projectVideoSnapshotDir(projectPath), { recursive: true })
+
+  for (const item of videoItems) {
+    const sourcePath = item.sourceFilePath ?? mediaUrlToLocalPath(item.srcUrl)
+    if (!sourcePath) continue
+    const ext = extname(sourcePath).toLowerCase()
+    if (!VIDEO_PROXY_EXT.has(ext)) continue
+
+    const localProxyPath = videoProxyCacheFilePath(sourcePath)
+    const snapshotProxyPath = projectVideoSnapshotProxyPath(projectPath, sourcePath)
+    try {
+      const [sourceStat, localProxyStat] = await Promise.all([fs.stat(sourcePath), fs.stat(localProxyPath)])
+      if (!sourceStat.isFile() || !localProxyStat.isFile()) continue
+      if (localProxyStat.mtimeMs < sourceStat.mtimeMs) continue
+      await fs.copyFile(localProxyPath, snapshotProxyPath)
+    } catch {
+      // Best-effort optimization only.
+    }
+  }
+}
+
+async function cloneProjectVideoSnapshotIfNeeded(
+  sourceProjectPath: string | null | undefined,
+  targetProjectPath: string,
+): Promise<void> {
+  if (!sourceProjectPath) return
+  const normalizedSource =
+    extname(sourceProjectPath).toLowerCase() === PROJECT_EXT
+      ? sourceProjectPath
+      : `${sourceProjectPath}${PROJECT_EXT}`
+  const normalizedTarget =
+    extname(targetProjectPath).toLowerCase() === PROJECT_EXT
+      ? targetProjectPath
+      : `${targetProjectPath}${PROJECT_EXT}`
+  if (normalizePathKey(normalizedSource) === normalizePathKey(normalizedTarget)) return
+
+  const sourceSnapshotDir = projectVideoSnapshotDir(normalizedSource)
+  const targetSnapshotDir = projectVideoSnapshotDir(normalizedTarget)
+  try {
+    await fs.access(sourceSnapshotDir)
+  } catch {
+    return
+  }
+  try {
+    await fs.access(targetSnapshotDir)
+    return
+  } catch {
+    // continue
+  }
+  await fs.mkdir(dirname(targetSnapshotDir), { recursive: true })
+  await fs.cp(sourceSnapshotDir, targetSnapshotDir, { recursive: true })
+}
+
 let activeWindow: BrowserWindow | null = null
 
 /** Mirrors BrowserWindow always-on-top; used for menu checkbox + IPC (avoids relying on platform-specific getters). */
 let alwaysOnTopEnabled = false
-let autosaveEnabled = true
-let autosaveLastAt: string | null = null
-let autosaveTimer: NodeJS.Timeout | null = null
-const AUTOSAVE_INTERVAL_MS = 20 * 60 * 1000
-const AUTOSAVE_MAX_COPIES = 5
-
-function autosavePrefsPath(): string {
-  return join(app.getPath('userData'), 'autosave-prefs.json')
-}
-
-async function loadAutosavePrefs(): Promise<void> {
-  try {
-    const raw = await fs.readFile(autosavePrefsPath(), 'utf8')
-    const parsed = JSON.parse(raw) as { enabled?: unknown }
-    autosaveEnabled = typeof parsed.enabled === 'boolean' ? parsed.enabled : true
-  } catch {
-    autosaveEnabled = true
-  }
-}
-
-async function saveAutosavePrefs(): Promise<void> {
-  try {
-    await fs.writeFile(
-      autosavePrefsPath(),
-      JSON.stringify({ enabled: autosaveEnabled }, null, 2),
-      'utf8',
-    )
-  } catch {
-    // ignore write errors
-  }
-}
-
-function autosaveDirForProject(projectPath: string): string {
-  const folder = dirname(projectPath)
-  const base = basename(projectPath, extname(projectPath))
-  return join(folder, `${base}.autosaves`)
-}
-
-async function createAutosaveSnapshot(snapshot: { projectData: any; path: string }): Promise<void> {
-  const srcProjectPath = snapshot.path
-  const autosaveDir = autosaveDirForProject(srcProjectPath)
-  await fs.mkdir(autosaveDir, { recursive: true })
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-  const dstPath = join(autosaveDir, `${basename(srcProjectPath, extname(srcProjectPath))}-autosave-${stamp}.previewv`)
-  const projectData = snapshot.projectData
-  const items = (projectData?.items ?? []) as CanvasItem[]
-  if (!Array.isArray(items) || items.length === 0) return
-  const project = serializeProject({
-    items,
-    viewport: projectData.viewport,
-    meta: projectData.meta,
-    assetPathForImage: (item) => item.projectAssetPath ?? item.fileName ?? `${item.id}.png`,
-    previewAssetPathForImage: (item) => item.projectAssetPath,
-  })
-  await writeProjectToDisk(dstPath, project)
-  autosaveLastAt = new Date().toISOString()
-  activeWindow?.webContents.send('autosave:status', { lastAutosaveAt: autosaveLastAt })
-
-  const entries = await fs.readdir(autosaveDir, { withFileTypes: true })
-  const files = entries
-    .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.previewv'))
-    .map((e) => e.name)
-    .sort((a, b) => b.localeCompare(a))
-  const stale = files.slice(AUTOSAVE_MAX_COPIES)
-  await Promise.all(stale.map((name) => fs.unlink(join(autosaveDir, name)).catch(() => {})))
-}
-
-async function runAutosaveTick(): Promise<void> {
-  if (!autosaveEnabled || !activeWindow || activeWindow.isDestroyed()) return
-  let snapshot: { projectData: any; path: string } | null = null
-  try {
-    snapshot = await activeWindow.webContents.executeJavaScript(
-      `window.__previewvAutosaveSnapshot ? window.__previewvAutosaveSnapshot() : null`,
-      true,
-    )
-  } catch {
-    snapshot = null
-  }
-  if (!snapshot?.path) return
-  await createAutosaveSnapshot(snapshot)
-}
-
-function startAutosaveTimer(): void {
-  if (autosaveTimer) clearInterval(autosaveTimer)
-  autosaveTimer = setInterval(() => {
-    void runAutosaveTick()
-  }, AUTOSAVE_INTERVAL_MS)
-}
 
 function revealWindow(win: BrowserWindow): void {
   if (win.isMinimized()) {
@@ -1062,9 +1240,6 @@ function createWindow(): void {
   activeWindow = mainWindow
   setupWindowCloseGuard(mainWindow)
   refreshApplicationMenu().catch(() => {})
-  mainWindow.webContents.once('did-finish-load', () => {
-    mainWindow.webContents.send('autosave:status', { lastAutosaveAt: autosaveLastAt })
-  })
 
   // Ctrl+Shift+A (Cmd+Shift+A on macOS): toggle always-on-top; handled in main so it works over canvas/video.
   // Ignores auto-repeat. Physical KeyA for layout-stable binding.
@@ -1128,10 +1303,18 @@ app.whenReady().then(() => {
     applyAlwaysOnTop(activeWindow, Boolean(enabled))
   })
 
-  ipcMain.handle('autosave:get-enabled', () => autosaveEnabled)
-  ipcMain.handle('autosave:set-enabled', (_e, enabled: unknown) => {
-    autosaveEnabled = Boolean(enabled)
-    void saveAutosavePrefs()
+  ipcMain.handle('reveal-file-in-folder', async (_e, payload: { path?: unknown }) => {
+    const rawPath = typeof payload?.path === 'string' ? payload.path.trim() : ''
+    if (!rawPath) return false
+    const normalizedPath = normalize(rawPath)
+    try {
+      const st = await fs.stat(normalizedPath)
+      if (!st.isFile()) return false
+      shell.showItemInFolder(normalizedPath)
+      return true
+    } catch {
+      return false
+    }
   })
 
   ipcMain.handle('pick-folder-dialog', async () => {
@@ -1169,7 +1352,14 @@ app.whenReady().then(() => {
     if (typeof filePath !== 'string' || !filePath.trim()) {
       throw new Error('Invalid path')
     }
-    return resolveVideoSourceFromPath(filePath)
+    try {
+      return await resolveVideoSourceFromPath(filePath)
+    } catch (error) {
+      await appendVideoDebugLog(
+        `resolve-video-source failed for "${String(filePath)}": ${error instanceof Error ? error.message : String(error)}`,
+      )
+      throw error
+    }
   })
 
   ipcMain.handle('scan-dailies', async (_e, payload: any) => {
@@ -1249,7 +1439,9 @@ app.whenReady().then(() => {
     })
     if (result.canceled || result.filePaths.length === 0) return null
     const projectPath = result.filePaths[0]
-    const { project, rawItemsCount } = await readProjectFromDisk(projectPath)
+    const { project, rawItemsCount } = await readProjectFromDisk(projectPath, {
+      resolveVideoSources: false,
+    })
     if (rawItemsCount !== null && rawItemsCount > 0 && project.items.length === 0) {
       throw new Error('Project file is valid JSON but contains no items after validation')
     }
@@ -1262,7 +1454,9 @@ app.whenReady().then(() => {
   ipcMain.handle('open-project-by-path', async (_e, payload: { path: string }) => {
     const projectPath = payload.path
     await fs.access(projectPath)
-    const { project, rawItemsCount } = await readProjectFromDisk(projectPath)
+    const { project, rawItemsCount } = await readProjectFromDisk(projectPath, {
+      resolveVideoSources: false,
+    })
     if (rawItemsCount !== null && rawItemsCount > 0 && project.items.length === 0) {
       throw new Error('Project file is valid JSON but contains no items after validation')
     }
@@ -1342,6 +1536,7 @@ app.whenReady().then(() => {
   async function saveToPath(
     projectPath: string,
     projectData: any,
+    sourceProjectPath?: string | null,
   ): Promise<{ path: string; project: DeserializedProject }> {
     const now = new Date().toISOString()
     if (!projectData || !Array.isArray(projectData.items)) {
@@ -1379,12 +1574,20 @@ app.whenReady().then(() => {
     if (project.items.length !== items.length) {
       throw new Error('Cannot save: serialized items count mismatch')
     }
-    if (project.items.length === 0) {
-      throw new Error('Cannot save: project contains no items')
-    }
 
+    await cloneProjectVideoSnapshotIfNeeded(sourceProjectPath, finalPath)
     await writeProjectToDisk(finalPath, project)
-    const { project: reopened } = await readProjectFromDisk(finalPath)
+    // Snapshot generation is an optimization only; do not block Save/Exit UX.
+    void persistProjectVideoSnapshot(finalPath, items).catch(async (error) => {
+      await appendVideoDebugLog(
+        `persist project snapshot failed for "${finalPath}": ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+    })
+    const { project: reopened } = await readProjectFromDisk(finalPath, {
+      resolveVideoSources: false,
+    })
     if (reopened.items.length !== project.items.length) {
       throw new Error('Project save verification failed (items mismatch after reload)')
     }
@@ -1410,7 +1613,7 @@ app.whenReady().then(() => {
     return saveToPath(result.filePath, payload.projectData)
   })
 
-  ipcMain.handle('save-project-as', async (_e, payload: { projectData: any }) => {
+  ipcMain.handle('save-project-as', async (_e, payload: { projectData: any; currentPath?: string | null }) => {
     if (!activeWindow) return null
     const result = await dialog.showSaveDialog(activeWindow, {
       title: 'Save project as',
@@ -1418,13 +1621,10 @@ app.whenReady().then(() => {
       filters: [{ name: 'PreviewV project', extensions: ['previewv'] }],
     })
     if (result.canceled || !result.filePath) return null
-    return saveToPath(result.filePath, payload.projectData)
+    return saveToPath(result.filePath, payload.projectData, payload.currentPath)
   })
 
-  void loadAutosavePrefs().finally(() => {
-    createWindow()
-    startAutosaveTimer()
-  })
+  createWindow()
 
   // second-instance open flow
   app.on('second-instance', (_event, commandLine) => {
@@ -1442,9 +1642,5 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
-  if (autosaveTimer) {
-    clearInterval(autosaveTimer)
-    autosaveTimer = null
-  }
   if (process.platform !== 'darwin') app.quit()
 })

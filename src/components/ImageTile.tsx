@@ -5,6 +5,7 @@ import { imageDrawUndoRegistry } from '../utils/imageDrawUndoRegistry'
 import { imageExportRegistry } from '../utils/imageExportRegistry'
 import { tileDomRegistry } from '../utils/tileDomRegistry'
 import { imageDrawRedoRegistry } from '../utils/imageDrawRedoRegistry'
+import { imageDrawBakeRegistry } from '../utils/imageDrawBakeRegistry'
 import { imageTileEditSize, imageTileViewSize } from '../utils/tileSizing'
 import type { ImageItem } from '../types'
 
@@ -295,6 +296,8 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected, i
 
   // ── Pointer handlers ─────────────────────────────────────────────────────
   const onDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    // Draw only on primary (left) button; middle button is reserved for navigation.
+    if (e.button !== 0) return
     e.stopPropagation()
     if (e.ctrlKey || e.metaKey) toggleSelect(item.id)
     else selectOne(item.id)
@@ -428,6 +431,17 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected, i
     redoStack.current = []
   }, [])
 
+  useEffect(() => {
+    imageDrawBakeRegistry.set(item.id, () => {
+      if (!isEditing) return false
+      handleBake()
+      return true
+    })
+    return () => {
+      imageDrawBakeRegistry.delete(item.id)
+    }
+  }, [item.id, isEditing, handleBake])
+
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <Rnd
@@ -500,6 +514,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected, i
         scheduleResizeUpdate({ x: position.x, y: position.y, width: w, height: h })
       }}
       onResizeStart={(e) => {
+        if (isEditing) return false
         if ('button' in e && typeof e.button === 'number' && e.button !== 0) return false
         resizeActiveRef.current = true
         updateItemsBatch([{ id: item.id, updates: {} }], { recordHistory: true })
@@ -519,7 +534,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected, i
           { recordHistory: false },
         )
       }}
-      enableResizing={true}
+      enableResizing={!isEditing}
       style={{ 
         zIndex: isEditing ? 30 : 15, 
         pointerEvents: isHidden ? 'none' : 'auto',

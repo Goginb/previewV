@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Rnd } from 'react-rnd'
 import { useCanvasStore } from '../store/canvasStore'
 import { videoRegistry } from '../utils/videoRegistry'
@@ -9,6 +9,7 @@ import { getVideoPlaybackSuspended } from '../utils/videoGlobalPlayback'
 import { setManualPlaybackAllowedInSuspended } from '../utils/videoSuspendedManualAllowRegistry'
 import type { VideoItem } from '../types'
 import { computeAttachedItemIds } from '../utils/backdrops'
+import { localPathToMediaUrl } from '../utils/projectSerializer'
 
 interface VideoTileProps {
   tile: VideoItem
@@ -82,6 +83,8 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const [paused, setPaused] = useState(true)
+  const [activeSrcUrl, setActiveSrcUrl] = useState(tile.srcUrl)
+  const failedSrcUrlsRef = useRef<Set<string>>(new Set())
 
   const updateItem = useCanvasStore((s) => s.updateItem)
   const updateItemsBatch = useCanvasStore((s) => s.updateItemsBatch)
@@ -89,6 +92,20 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
   const toggleSelect = useCanvasStore((s) => s.toggleSelect)
   const dragOriginsRef = useRef<Map<string, { x: number; y: number }> | null>(null)
   const durationRef = useRef(0)
+  const srcCandidates = useMemo(() => {
+    const out: string[] = []
+    const pushUnique = (v: string | undefined) => {
+      if (!v) return
+      const normalized = v.trim()
+      if (!normalized || out.includes(normalized)) return
+      out.push(normalized)
+    }
+    pushUnique(tile.srcUrl)
+    if (tile.sourceFilePath) {
+      pushUnique(localPathToMediaUrl(tile.sourceFilePath))
+    }
+    return out
+  }, [tile.sourceFilePath, tile.srcUrl])
 
   // Smooth resize: while user drags resize handles, keep store in sync (throttled to rAF).
   const resizeRafRef = useRef<number>(0)
@@ -116,6 +133,11 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
   useEffect(() => {
     durationRef.current = duration
   }, [duration])
+
+  useEffect(() => {
+    failedSrcUrlsRef.current.clear()
+    setActiveSrcUrl(srcCandidates[0] ?? tile.srcUrl)
+  }, [srcCandidates, tile.srcUrl])
 
   useEffect(() => {
     const v = videoRef.current
@@ -338,7 +360,17 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
     }
     const onStalled = () => attemptRecovery('stalled')
     const onEmptied = () => attemptRecovery('emptied')
-    const onError = () => attemptRecovery('error')
+    const onError = () => {
+      const current = (v.currentSrc && v.currentSrc.trim()) || activeSrcUrl
+      if (current) failedSrcUrlsRef.current.add(current)
+      const fallback = srcCandidates.find((src) => !failedSrcUrlsRef.current.has(src))
+      if (fallback && fallback !== activeSrcUrl) {
+        console.warn(`[PreviewV] Video tile "${tile.fileName}" switching source fallback`)
+        setActiveSrcUrl(fallback)
+        return
+      }
+      attemptRecovery('error')
+    }
 
     v.addEventListener('loadeddata', onLoadedData)
     v.addEventListener('canplay', onCanPlay)
@@ -356,7 +388,7 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
       v.removeEventListener('emptied', onEmptied)
       v.removeEventListener('error', onError)
     }
-  }, [isHidden, scheduleSyncAfterSeek, syncFromVideo, tile.fileName, tile.id])
+  }, [activeSrcUrl, isHidden, scheduleSyncAfterSeek, srcCandidates, syncFromVideo, tile.fileName, tile.id])
 
   const beginScrub = useCallback(() => {
     const v = videoRef.current
@@ -653,7 +685,7 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
         >
           <video
             ref={videoRef}
-            src={tile.srcUrl}
+            src={activeSrcUrl}
             className="absolute inset-0 w-full h-full object-contain"
             loop
             muted

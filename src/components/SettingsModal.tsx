@@ -8,9 +8,6 @@ export const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) =>
   const gridSizeX = useUiStore((s) => s.gridSizeX)
   const gridSizeY = useUiStore((s) => s.gridSizeY)
   const setGridSize = useUiStore((s) => s.setGridSize)
-  const autosaveEnabled = useUiStore((s) => s.autosaveEnabled)
-  const setAutosaveEnabled = useUiStore((s) => s.setAutosaveEnabled)
-  const lastAutosaveAt = useUiStore((s) => s.lastAutosaveAt)
   const [runtimeInfo, setRuntimeInfo] = useState<AppRuntimeInfo | null>(null)
 
   useEffect(() => {
@@ -91,15 +88,6 @@ export const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) =>
 
         <section className="rounded-lg border border-[var(--menu-border)] p-3">
           <h3 className="mb-2 text-sm font-semibold text-themeText-200">General</h3>
-          <label className="flex items-center gap-2 text-sm text-themeText-200">
-            <input
-              type="checkbox"
-              checked={autosaveEnabled}
-              onChange={(e) => setAutosaveEnabled(e.target.checked)}
-            />
-            Enable autosave
-          </label>
-          <div className="mt-2 text-xs text-themeText-400">Interval: 20 min (fixed)</div>
           <div className="mt-1 text-xs text-themeText-400">
             App version: {runtimeInfo?.version ?? '...'}
           </div>
@@ -113,9 +101,6 @@ export const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) =>
               Install folder: {runtimeInfo.installDirectory}
             </div>
           ) : null}
-          <div className="mt-1 text-xs text-themeText-400">
-            Last autosave: {lastAutosaveAt ? new Date(lastAutosaveAt).toLocaleString() : '-'}
-          </div>
         </section>
       </div>
     </div>

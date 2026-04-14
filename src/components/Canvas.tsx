@@ -11,13 +11,16 @@ import { CanvasCommonMenuSection } from './CanvasCommonMenuSection'
 import { videoRegistry } from '../utils/videoRegistry'
 import { imageDrawUndoRegistry } from '../utils/imageDrawUndoRegistry'
 import { imageDrawRedoRegistry } from '../utils/imageDrawRedoRegistry'
+import { imageDrawBakeRegistry } from '../utils/imageDrawBakeRegistry'
 import { imageExportRegistry } from '../utils/imageExportRegistry'
 import { flushImageAnnotations } from '../utils/flushImageAnnotations'
 import { importImageFile, isRasterImportFile } from '../utils/imageImport'
 import { isTypingTarget } from '../utils/keyboard'
 import { getNoteCreationMetrics, getNoteCreationMetricsForText } from '../utils/noteCreation'
 import { defaultVideoTileSizeForNew, imageTileViewSize } from '../utils/tileSizing'
-import { setVideoPlaybackSuspended } from '../utils/videoGlobalPlayback'
+import { getVideoPlaybackSuspended, setVideoPlaybackSuspended } from '../utils/videoGlobalPlayback'
+import { setVideoUserPausedByUser } from '../utils/videoUserPausedRegistry'
+import { setManualPlaybackAllowedInSuspended } from '../utils/videoSuspendedManualAllowRegistry'
 import { requestVideoWarmupEarly } from '../utils/warmupCanvasMedia'
 import { BACKDROP_COLOR_PRESETS, BackdropTile, createBackdropItem } from './BackdropTile'
 import {
@@ -54,6 +57,17 @@ function fileToUrl(file: File): string {
     return `media:///${normalized}`
   }
   return URL.createObjectURL(file)
+}
+
+function mediaUrlToFilePath(url: string): string | null {
+  if (!url.startsWith('media:///') && !url.startsWith('media://')) return null
+  const rest = url.startsWith('media:///') ? url.slice('media:///'.length) : url.slice('media://'.length)
+  if (!rest) return null
+  try {
+    return decodeURIComponent(rest).replace(/\//g, '\\')
+  } catch {
+    return rest.replace(/\//g, '\\')
+  }
 }
 
 async function resolveDroppedVideoUrl(file: File): Promise<string> {
@@ -185,7 +199,8 @@ export const Canvas: React.FC = () => {
   const containerRef    = useRef<HTMLDivElement>(null)
   const lastMouseScreen = useRef({ x: 0, y: 0 })
   const lastCommandContextRef = useRef<'text' | 'canvas'>('canvas')
-  const internalClipboardTextSnapshotRef = useRef('')
+  const internalClipboardSystemSignatureRef = useRef<string | null>(null)
+  const lastObservedSystemClipboardSignatureRef = useRef<string | null>(null)
   const [ctxMenu, setCtxMenu] = useState<null | { x: number; y: number; kind: 'canvas' | 'video' | 'image'; itemId?: string }>(null)
   const { menuRef: canvasMenuRef, menuPosition: canvasMenuPosition } = useClampedMenuPosition(
     ctxMenu ? { x: ctxMenu.x, y: ctxMenu.y } : null,
@@ -201,6 +216,20 @@ export const Canvas: React.FC = () => {
     () => window.electronAPI?.projectAPI.readClipboardText?.() ?? '',
     [],
   )
+  const writeSystemClipboardText = useCallback((text: string) => {
+    window.electronAPI?.projectAPI.writeClipboardText?.(text)
+  }, [])
+
+  const getClipboardErrorMessage = useCallback((error: unknown) => {
+    const raw =
+      error instanceof Error
+        ? error.message
+        : typeof error === 'string'
+          ? error
+          : String(error ?? '')
+    const trimmed = raw.trim()
+    return trimmed || 'Clipboard write failed.'
+  }, [])
 
   const markCanvasCommandContext = useCallback(() => {
     lastCommandContextRef.current = 'canvas'
@@ -228,7 +257,8 @@ export const Canvas: React.FC = () => {
   )
 
   const setInternalClipboard = useCallback((copies: CanvasItem[]) => {
-    internalClipboardTextSnapshotRef.current = readSystemClipboardText().trim()
+    internalClipboardSystemSignatureRef.current =
+      lastObservedSystemClipboardSignatureRef.current ?? `text:${readSystemClipboardText().trim()}`
     useCanvasStore.getState().setClipboard(copies)
     markCanvasCommandContext()
   }, [markCanvasCommandContext, readSystemClipboardText])
@@ -283,9 +313,92 @@ export const Canvas: React.FC = () => {
     [addItem, selectOne],
   )
 
-  const pasteUsingBestSource = useCallback((activeElement: HTMLElement | null) => {
+  const readClipboardSnapshot = useCallback(async (): Promise<{
+    text: string
+    imageDataUrl: string | null
+    signature: string
+  }> => {
+    const fallbackText = readSystemClipboardText()
+    const trimmedFallback = fallbackText.trim()
+    if (!navigator.clipboard?.read) return null
+    try {
+      const items = await navigator.clipboard.read()
+      let text = ''
+      let imageDataUrl: string | null = null
+      const signatureParts: string[] = []
+      for (const item of items) {
+        const typesKey = item.types.slice().sort().join('|')
+        signatureParts.push(typesKey)
+        if (!text) {
+          const textType = item.types.find((t) => t === 'text/plain')
+          if (textType) {
+            const textBlob = await item.getType(textType)
+            text = await textBlob.text()
+          }
+        }
+        if (!imageDataUrl) {
+          const imageType = item.types.find((t) => t.startsWith('image/'))
+          if (imageType) {
+            const blob = await item.getType(imageType)
+            imageDataUrl = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader()
+              reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '')
+              reader.onerror = () => reject(reader.error)
+              reader.readAsDataURL(blob)
+            })
+            signatureParts.push(`${imageType}:${blob.size}`)
+          }
+        }
+      }
+      const resolvedText = text || fallbackText
+      const signature = `items:${signatureParts.join(';')}|text:${resolvedText.trim()}`
+      return { text: resolvedText, imageDataUrl, signature }
+    } catch {
+      // Clipboard image read may be blocked by OS/browser policy.
+    }
+    return {
+      text: fallbackText,
+      imageDataUrl: null,
+      signature: `fallback-text:${trimmedFallback}`,
+    }
+  }, [readSystemClipboardText])
+
+  const createImageTileFromDataUrlAtScreenPoint = useCallback(
+    async (screenX: number, screenY: number, dataUrl: string) => {
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const el = new Image()
+        el.onload = () => resolve(el)
+        el.onerror = () => reject(new Error('Failed to decode clipboard image'))
+        el.src = dataUrl
+      })
+      const state = useCanvasStore.getState()
+      const { x: vx, y: vy, scale } = state.viewport
+      const view = imageTileViewSize(img.naturalWidth, img.naturalHeight)
+      const tile: ImageItem = {
+        type: 'image',
+        id: `img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        srcUrl: dataUrl,
+        storage: 'asset',
+        sourceVideoId: '',
+        fileName: 'Clipboard image',
+        naturalWidth: img.naturalWidth,
+        naturalHeight: img.naturalHeight,
+        x: (screenX - vx) / scale - view.width / 2,
+        y: (screenY - vy) / scale - view.height / 2,
+        width: view.width,
+        height: view.height,
+      }
+      addItem(tile)
+      selectOne(tile.id)
+      return tile
+    },
+    [addItem, selectOne],
+  )
+
+  const pasteUsingBestSource = useCallback(async (activeElement: HTMLElement | null) => {
     const state = useCanvasStore.getState()
-    const clipboardText = readSystemClipboardText()
+    const clipboardSnapshot = await readClipboardSnapshot()
+    const clipboardText = clipboardSnapshot.text
     const trimmedText = clipboardText.trim()
 
     if (shouldPreferTextCommands(activeElement)) {
@@ -296,21 +409,29 @@ export const Canvas: React.FC = () => {
       return false
     }
 
-    const hasFreshExternalText =
-      trimmedText.length > 0 && trimmedText !== internalClipboardTextSnapshotRef.current
+    const { x: sx, y: sy } = lastMouseScreen.current
 
-    if (hasFreshExternalText) {
-      const { x: sx, y: sy } = lastMouseScreen.current
+    const externalClipboardChangedSinceInternal =
+      clipboardSnapshot.signature !== internalClipboardSystemSignatureRef.current
+
+    if (externalClipboardChangedSinceInternal && trimmedText.length > 0) {
       const note = createTextNoteAtScreenPoint(sx, sy, trimmedText)
       if (note) {
+        lastObservedSystemClipboardSignatureRef.current = clipboardSnapshot.signature
         markCanvasCommandContext()
         return true
       }
       return false
     }
 
+    if (externalClipboardChangedSinceInternal && clipboardSnapshot.imageDataUrl) {
+      await createImageTileFromDataUrlAtScreenPoint(sx, sy, clipboardSnapshot.imageDataUrl)
+      lastObservedSystemClipboardSignatureRef.current = clipboardSnapshot.signature
+      markCanvasCommandContext()
+      return true
+    }
+
     if (state.clipboard.length) {
-      const { x: sx, y: sy } = lastMouseScreen.current
       const { x: vx, y: vy, scale } = state.viewport
       const worldX = (sx - vx) / scale
       const worldY = (sy - vy) / scale
@@ -319,20 +440,28 @@ export const Canvas: React.FC = () => {
       return true
     }
 
-    if (!trimmedText) return false
+    if (trimmedText) {
+      const note = createTextNoteAtScreenPoint(sx, sy, trimmedText)
+      if (note) {
+        lastObservedSystemClipboardSignatureRef.current = clipboardSnapshot.signature
+        markCanvasCommandContext()
+        return true
+      }
+    }
 
-    const { x: sx, y: sy } = lastMouseScreen.current
-    const note = createTextNoteAtScreenPoint(sx, sy, trimmedText)
-    if (note) {
+    if (clipboardSnapshot.imageDataUrl) {
+      await createImageTileFromDataUrlAtScreenPoint(sx, sy, clipboardSnapshot.imageDataUrl)
+      lastObservedSystemClipboardSignatureRef.current = clipboardSnapshot.signature
       markCanvasCommandContext()
       return true
     }
     return false
   }, [
+    createImageTileFromDataUrlAtScreenPoint,
     createTextNoteAtScreenPoint,
     markCanvasCommandContext,
     markTextCommandContext,
-    readSystemClipboardText,
+    readClipboardSnapshot,
     shouldPreferTextCommands,
   ])
 
@@ -366,9 +495,14 @@ export const Canvas: React.FC = () => {
     }
     window.addEventListener('focusin', onFocusIn, true)
     window.addEventListener('pointerdown', onPointerDown, true)
+    const onCanvasHistoryAction = () => {
+      lastCommandContextRef.current = 'canvas'
+    }
+    window.addEventListener('canvas-history-action', onCanvasHistoryAction as EventListener)
     return () => {
       window.removeEventListener('focusin', onFocusIn, true)
       window.removeEventListener('pointerdown', onPointerDown, true)
+      window.removeEventListener('canvas-history-action', onCanvasHistoryAction as EventListener)
     }
   }, [])
 
@@ -496,13 +630,15 @@ export const Canvas: React.FC = () => {
 
   const runCommonMenuGridAlign = useCallback(() => {
     gridAlignTiles()
+    markCanvasCommandContext()
     setCtxMenu(null)
-  }, [gridAlignTiles])
+  }, [gridAlignTiles, markCanvasCommandContext])
 
   const runCommonMenuLayoutMediaRow = useCallback(() => {
     layoutMediaRow()
+    markCanvasCommandContext()
     setCtxMenu(null)
-  }, [layoutMediaRow])
+  }, [layoutMediaRow, markCanvasCommandContext])
 
   const runCommonMenuFitAll = useCallback(() => {
     const el = containerRef.current
@@ -561,6 +697,17 @@ export const Canvas: React.FC = () => {
     setCtxMenu(null)
     setSourcePathModalOpen(true)
   }, [])
+
+  const copyProjectPathToClipboard = useCallback(() => {
+    if (!projectPathValue) return
+    try {
+      writeSystemClipboardText(projectPathValue)
+      sourcePathInputRef.current?.focus()
+      sourcePathInputRef.current?.select()
+    } catch (error) {
+      alert(`Failed to copy project path: ${getClipboardErrorMessage(error)}`)
+    }
+  }, [getClipboardErrorMessage, projectPathValue, writeSystemClipboardText])
 
   useEffect(() => {
     if (!videoSearchOpen) return
@@ -650,7 +797,7 @@ export const Canvas: React.FC = () => {
       }
 
       if (detail.command === 'paste') {
-        pasteUsingBestSource(activeElement)
+        void pasteUsingBestSource(activeElement)
         return
       }
 
@@ -791,7 +938,7 @@ export const Canvas: React.FC = () => {
         flushImageAnnotations()
         const projectData = state.getProjectDataForSave()
         projectAPI
-          .saveProjectAs({ projectData })
+          .saveProjectAs({ projectData, currentPath: state.currentProjectPath })
           .then((res: any) => {
             if (!res) return
             state.syncSavedProjectState(res.project, res.path)
@@ -814,6 +961,47 @@ export const Canvas: React.FC = () => {
             state.syncSavedProjectState(res.project, res.path)
           })
           .catch((err: any) => alert(err?.message ?? String(err)))
+        return
+      }
+
+      if (e.code === 'Space' && !isTypingTarget(e)) {
+        const state = useCanvasStore.getState()
+        const selectedVideoIds = state.selectedIds.filter((id) =>
+          state.items.some((it) => it.id === id && it.type === 'video'),
+        )
+        if (selectedVideoIds.length === 0) return
+        e.preventDefault()
+
+        const selectedVideos = selectedVideoIds
+          .map((id) => ({ id, video: videoRegistry.get(id) }))
+          .filter((entry): entry is { id: string; video: HTMLVideoElement } => !!entry.video)
+        if (selectedVideos.length === 0) return
+
+        const shouldPause = selectedVideos.some(({ video }) => !video.paused)
+        if (shouldPause) {
+          for (const { id, video } of selectedVideos) {
+            setManualPlaybackAllowedInSuspended(id, false)
+            setVideoUserPausedByUser(id, true)
+            try {
+              video.pause()
+            } catch {
+              // ignore
+            }
+          }
+        } else {
+          const suspended = getVideoPlaybackSuspended()
+          for (const { id, video } of selectedVideos) {
+            setVideoUserPausedByUser(id, false)
+            if (suspended) {
+              setManualPlaybackAllowedInSuspended(id, true)
+            }
+            try {
+              void video.play().catch(() => {})
+            } catch {
+              // ignore
+            }
+          }
+        }
         return
       }
 
@@ -868,7 +1056,7 @@ export const Canvas: React.FC = () => {
 
       if ((e.ctrlKey || e.metaKey) && e.code === 'KeyV' && !e.shiftKey && !isTypingTarget(e)) {
         e.preventDefault()
-        pasteUsingBestSource(document.activeElement as HTMLElement | null)
+        void pasteUsingBestSource(document.activeElement as HTMLElement | null)
         return
       }
 
@@ -898,6 +1086,7 @@ export const Canvas: React.FC = () => {
       if (e.code === 'KeyL' && !isTypingTarget(e)) {
         e.preventDefault()
         layoutMediaRow()
+        markCanvasCommandContext()
         return
       }
 
@@ -911,11 +1100,38 @@ export const Canvas: React.FC = () => {
       ) {
         e.preventDefault()
         gridAlignTiles()
+        markCanvasCommandContext()
         return
       }
 
       // B — create a new backdrop at cursor position
-      if (e.code === 'KeyB' && !e.ctrlKey && !e.metaKey && !e.altKey && !isTypingTarget(e)) {
+      if (e.shiftKey && e.code === 'KeyB' && !e.ctrlKey && !e.metaKey && !e.altKey && !isTypingTarget(e)) {
+        e.preventDefault()
+        const state = useCanvasStore.getState()
+        if (state.selectedIds.length !== 1) return
+        const selectedId = state.selectedIds[0]
+        const item = state.items.find((candidate) => candidate.id === selectedId)
+        if (!item || item.type === 'note' || item.type === 'backdrop') return
+        const resolvedPath =
+          item.sourceFilePath ??
+          (item.type === 'image' ? item.projectAssetPath : undefined) ??
+          mediaUrlToFilePath(item.srcUrl)
+        if (!resolvedPath) return
+        void window.electronAPI?.projectAPI
+          .revealFileInFolder(resolvedPath)
+          .then((ok) => {
+            if (!ok) {
+              alert('Failed to open file location.')
+            }
+          })
+          .catch(() => {
+            alert('Failed to open file location.')
+          })
+        return
+      }
+
+      // B — create a new backdrop at cursor position
+      if (e.code === 'KeyB' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !isTypingTarget(e)) {
         e.preventDefault()
         const state = useCanvasStore.getState()
         const idSet = new Set(state.selectedIds)
@@ -1054,7 +1270,13 @@ export const Canvas: React.FC = () => {
         const sid = state.selectedIds[0]
         const it = state.items.find((i) => i.id === sid)
         if (!it || it.type !== 'image') return
-        state.setImageEditModeId(state.imageEditModeId === sid ? null : sid)
+        if (state.imageEditModeId === sid) {
+          const bake = imageDrawBakeRegistry.get(sid)
+          if (bake?.()) return
+          state.setImageEditModeId(null)
+          return
+        }
+        state.setImageEditModeId(sid)
       }
     }
 
@@ -1591,13 +1813,23 @@ export const Canvas: React.FC = () => {
                       : 'The project has not been saved yet, so the path field is empty.'}
                   </div>
                 </div>
-                <button
-                  type="button"
-                  className="rounded px-2 py-1 text-sm text-themeText-200 hover:bg-themeBg-hover"
-                  onClick={closeSourcePathModal}
-                >
-                  Close
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={!projectPathValue}
+                    className="rounded px-2 py-1 text-sm text-themeText-100 hover:bg-themeBg-hover disabled:opacity-50 disabled:hover:bg-transparent"
+                    onClick={copyProjectPathToClipboard}
+                  >
+                    Copy
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded px-2 py-1 text-sm text-themeText-200 hover:bg-themeBg-hover"
+                    onClick={closeSourcePathModal}
+                  >
+                    Close
+                  </button>
+                </div>
               </div>
 
               <input
@@ -1611,6 +1843,11 @@ export const Canvas: React.FC = () => {
                 onFocus={(e) => e.currentTarget.select()}
                 onClick={(e) => e.currentTarget.select()}
                 onKeyDown={(e) => {
+                  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
+                    e.preventDefault()
+                    copyProjectPathToClipboard()
+                    return
+                  }
                   if (e.key === 'Escape' || e.key === 'Enter') {
                     e.preventDefault()
                     closeSourcePathModal()

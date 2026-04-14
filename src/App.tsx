@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Canvas } from './components/Canvas'
 import { ViewportHud } from './components/ViewportHud'
 import { ProjectTitleBar } from './components/ProjectTitleBar'
@@ -10,6 +10,7 @@ import { ProjectLoadingOverlay } from './components/ProjectLoadingOverlay'
 import { useCanvasStore } from './store/canvasStore'
 import { useUiStore } from './store/uiStore'
 import { flushImageAnnotations } from './utils/flushImageAnnotations'
+import { hydrateProjectVideoSources } from './utils/hydrateProjectVideoSources'
 import { createEmptyProject } from './utils/emptyProject'
 import { importMediaPathsToCanvas } from './utils/importMediaPaths'
 import { collectExistingSourcePaths, normalizePathKey } from './utils/sourcePaths'
@@ -20,6 +21,7 @@ import {
   updateProjectOpenProgress,
 } from './utils/warmupCanvasMedia'
 import type { ElectronProjectAPI } from './electron-api'
+import type { DeserializedProject } from './types/project'
 
 type ProjectAPI = ElectronProjectAPI
 
@@ -76,45 +78,85 @@ const App: React.FC = () => {
   const [closePrompt, setClosePrompt] = useState<null | { fileLabel: string; busy: boolean }>(
     null,
   )
+  const projectVideoHydrationRunRef = useRef(0)
 
   const isDailiesModalOpen = useUiStore((s) => s.isDailiesModalOpen)
   const isPrmModalOpen = useUiStore((s) => s.isPrmModalOpen)
   const loadProjectState = useCanvasStore((s) => s.loadProjectState)
   const getProjectDataForSave = useCanvasStore((s) => s.getProjectDataForSave)
   const syncSavedProjectState = useCanvasStore((s) => s.syncSavedProjectState)
-  const autosaveEnabled = useUiStore((s) => s.autosaveEnabled)
-  const setAutosaveEnabled = useUiStore((s) => s.setAutosaveEnabled)
-  const setLastAutosaveAt = useUiStore((s) => s.setLastAutosaveAt)
   const theme = useUiStore((s) => s.theme)
+
+  const waitForUiPaint = useCallback((maxDelayMs = 48) => {
+    return new Promise<void>((resolve) => {
+      let settled = false
+      const finish = () => {
+        if (settled) return
+        settled = true
+        resolve()
+      }
+      const timeoutId = window.setTimeout(finish, maxDelayMs)
+      requestAnimationFrame(() => {
+        window.clearTimeout(timeoutId)
+        finish()
+      })
+    })
+  }, [])
+
+  const completeProjectOpenProgress = useCallback((sessionId: number) => {
+    let finished = false
+    const finish = () => {
+      if (finished) return
+      finished = true
+      finishProjectOpenProgress(sessionId)
+    }
+    const timeoutId = window.setTimeout(finish, 320)
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        window.clearTimeout(timeoutId)
+        finish()
+      })
+    })
+  }, [])
+
+  const startProjectVideoHydration = useCallback((project: DeserializedProject) => {
+    projectVideoHydrationRunRef.current += 1
+    const runId = projectVideoHydrationRunRef.current
+    hydrateProjectVideoSources(project.items, () => projectVideoHydrationRunRef.current === runId)
+  }, [])
+
+  const cancelProjectVideoHydration = useCallback(() => {
+    projectVideoHydrationRunRef.current += 1
+  }, [])
 
   const openProjectWithProgress = useCallback(
     async (
       initialLine: string,
-      action: () => Promise<{ path: string; project: any } | null>,
+      action: () => Promise<{ path: string; project: DeserializedProject } | null>,
     ) => {
       const sessionId = beginProjectOpenProgress(initialLine)
       try {
         updateProjectOpenProgress(sessionId, 24, 'Reading project file...')
+        await waitForUiPaint()
         const res = await action()
         if (!res) {
           cancelProjectOpenProgress(sessionId)
           return null
         }
         updateProjectOpenProgress(sessionId, 60, 'Restoring canvas...')
-        loadProjectState(res.project, res.path)
+        await waitForUiPaint()
         updateProjectOpenProgress(sessionId, 88, 'Preparing media...')
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            finishProjectOpenProgress(sessionId)
-          })
-        })
+        await waitForUiPaint()
+        loadProjectState(res.project, res.path)
+        startProjectVideoHydration(res.project)
+        completeProjectOpenProgress(sessionId)
         return res
       } catch (error) {
         cancelProjectOpenProgress(sessionId)
         throw error
       }
     },
-    [loadProjectState],
+    [completeProjectOpenProgress, loadProjectState, startProjectVideoHydration, waitForUiPaint],
   )
 
   useEffect(() => {
@@ -142,38 +184,13 @@ const App: React.FC = () => {
     const wa = window.electronAPI?.windowAPI
     if (!wa) return
     void wa.getAlwaysOnTop().then((v) => useUiStore.getState().setAlwaysOnTop(v))
-    void wa.getAutosaveEnabled().then((v) => setAutosaveEnabled(v))
     const onChange = (e: Event) => {
       const d = (e as CustomEvent).detail as { value: boolean }
       useUiStore.getState().setAlwaysOnTop(d.value)
     }
-    const onAutosave = (e: Event) => {
-      const d = (e as CustomEvent).detail as { lastAutosaveAt: string | null }
-      setLastAutosaveAt(d.lastAutosaveAt ?? null)
-    }
     window.addEventListener('previewv-always-on-top', onChange)
-    window.addEventListener('previewv-autosave-status', onAutosave)
     return () => {
       window.removeEventListener('previewv-always-on-top', onChange)
-      window.removeEventListener('previewv-autosave-status', onAutosave)
-    }
-  }, [setAutosaveEnabled, setLastAutosaveAt])
-
-  useEffect(() => {
-    const wa = window.electronAPI?.windowAPI
-    if (!wa) return
-    void wa.setAutosaveEnabled(autosaveEnabled)
-  }, [autosaveEnabled])
-
-  useEffect(() => {
-    window.__previewvAutosaveSnapshot = () => {
-      const state = useCanvasStore.getState()
-      if (!state.currentProjectPath) return null
-      const projectData = state.getProjectDataForSave()
-      return { projectData, path: state.currentProjectPath }
-    }
-    return () => {
-      window.__previewvAutosaveSnapshot = undefined
     }
   }, [])
 
@@ -267,7 +284,10 @@ const App: React.FC = () => {
         if (detail.action === 'save-as') {
           flushImageAnnotations()
           const projectData = getProjectDataForSave()
-          const res = await projectAPI.saveProjectAs({ projectData })
+          const res = await projectAPI.saveProjectAs({
+            projectData,
+            currentPath: useCanvasStore.getState().currentProjectPath,
+          })
           if (!res) return
           syncSavedProjectState(res.project, res.path)
           return
@@ -287,6 +307,7 @@ const App: React.FC = () => {
         if (detail.action === 'close-project') {
           const ok = await ensureCanLeaveProject(projectAPI)
           if (!ok) return
+          cancelProjectVideoHydration()
           loadProjectState(createEmptyProject(), null)
           return
         }
@@ -307,7 +328,14 @@ const App: React.FC = () => {
 
     window.addEventListener('project-menu-action', handler)
     return () => window.removeEventListener('project-menu-action', handler)
-  }, [getProjectDataForSave, loadProjectState, openProjectWithProgress, syncSavedProjectState])
+  }, [
+    cancelProjectVideoHydration,
+    getProjectDataForSave,
+    loadProjectState,
+    openProjectWithProgress,
+    startProjectVideoHydration,
+    syncSavedProjectState,
+  ])
 
   useEffect(() => {
     const openByPath = async (path: string) => {

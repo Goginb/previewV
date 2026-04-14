@@ -283,8 +283,14 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   layoutMediaRow: () => {
     const state = get()
-    const videos = state.items.filter((i): i is Extract<CanvasItem, { type: 'video' }> => i.type === 'video')
-    const images = state.items.filter((i): i is Extract<CanvasItem, { type: 'image' }> => i.type === 'image')
+    const selectionSet = new Set(state.selectedIds)
+    const canMove = (id: string) => (selectionSet.size > 0 ? selectionSet.has(id) : true)
+    const videos = state.items.filter(
+      (i): i is Extract<CanvasItem, { type: 'video' }> => i.type === 'video' && canMove(i.id),
+    )
+    const images = state.items.filter(
+      (i): i is Extract<CanvasItem, { type: 'image' }> => i.type === 'image' && canMove(i.id),
+    )
     if (videos.length === 0 && images.length === 0) return
 
     const media = [...videos, ...images]

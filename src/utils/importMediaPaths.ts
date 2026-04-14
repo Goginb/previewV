@@ -13,6 +13,7 @@ const AUTO_SUSPEND_PLAYBACK_FILE_COUNT = 20
 const ROW_CAP = 20
 const SECTION_GAP = 48
 const GAP = 16
+const APPEND_ROW_GAP = 40
 /** Параллельное чтение картинок с диска — не блокирует конец импорта на сотнях файлов подряд. */
 const IMAGE_IMPORT_CONCURRENCY = 6
 const VIDEO_RESOLVE_CONCURRENCY = 3
@@ -88,9 +89,25 @@ export async function importMediaPathsToCanvas(
   const cellW = footprint.width + GAP
   const cellH = footprint.height + GAP
 
-  /** Top-left of grid so worldAnchor stays the visual center of the first cell */
-  const originX = worldAnchor.x - footprint.width / 2
-  const originY = worldAnchor.y - footprint.height / 2
+  // Keep "Add folder" placement consistent with Dailies/PRM import:
+  // append below existing content using left-most X, otherwise use anchor.
+  const existingItems = useCanvasStore.getState().items
+  let originX: number
+  let originY: number
+  if (existingItems.length > 0) {
+    let minX = Infinity
+    let maxY = -Infinity
+    for (const it of existingItems) {
+      minX = Math.min(minX, it.x)
+      maxY = Math.max(maxY, it.y + it.height)
+    }
+    originX = minX
+    originY = maxY + APPEND_ROW_GAP
+  } else {
+    // Top-left of grid so worldAnchor stays the visual center of the first cell.
+    originX = worldAnchor.x - footprint.width / 2
+    originY = worldAnchor.y - footprint.height / 2
+  }
 
   const newIds: string[] = []
   const pendingItems: Array<VideoItem | ImageItem> = []
