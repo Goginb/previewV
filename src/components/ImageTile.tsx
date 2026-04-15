@@ -52,6 +52,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected, i
   const rootRef   = useRef<HTMLDivElement>(null)
   const baseImgRef = useRef<HTMLImageElement>(null)
   const dragOriginsRef = useRef<Map<string, { x: number; y: number }> | null>(null)
+  const dragPeerElementsRef = useRef<HTMLElement[]>([])
   const preEditRectRef = useRef<null | { x: number; y: number; width: number; height: number }>(null)
 
   // Smooth resize: keep store synced while dragging resize handles (throttled to rAF).
@@ -452,6 +453,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected, i
       minHeight={isEditing ? 160 : 100}
       cancel=".image-no-drag, button, canvas"
       onDragStart={() => {
+        window.dispatchEvent(new CustomEvent('canvas-history-action'))
         const state = useCanvasStore.getState()
         if (!isSelected || state.selectedIds.length <= 1) {
           dragOriginsRef.current = null
@@ -464,6 +466,10 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected, i
           }
         }
         dragOriginsRef.current = origins
+        dragPeerElementsRef.current = Array.from(origins.keys())
+          .filter((id) => id !== item.id)
+          .map((id) => tileDomRegistry.get(id))
+          .filter((el): el is HTMLElement => !!el)
       }}
       onDrag={(_, d) => {
         const origins = dragOriginsRef.current
@@ -472,10 +478,8 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected, i
         if (!start) return
         const dx = d.x - start.x
         const dy = d.y - start.y
-        for (const [id] of origins) {
-          if (id === item.id) continue
-          const el = tileDomRegistry.get(id)
-          if (el) el.style.transform = `translate(${dx}px, ${dy}px)`
+        for (const el of dragPeerElementsRef.current) {
+          el.style.transform = `translate(${dx}px, ${dy}px)`
         }
       }}
       onDragStop={(_, d) => {
@@ -499,11 +503,11 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected, i
           { recordHistory: true },
         )
         dragOriginsRef.current = null
+        const peers = dragPeerElementsRef.current
+        dragPeerElementsRef.current = []
         requestAnimationFrame(() => {
-          for (const id of origins.keys()) {
-            if (id === item.id) continue
-            const el = tileDomRegistry.get(id)
-            if (el) el.style.transform = ''
+          for (const el of peers) {
+            el.style.transform = ''
           }
         })
       }}
@@ -516,6 +520,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected, i
       onResizeStart={(e) => {
         if (isEditing) return false
         if ('button' in e && typeof e.button === 'number' && e.button !== 0) return false
+        window.dispatchEvent(new CustomEvent('canvas-history-action'))
         resizeActiveRef.current = true
         updateItemsBatch([{ id: item.id, updates: {} }], { recordHistory: true })
       }}

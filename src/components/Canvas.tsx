@@ -256,6 +256,40 @@ export const Canvas: React.FC = () => {
     [shouldPreferTextCommands],
   )
 
+  const runUndoCommand = useCallback((activeElement: HTMLElement | null) => {
+    const state = useCanvasStore.getState()
+    if (shouldPreferTextCommands(activeElement)) {
+      if (runEditableDocumentCommand('undo', activeElement)) {
+        markTextCommandContext()
+      }
+      return
+    }
+    const ids = state.selectedIds
+    for (const id of ids) {
+      const drawUndo = imageDrawUndoRegistry.get(id)
+      if (drawUndo && drawUndo()) return
+    }
+    state.undo()
+    markCanvasCommandContext()
+  }, [markCanvasCommandContext, markTextCommandContext, runEditableDocumentCommand, shouldPreferTextCommands])
+
+  const runRedoCommand = useCallback((activeElement: HTMLElement | null) => {
+    const state = useCanvasStore.getState()
+    if (shouldPreferTextCommands(activeElement)) {
+      if (runEditableDocumentCommand('redo', activeElement)) {
+        markTextCommandContext()
+      }
+      return
+    }
+    const ids = state.selectedIds
+    for (const id of ids) {
+      const drawRedo = imageDrawRedoRegistry.get(id)
+      if (drawRedo && drawRedo()) return
+    }
+    state.redo()
+    markCanvasCommandContext()
+  }, [markCanvasCommandContext, markTextCommandContext, runEditableDocumentCommand, shouldPreferTextCommands])
+
   const setInternalClipboard = useCallback((copies: CanvasItem[]) => {
     internalClipboardSystemSignatureRef.current =
       lastObservedSystemClipboardSignatureRef.current ?? `text:${readSystemClipboardText().trim()}`
@@ -738,38 +772,18 @@ export const Canvas: React.FC = () => {
   useEffect(() => {
     const onEditCommand = (e: Event) => {
       const detail = (e as CustomEvent).detail as { command: string }
-      const state = useCanvasStore.getState()
       const activeElement = document.activeElement as HTMLElement | null
 
       if (detail.command === 'undo') {
-        if (shouldPreferTextCommands(activeElement)) {
-          runEditableDocumentCommand('undo', activeElement)
-          return
-        }
-        const ids = state.selectedIds
-        for (const id of ids) {
-          const drawUndo = imageDrawUndoRegistry.get(id)
-          if (drawUndo && drawUndo()) return
-        }
-        state.undo()
-        markCanvasCommandContext()
+        runUndoCommand(activeElement)
         return
       }
 
       if (detail.command === 'redo') {
-        if (shouldPreferTextCommands(activeElement)) {
-          runEditableDocumentCommand('redo', activeElement)
-          return
-        }
-        const ids = state.selectedIds
-        for (const id of ids) {
-          const drawRedo = imageDrawRedoRegistry.get(id)
-          if (drawRedo && drawRedo()) return
-        }
-        state.redo()
-        markCanvasCommandContext()
+        runRedoCommand(activeElement)
         return
       }
+      const state = useCanvasStore.getState()
 
       if (detail.command === 'delete') {
         if (state.selectedIds.length) state.removeItems(state.selectedIds)
@@ -834,7 +848,9 @@ export const Canvas: React.FC = () => {
     markCanvasCommandContext,
     markTextCommandContext,
     pasteUsingBestSource,
+    runRedoCommand,
     runEditableDocumentCommand,
+    runUndoCommand,
     shouldPreferTextCommands,
   ])
 
@@ -920,6 +936,24 @@ export const Canvas: React.FC = () => {
   // ── Keyboard ──────────────────────────────────────────────────────────────
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.code === 'KeyZ') {
+        e.preventDefault()
+        const activeElement = document.activeElement as HTMLElement | null
+        if (e.shiftKey) {
+          runRedoCommand(activeElement)
+          return
+        }
+        runUndoCommand(activeElement)
+        return
+      }
+
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.code === 'KeyY' && !e.shiftKey) {
+        e.preventDefault()
+        const activeElement = document.activeElement as HTMLElement | null
+        runRedoCommand(activeElement)
+        return
+      }
+
 
       // ── Project hotkeys ──────────────────────────────────────────────
       if ((e.ctrlKey || e.metaKey) && e.code === 'KeyO' && !e.shiftKey && !isTypingTarget(e)) {
@@ -1294,6 +1328,8 @@ export const Canvas: React.FC = () => {
     cutCanvasSelection,
     openVideoSearch,
     openSourcePathModal,
+    runRedoCommand,
+    runUndoCommand,
     theme,
   ])
 

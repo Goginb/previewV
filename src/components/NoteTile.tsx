@@ -19,6 +19,7 @@ export const NoteTile: React.FC<NoteTileProps> = ({ note, scale, isSelected, isH
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const dragOriginsRef = useRef<Map<string, { x: number; y: number }> | null>(null)
+  const dragPeerElementsRef = useRef<HTMLElement[]>([])
 
   // Smooth resize: while dragging resize handles, update store throttled to rAF.
   const resizeRafRef = useRef<number>(0)
@@ -99,6 +100,10 @@ export const NoteTile: React.FC<NoteTileProps> = ({ note, scale, isSelected, isH
           }
         }
         dragOriginsRef.current = origins
+        dragPeerElementsRef.current = Array.from(origins.keys())
+          .filter((id) => id !== note.id)
+          .map((id) => tileDomRegistry.get(id))
+          .filter((el): el is HTMLElement => !!el)
       }}
       onDrag={(_, d) => {
         const origins = dragOriginsRef.current
@@ -107,10 +112,8 @@ export const NoteTile: React.FC<NoteTileProps> = ({ note, scale, isSelected, isH
         if (!start) return
         const dx = d.x - start.x
         const dy = d.y - start.y
-        for (const [id] of origins) {
-          if (id === note.id) continue
-          const el = tileDomRegistry.get(id)
-          if (el) el.style.transform = `translate(${dx}px, ${dy}px)`
+        for (const el of dragPeerElementsRef.current) {
+          el.style.transform = `translate(${dx}px, ${dy}px)`
         }
       }}
       onDragStop={(_, d) => {
@@ -134,12 +137,12 @@ export const NoteTile: React.FC<NoteTileProps> = ({ note, scale, isSelected, isH
           { recordHistory: true },
         )
         dragOriginsRef.current = null
+        const peers = dragPeerElementsRef.current
+        dragPeerElementsRef.current = []
 
         requestAnimationFrame(() => {
-          for (const id of origins.keys()) {
-            if (id === note.id) continue
-            const el = tileDomRegistry.get(id)
-            if (el) el.style.transform = ''
+          for (const el of peers) {
+            el.style.transform = ''
           }
         })
       }}

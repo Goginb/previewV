@@ -594,6 +594,7 @@ export const BackdropTile: React.FC<BackdropTileProps> = ({ backdrop, scale, isS
         }}
         onResizeStart={(e) => {
           if ('button' in e && typeof e.button === 'number' && e.button !== 0) return false
+          window.dispatchEvent(new CustomEvent('canvas-history-action'))
           resizeActiveRef.current = true
           updateItemsBatch([{ id: backdrop.id, updates: {} }], { recordHistory: true })
         }}
@@ -661,6 +662,7 @@ export const BackdropTile: React.FC<BackdropTileProps> = ({ backdrop, scale, isS
         cancel=".backdrop-no-drag"
         onDragStart={(e, d) => {
           e.stopPropagation()
+          window.dispatchEvent(new CustomEvent('canvas-history-action'))
           startDrag(e, { x: d.x, y: d.y })
         }}
         onDrag={(_, d) => {

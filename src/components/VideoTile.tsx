@@ -91,6 +91,7 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
   const selectOne = useCanvasStore((s) => s.selectOne)
   const toggleSelect = useCanvasStore((s) => s.toggleSelect)
   const dragOriginsRef = useRef<Map<string, { x: number; y: number }> | null>(null)
+  const dragPeerElementsRef = useRef<HTMLElement[]>([])
   const durationRef = useRef(0)
   const srcCandidates = useMemo(() => {
     const out: string[] = []
@@ -524,6 +525,7 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
       minHeight={TITLE_H + 80 + CONTROLS_H}
       cancel=".video-no-drag, .video-controls, button, [role='slider']"
       onDragStart={() => {
+        window.dispatchEvent(new CustomEvent('canvas-history-action'))
         const state = useCanvasStore.getState()
         if (!isSelected || state.selectedIds.length <= 1) {
           dragOriginsRef.current = null
@@ -536,6 +538,10 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
           }
         }
         dragOriginsRef.current = origins
+        dragPeerElementsRef.current = Array.from(origins.keys())
+          .filter((id) => id !== tile.id)
+          .map((id) => tileDomRegistry.get(id))
+          .filter((el): el is HTMLElement => !!el)
       }}
       onDrag={(_, d) => {
         const origins = dragOriginsRef.current
@@ -545,10 +551,8 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
         const dx = d.x - start.x
         const dy = d.y - start.y
 
-        for (const [id] of origins) {
-          if (id === tile.id) continue
-          const el = tileDomRegistry.get(id)
-          if (el) el.style.transform = `translate(${dx}px, ${dy}px)`
+        for (const el of dragPeerElementsRef.current) {
+          el.style.transform = `translate(${dx}px, ${dy}px)`
         }
       }}
       onDragStop={(_, d) => {
@@ -594,13 +598,12 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
         }))
         updateItemsBatch([...movedUpdates, ...backdropUpdates], { recordHistory: true })
         dragOriginsRef.current = null
+        const peers = dragPeerElementsRef.current
+        dragPeerElementsRef.current = []
 
         requestAnimationFrame(() => {
-          if (!origins || origins.size <= 1) return
-          for (const id of origins.keys()) {
-            if (id === tile.id) continue
-            const el = tileDomRegistry.get(id)
-            if (el) el.style.transform = ''
+          for (const el of peers) {
+            el.style.transform = ''
           }
         })
       }}
@@ -612,6 +615,7 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
       }}
       onResizeStart={(e) => {
         if ('button' in e && typeof e.button === 'number' && e.button !== 0) return false
+        window.dispatchEvent(new CustomEvent('canvas-history-action'))
         resizeActiveRef.current = true
         updateItemsBatch([{ id: tile.id, updates: {} }], { recordHistory: true })
       }}
