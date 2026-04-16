@@ -4,6 +4,7 @@ import { usePreloadStore } from '../store/preloadStore'
 export const ProjectLoadingOverlay: React.FC = () => {
   const open = usePreloadStore((s) => s.open)
   const pct = usePreloadStore((s) => s.pct)
+  const title = usePreloadStore((s) => s.title)
   const line = usePreloadStore((s) => s.line)
 
   if (!open) return null
@@ -14,7 +15,7 @@ export const ProjectLoadingOverlay: React.FC = () => {
         className="w-[min(92vw,540px)] rounded-2xl border px-5 py-4 shadow-2xl"
         style={{ background: 'var(--menu-bg)', borderColor: 'var(--menu-border)' }}
       >
-        <div className="text-sm font-semibold text-themeText-100">Loading project</div>
+        <div className="text-sm font-semibold text-themeText-100">{title || 'Loading project'}</div>
         <div className="mt-1 text-xs text-themeText-400">{line || 'Preparing project...'}</div>
         <div
           className="mt-4 h-2 overflow-hidden rounded-full"

@@ -3,6 +3,7 @@ import { Rnd } from 'react-rnd'
 import { useCanvasStore } from '../store/canvasStore'
 import { videoRegistry } from '../utils/videoRegistry'
 import { tileDomRegistry } from '../utils/tileDomRegistry'
+import { collectLiveDragTargets } from '../utils/liveDragTargets'
 import { setVideoUserPausedByUser } from '../utils/videoUserPausedRegistry'
 import { videoTileSizeFromVideo } from '../utils/tileSizing'
 import { getVideoPlaybackSuspended } from '../utils/videoGlobalPlayback'
@@ -39,6 +40,7 @@ const DEFAULT_VIDEO_UI_COLOR = '#6366f1'
 const DEFAULT_FRAME_DURATION = 1 / 24
 const MIN_FRAME_DURATION = 1 / 120
 const MAX_FRAME_DURATION = 1 / 8
+const CLICK_SUPPRESS_AFTER_DRAG_MS = 180
 
 function hexToRgba(hex: string, alpha: number): string {
   const h = hex.replace('#', '').trim()
@@ -84,12 +86,15 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
   const [duration, setDuration] = useState(0)
   const [paused, setPaused] = useState(true)
   const [activeSrcUrl, setActiveSrcUrl] = useState(tile.srcUrl)
+  const activeSrcUrlRef = useRef(tile.srcUrl)
   const failedSrcUrlsRef = useRef<Set<string>>(new Set())
 
   const updateItem = useCanvasStore((s) => s.updateItem)
   const updateItemsBatch = useCanvasStore((s) => s.updateItemsBatch)
   const selectOne = useCanvasStore((s) => s.selectOne)
   const toggleSelect = useCanvasStore((s) => s.toggleSelect)
+  const selectedIds = useCanvasStore((s) => s.selectedIds)
+  const suppressClickUntilRef = useRef(0)
   const dragOriginsRef = useRef<Map<string, { x: number; y: number }> | null>(null)
   const dragPeerElementsRef = useRef<HTMLElement[]>([])
   const durationRef = useRef(0)
@@ -101,12 +106,22 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
       if (!normalized || out.includes(normalized)) return
       out.push(normalized)
     }
-    pushUnique(tile.srcUrl)
-    if (tile.sourceFilePath) {
-      pushUnique(localPathToMediaUrl(tile.sourceFilePath))
+    const proxySrcFromPath = tile.proxyFilePath ? localPathToMediaUrl(tile.proxyFilePath) : ''
+    const sourceSrcFromPath = tile.sourceFilePath ? localPathToMediaUrl(tile.sourceFilePath) : ''
+    const hasExplicitProxy =
+      !!proxySrcFromPath && (!tile.proxyForSourcePath || tile.proxyForSourcePath === tile.sourceFilePath)
+
+    // For ProRes flow, keep proxy first and avoid auto-fallback to original source path.
+    if (hasExplicitProxy) {
+      pushUnique(proxySrcFromPath)
+      pushUnique(tile.srcUrl)
+      return out
     }
+
+    pushUnique(tile.srcUrl)
+    pushUnique(sourceSrcFromPath)
     return out
-  }, [tile.sourceFilePath, tile.srcUrl])
+  }, [tile.proxyFilePath, tile.proxyForSourcePath, tile.sourceFilePath, tile.srcUrl])
 
   // Smooth resize: while user drags resize handles, keep store in sync (throttled to rAF).
   const resizeRafRef = useRef<number>(0)
@@ -136,9 +151,22 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
   }, [duration])
 
   useEffect(() => {
-    failedSrcUrlsRef.current.clear()
-    setActiveSrcUrl(srcCandidates[0] ?? tile.srcUrl)
+    activeSrcUrlRef.current = activeSrcUrl
+  }, [activeSrcUrl])
+
+  useEffect(() => {
+    const preferred = srcCandidates[0] ?? tile.srcUrl
+    setActiveSrcUrl((prev) => {
+      const normalizedPrev = (prev || '').trim()
+      const previousFailed = normalizedPrev ? failedSrcUrlsRef.current.has(normalizedPrev) : false
+      const keepCurrent = normalizedPrev && srcCandidates.includes(normalizedPrev) && !previousFailed
+      return keepCurrent ? normalizedPrev : preferred
+    })
   }, [srcCandidates, tile.srcUrl])
+
+  useEffect(() => {
+    failedSrcUrlsRef.current.clear()
+  }, [tile.id, tile.sourceFilePath, tile.srcUrl])
 
   useEffect(() => {
     const v = videoRef.current
@@ -222,6 +250,50 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
       v.removeEventListener('durationchange', onMeta)
     }
   }, [tile.id, syncFromVideo])
+
+  useEffect(() => {
+    const v = videoRef.current
+    if (!v) return
+    const logState = (eventName: string) => {
+      const err = v.error
+      const errorPart = err ? ` code=${String(err.code)} message=${err.message || 'n/a'}` : ''
+      console.info(
+        `[PreviewV][video-tile] id=${tile.id} event=${eventName} file="${tile.fileName}" source="${tile.sourceFilePath || ''}" activeSrc="${activeSrcUrlRef.current}" currentSrc="${v.currentSrc || ''}" t=${v.currentTime.toFixed(3)} dur=${Number.isFinite(v.duration) ? v.duration.toFixed(3) : 'NaN'} ready=${v.readyState} net=${v.networkState} size=${v.videoWidth}x${v.videoHeight}${errorPart}`,
+      )
+    }
+    const trackedEvents = [
+      'loadstart',
+      'loadedmetadata',
+      'loadeddata',
+      'durationchange',
+      'canplay',
+      'canplaythrough',
+      'play',
+      'playing',
+      'pause',
+      'waiting',
+      'stalled',
+      'suspend',
+      'emptied',
+      'seeking',
+      'seeked',
+      'ended',
+      'abort',
+      'error',
+    ] as const
+    const handlers = trackedEvents.map((eventName) => {
+      const handler = () => logState(eventName)
+      v.addEventListener(eventName, handler)
+      return { eventName, handler }
+    })
+    logState('mount')
+    return () => {
+      for (const { eventName, handler } of handlers) {
+        v.removeEventListener(eventName, handler)
+      }
+      logState('unmount')
+    }
+  }, [tile.fileName, tile.id, tile.sourceFilePath])
 
   useEffect(() => {
     const v = videoRef.current as (HTMLVideoElement & {
@@ -366,7 +438,9 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
       if (current) failedSrcUrlsRef.current.add(current)
       const fallback = srcCandidates.find((src) => !failedSrcUrlsRef.current.has(src))
       if (fallback && fallback !== activeSrcUrl) {
-        console.warn(`[PreviewV] Video tile "${tile.fileName}" switching source fallback`)
+        console.warn(
+          `[PreviewV][video-tile] id=${tile.id} file="${tile.fileName}" switching source fallback from "${current}" to "${fallback}"`,
+        )
         setActiveSrcUrl(fallback)
         return
       }
@@ -506,14 +580,21 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
   const uiColorSoft = mixTowardWhite(uiColor, 0.18)
   const rootBorder = isSelected ? uiColorSoft : hexToRgba(uiColor, 0.42)
   const rootShadow = isSelected
-    ? `0 0 0 1px ${hexToRgba(uiColor, 0.30)}, 0 0 0 3px ${hexToRgba(uiColor, 0.18)}, 0 0 28px ${hexToRgba(uiColor, 0.26)}`
+    ? `0 0 0 2px ${hexToRgba(uiColor, 0.45)}, 0 0 0 5px ${hexToRgba(uiColor, 0.28)}, 0 0 40px ${hexToRgba(uiColor, 0.38)}`
     : undefined
   const headerBackground = `linear-gradient(180deg, ${hexToRgba(uiColor, 0.28)}, rgba(20, 24, 36, 0.92))`
   const controlsBackground = `linear-gradient(180deg, rgba(10, 14, 24, 0.97), ${hexToRgba(uiColor, 0.20)})`
   const handleSelect = useCallback((e: React.MouseEvent<HTMLElement>) => {
     if (e.ctrlKey || e.metaKey) toggleSelect(tile.id)
-    else if (!isSelected) selectOne(tile.id)
-  }, [isSelected, selectOne, tile.id, toggleSelect])
+    else if (!(isSelected && selectedIds.length > 1)) selectOne(tile.id)
+  }, [isSelected, selectOne, selectedIds.length, tile.id, toggleSelect])
+  const handleClickSelection = useCallback((e: React.MouseEvent<HTMLElement>) => {
+    if (e.ctrlKey || e.metaKey) return
+    if (Date.now() < suppressClickUntilRef.current) return
+    if (isSelected && selectedIds.length > 1) {
+      selectOne(tile.id)
+    }
+  }, [isSelected, selectOne, selectedIds.length, tile.id])
   const dragHandleClassName = 'video-root-drag-handle'
 
   return (
@@ -538,10 +619,7 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
           }
         }
         dragOriginsRef.current = origins
-        dragPeerElementsRef.current = Array.from(origins.keys())
-          .filter((id) => id !== tile.id)
-          .map((id) => tileDomRegistry.get(id))
-          .filter((el): el is HTMLElement => !!el)
+        dragPeerElementsRef.current = collectLiveDragTargets(origins.keys(), tile.id)
       }}
       onDrag={(_, d) => {
         const origins = dragOriginsRef.current
@@ -556,6 +634,7 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
         }
       }}
       onDragStop={(_, d) => {
+        suppressClickUntilRef.current = Date.now() + CLICK_SUPPRESS_AFTER_DRAG_MS
         const origins = dragOriginsRef.current
         const state = useCanvasStore.getState()
 
@@ -644,6 +723,7 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
       }}
       dragHandleClassName={dragHandleClassName}
       onMouseDown={handleSelect}
+      onClick={handleClickSelection}
       onDoubleClick={(e: any) => {
         e.stopPropagation()
         const root = document.getElementById('previewv-canvas-root')
@@ -666,6 +746,7 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
           boxShadow: rootShadow,
         }}
         onMouseDown={handleSelect}
+        onClick={handleClickSelection}
       >
         <div
           className="absolute left-0 right-0 top-0 z-20 flex items-center px-2 cursor-grab active:cursor-grabbing"

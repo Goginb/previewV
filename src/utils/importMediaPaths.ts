@@ -5,6 +5,7 @@ import { isRasterFilePath, isVideoFilePath } from './mediaFileExtensions'
 import { defaultVideoTileSizeForNew, maxVideoTileOuterSize } from './tileSizing'
 import { setVideoPlaybackSuspended } from './videoGlobalPlayback'
 import { requestVideoWarmupEarly } from './warmupCanvasMedia'
+import { shouldGenerateProxiesForImport } from './proresImportPrompt'
 import type { ImageItem, VideoItem } from '../types'
 
 /** Above this count, enable global “Stop all” so the machine is not flooded with decoders. */
@@ -47,16 +48,24 @@ function nextId(prefix: string, i: number): string {
   return `${prefix}-${Date.now()}-${i}-${Math.random().toString(36).slice(2, 9)}`
 }
 
-async function resolveVideoSrcUrl(localPath: string): Promise<string> {
+async function resolveVideoSrcUrl(
+  localPath: string,
+  projectPath: string | null,
+  generateProxy: boolean,
+): Promise<{ srcUrl: string; proxyFilePath?: string; proxyForSourcePath?: string }> {
   const projectAPI = (window as any).electronAPI?.projectAPI
   if (!projectAPI?.resolveVideoSource) {
-    return localPathToMediaUrl(localPath)
+    return { srcUrl: localPathToMediaUrl(localPath) }
   }
   try {
-    const payload = await projectAPI.resolveVideoSource(localPath)
-    return payload?.srcUrl || localPathToMediaUrl(localPath)
+    const payload = await projectAPI.resolveVideoSource(localPath, { projectPath, generateProxy })
+    return {
+      srcUrl: payload?.srcUrl || localPathToMediaUrl(localPath),
+      ...(payload?.proxyFilePath ? { proxyFilePath: payload.proxyFilePath } : {}),
+      ...(payload?.proxyForSourcePath ? { proxyForSourcePath: payload.proxyForSourcePath } : {}),
+    }
   } catch {
-    return localPathToMediaUrl(localPath)
+    return { srcUrl: localPathToMediaUrl(localPath) }
   }
 }
 
@@ -83,6 +92,8 @@ export async function importMediaPathsToCanvas(
   const addItems = useCanvasStore.getState().addItems
   const setSelection = useCanvasStore.getState().setSelection
   const updateItemsBatch = useCanvasStore.getState().updateItemsBatch
+  const currentProjectPath = useCanvasStore.getState().currentProjectPath
+  const generateProxy = await shouldGenerateProxiesForImport(videoPaths, currentProjectPath)
 
   const footprint = maxVideoTileOuterSize()
   const defaultVid = defaultVideoTileSizeForNew()
@@ -221,9 +232,16 @@ export async function importMediaPathsToCanvas(
   // Resolve proxy/video source asynchronously so tiles appear immediately.
   if (videoResolveQueue.length > 0) {
     void mapPool(videoResolveQueue, VIDEO_RESOLVE_CONCURRENCY, async (entry) => {
-      const resolvedSrc = await resolveVideoSrcUrl(entry.originalPath)
-      if (!resolvedSrc || resolvedSrc === entry.currentSrcUrl) return null
-      return { id: entry.id, updates: { srcUrl: resolvedSrc } }
+      const resolved = await resolveVideoSrcUrl(entry.originalPath, currentProjectPath, generateProxy)
+      if (!resolved.srcUrl || resolved.srcUrl === entry.currentSrcUrl) return null
+      return {
+        id: entry.id,
+        updates: {
+          srcUrl: resolved.srcUrl,
+          ...(resolved.proxyFilePath ? { proxyFilePath: resolved.proxyFilePath } : {}),
+          ...(resolved.proxyForSourcePath ? { proxyForSourcePath: resolved.proxyForSourcePath } : {}),
+        },
+      }
     }).then((updates) => {
       const batch = updates.filter((u): u is { id: string; updates: { srcUrl: string } } => !!u)
       if (batch.length === 0) return

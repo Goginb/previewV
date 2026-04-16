@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Rnd } from 'react-rnd'
-import { useCanvasStore } from '../store/canvasStore'
+import { MAX_SCALE, MIN_SCALE, useCanvasStore } from '../store/canvasStore'
 import { imageDrawUndoRegistry } from '../utils/imageDrawUndoRegistry'
 import { imageExportRegistry } from '../utils/imageExportRegistry'
 import { tileDomRegistry } from '../utils/tileDomRegistry'
+import { collectLiveDragTargets } from '../utils/liveDragTargets'
 import { imageDrawRedoRegistry } from '../utils/imageDrawRedoRegistry'
 import { imageDrawBakeRegistry } from '../utils/imageDrawBakeRegistry'
 import { imageTileEditSize, imageTileViewSize } from '../utils/tileSizing'
@@ -20,6 +21,7 @@ const PALETTE = [
 
 const SIZES: [number, string][] = [[2, 'S'], [5, 'M'], [12, 'L']]
 const EDIT_VIEWPORT_FILL = 0.78
+const CLICK_SUPPRESS_AFTER_DRAG_MS = 180
 
 const CURSOR: Record<DrawTool, string> = {
   pencil: 'crosshair',
@@ -43,6 +45,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected, i
   const updateItemsBatch = useCanvasStore((s) => s.updateItemsBatch)
   const selectOne    = useCanvasStore((s) => s.selectOne)
   const toggleSelect = useCanvasStore((s) => s.toggleSelect)
+  const selectedIds = useCanvasStore((s) => s.selectedIds)
   const imageEditModeId = useCanvasStore((s) => s.imageEditModeId)
   const setImageEditModeId = useCanvasStore((s) => s.setImageEditModeId)
   const isEditing = imageEditModeId === item.id
@@ -53,6 +56,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected, i
   const baseImgRef = useRef<HTMLImageElement>(null)
   const dragOriginsRef = useRef<Map<string, { x: number; y: number }> | null>(null)
   const dragPeerElementsRef = useRef<HTMLElement[]>([])
+  const suppressClickUntilRef = useRef(0)
   const preEditRectRef = useRef<null | { x: number; y: number; width: number; height: number }>(null)
 
   // Smooth resize: keep store synced while dragging resize handles (throttled to rAF).
@@ -172,8 +176,15 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected, i
 
   const handleSelect = useCallback((e: React.MouseEvent<HTMLElement>) => {
     if (e.ctrlKey || e.metaKey) toggleSelect(item.id)
-    else if (!isSelected) selectOne(item.id)
-  }, [isSelected, item.id, selectOne, toggleSelect])
+    else if (!(isSelected && selectedIds.length > 1)) selectOne(item.id)
+  }, [isSelected, item.id, selectOne, selectedIds.length, toggleSelect])
+  const handleClickSelection = useCallback((e: React.MouseEvent<HTMLElement>) => {
+    if (e.ctrlKey || e.metaKey) return
+    if (Date.now() < suppressClickUntilRef.current) return
+    if (isSelected && selectedIds.length > 1) {
+      selectOne(item.id)
+    }
+  }, [isSelected, item.id, selectOne, selectedIds.length])
   const dragHandleClassName = isEditing ? 'img-drag-handle' : 'image-root-drag-handle'
 
   const prevEditingRef = useRef(false)
@@ -185,6 +196,28 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected, i
       return
     }
     if (isEditing && !prevEditingRef.current) {
+      const applyViewportForRect = (target: { x: number; y: number; width: number; height: number }) => {
+        const root = document.getElementById('previewv-canvas-root')
+        const rect = root?.getBoundingClientRect()
+        if (!rect) return
+        const pad = 40
+        const cw = Math.max(1, rect.width)
+        const ch = Math.max(1, rect.height)
+        const availW = Math.max(1, cw - 2 * pad)
+        const availH = Math.max(1, ch - 2 * pad)
+        const bw = Math.max(1, target.width)
+        const bh = Math.max(1, target.height)
+        const cx = target.x + target.width / 2
+        const cy = target.y + target.height / 2
+        let nextScale = Math.min(availW / bw, availH / bh)
+        nextScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, nextScale))
+        useCanvasStore.getState().setViewport({
+          x: cw / 2 - cx * nextScale,
+          y: ch / 2 - cy * nextScale,
+          scale: nextScale,
+        })
+      }
+
       // Entering edit mode — snapshot current rect and enlarge
       const state = useCanvasStore.getState()
       const cur = state.items.find((i) => i.id === item.id)
@@ -198,7 +231,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected, i
       if (!rect) {
         updateItem(item.id, { width: base.width, height: base.height })
       } else {
-        const toolbarScreenH = 32
+        const toolbarScreenH = 54
         const maxScreenW = Math.max(420, Math.floor(rect.width * EDIT_VIEWPORT_FILL))
         const maxScreenH = Math.max(320, Math.floor(rect.height * EDIT_VIEWPORT_FILL) - toolbarScreenH)
         const ar = Math.max(1e-4, nw / nh)
@@ -212,12 +245,16 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected, i
         const nextH = Math.max(base.height, Math.round((contentScreenH + toolbarScreenH) / Math.max(0.001, vp.scale)))
         const centerX = (rect.width / 2 - vp.x) / vp.scale
         const centerY = (rect.height / 2 - vp.y) / vp.scale
-        updateItem(item.id, {
+        const nextRect = {
           width: nextW,
           height: nextH,
           x: Math.round(centerX - nextW / 2),
           y: Math.round(centerY - nextH / 2),
-        })
+        }
+        updateItem(item.id, nextRect)
+        // Frame using the intended edit rect immediately so distant zoom levels do not leave the
+        // toolbar microscopic while React/store catch up.
+        applyViewportForRect(nextRect)
       }
     }
     if (!isEditing && prevEditingRef.current) {
@@ -466,10 +503,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected, i
           }
         }
         dragOriginsRef.current = origins
-        dragPeerElementsRef.current = Array.from(origins.keys())
-          .filter((id) => id !== item.id)
-          .map((id) => tileDomRegistry.get(id))
-          .filter((el): el is HTMLElement => !!el)
+        dragPeerElementsRef.current = collectLiveDragTargets(origins.keys(), item.id)
       }}
       onDrag={(_, d) => {
         const origins = dragOriginsRef.current
@@ -483,6 +517,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected, i
         }
       }}
       onDragStop={(_, d) => {
+        suppressClickUntilRef.current = Date.now() + CLICK_SUPPRESS_AFTER_DRAG_MS
         const origins = dragOriginsRef.current
         if (!origins || origins.size <= 1) {
           updateItemsBatch([{ id: item.id, updates: { x: d.x, y: d.y } }], { recordHistory: true })
@@ -547,6 +582,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected, i
       }}
       dragHandleClassName={dragHandleClassName}
       onMouseDown={handleSelect}
+      onClick={handleClickSelection}
       onDoubleClick={(e: any) => {
         e.stopPropagation()
         const root = document.getElementById('previewv-canvas-root')
@@ -564,10 +600,11 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected, i
           dragHandleClassName,
           'w-full h-full flex flex-col rounded-lg overflow-hidden shadow-2xl bg-zinc-900 border',
           isSelected
-            ? 'border-emerald-300 ring-2 ring-emerald-400/80 shadow-[0_0_0_1px_rgba(16,185,129,0.30),0_0_26px_rgba(16,185,129,0.22)]'
+            ? 'border-emerald-200 ring-[3px] ring-emerald-300/95 shadow-[0_0_0_2px_rgba(16,185,129,0.45),0_0_36px_rgba(16,185,129,0.35)]'
             : 'border-zinc-700/60',
         ].join(' ')}
         onMouseDown={handleSelect}
+        onClick={handleClickSelection}
       >
 
         {/* ── Toolbar / drag handle ──────────────────────────────────── */}

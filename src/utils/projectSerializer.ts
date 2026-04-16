@@ -140,6 +140,8 @@ function validateItemV1(raw: unknown): ProjectCanvasItemV1 {
     const videoPath = mustBeString(raw.videoPath, 'item.videoPath')
     const aspectApplied = raw.aspectApplied
     const uiColor = optionalString(raw.uiColor, 'item.uiColor')
+    const videoProxyPath = optionalString(raw.videoProxyPath, 'item.videoProxyPath')
+    const proxyForVideoPath = optionalString(raw.proxyForVideoPath, 'item.proxyForVideoPath')
     if (aspectApplied !== undefined && typeof aspectApplied !== 'boolean') {
       throw new Error('Invalid project: field "item.aspectApplied" must be a boolean')
     }
@@ -152,6 +154,8 @@ function validateItemV1(raw: unknown): ProjectCanvasItemV1 {
       height,
       fileName,
       videoPath,
+      ...(videoProxyPath !== undefined ? { videoProxyPath } : {}),
+      ...(proxyForVideoPath !== undefined ? { proxyForVideoPath } : {}),
       ...(aspectApplied !== undefined ? { aspectApplied } : {}),
       ...(uiColor !== undefined ? { uiColor } : {}),
     }
@@ -356,6 +360,8 @@ export function serializeProject(params: SerializeProjectOptions): ProjectFileV2
         height: item.height,
         fileName: item.fileName,
         videoPath,
+        ...(item.proxyFilePath ? { videoProxyPath: item.proxyFilePath } : {}),
+        ...(item.proxyForSourcePath ? { proxyForVideoPath: item.proxyForSourcePath } : {}),
         ...(item.aspectApplied !== undefined ? { aspectApplied: item.aspectApplied } : {}),
         ...(item.uiColor !== undefined ? { uiColor: item.uiColor } : {}),
       }
@@ -514,6 +520,7 @@ export function deserializeProject(
   const items: CanvasItem[] = raw.items.map((i) => {
     const validated = validateItemV2(i)
     if (validated.type === 'video') {
+      const effectiveRenderPath = validated.videoProxyPath ?? validated.videoPath
       const video: VideoItem = {
         type: 'video',
         id: validated.id,
@@ -522,8 +529,10 @@ export function deserializeProject(
         width: validated.width,
         height: validated.height,
         fileName: validated.fileName,
-        srcUrl: localPathToMediaUrl(validated.videoPath),
+        srcUrl: localPathToMediaUrl(effectiveRenderPath),
         sourceFilePath: validated.videoPath,
+        ...(validated.videoProxyPath !== undefined ? { proxyFilePath: validated.videoProxyPath } : {}),
+        ...(validated.proxyForVideoPath !== undefined ? { proxyForSourcePath: validated.proxyForVideoPath } : {}),
         ...(validated.aspectApplied !== undefined ? { aspectApplied: validated.aspectApplied } : {}),
         ...(validated.uiColor !== undefined ? { uiColor: validated.uiColor } : {}),
       }

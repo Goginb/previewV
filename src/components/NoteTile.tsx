@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef } from 'react'
 import { Rnd } from 'react-rnd'
 import { useCanvasStore } from '../store/canvasStore'
 import { tileDomRegistry } from '../utils/tileDomRegistry'
+import { collectLiveDragTargets } from '../utils/liveDragTargets'
 import type { NoteItem } from '../types'
 
 interface NoteTileProps {
@@ -11,15 +12,19 @@ interface NoteTileProps {
   isHidden?: boolean
 }
 
+const CLICK_SUPPRESS_AFTER_DRAG_MS = 180
+
 export const NoteTile: React.FC<NoteTileProps> = ({ note, scale, isSelected, isHidden }) => {
   const updateItem = useCanvasStore((s) => s.updateItem)
   const updateItemsBatch = useCanvasStore((s) => s.updateItemsBatch)
   const selectOne    = useCanvasStore((s) => s.selectOne)
   const toggleSelect = useCanvasStore((s) => s.toggleSelect)
+  const selectedIds = useCanvasStore((s) => s.selectedIds)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const dragOriginsRef = useRef<Map<string, { x: number; y: number }> | null>(null)
   const dragPeerElementsRef = useRef<HTMLElement[]>([])
+  const suppressClickUntilRef = useRef(0)
 
   // Smooth resize: while dragging resize handles, update store throttled to rAF.
   const resizeRafRef = useRef<number>(0)
@@ -74,8 +79,15 @@ export const NoteTile: React.FC<NoteTileProps> = ({ note, scale, isSelected, isH
 
   const handleSelect = useCallback((e: React.MouseEvent<HTMLElement>) => {
     if (e.ctrlKey || e.metaKey) toggleSelect(note.id)
-    else if (!isSelected) selectOne(note.id)
-  }, [isSelected, note.id, selectOne, toggleSelect])
+    else if (!(isSelected && selectedIds.length > 1)) selectOne(note.id)
+  }, [isSelected, note.id, selectOne, selectedIds.length, toggleSelect])
+  const handleClickSelection = useCallback((e: React.MouseEvent<HTMLElement>) => {
+    if (e.ctrlKey || e.metaKey) return
+    if (Date.now() < suppressClickUntilRef.current) return
+    if (isSelected && selectedIds.length > 1) {
+      selectOne(note.id)
+    }
+  }, [isSelected, note.id, selectOne, selectedIds.length])
   const dragHandleClassName = 'note-root-drag-handle'
 
   return (
@@ -100,10 +112,7 @@ export const NoteTile: React.FC<NoteTileProps> = ({ note, scale, isSelected, isH
           }
         }
         dragOriginsRef.current = origins
-        dragPeerElementsRef.current = Array.from(origins.keys())
-          .filter((id) => id !== note.id)
-          .map((id) => tileDomRegistry.get(id))
-          .filter((el): el is HTMLElement => !!el)
+        dragPeerElementsRef.current = collectLiveDragTargets(origins.keys(), note.id)
       }}
       onDrag={(_, d) => {
         const origins = dragOriginsRef.current
@@ -117,6 +126,7 @@ export const NoteTile: React.FC<NoteTileProps> = ({ note, scale, isSelected, isH
         }
       }}
       onDragStop={(_, d) => {
+        suppressClickUntilRef.current = Date.now() + CLICK_SUPPRESS_AFTER_DRAG_MS
         const origins = dragOriginsRef.current
         if (!origins || origins.size <= 1) {
           updateItemsBatch([{ id: note.id, updates: { x: d.x, y: d.y } }], { recordHistory: true })
@@ -181,6 +191,7 @@ export const NoteTile: React.FC<NoteTileProps> = ({ note, scale, isSelected, isH
       }}
       dragHandleClassName={dragHandleClassName}
       onMouseDown={handleSelect}
+      onClick={handleClickSelection}
       onDoubleClick={(e: any) => {
         e.stopPropagation()
         const root = document.getElementById('previewv-canvas-root')
@@ -197,10 +208,11 @@ export const NoteTile: React.FC<NoteTileProps> = ({ note, scale, isSelected, isH
           'w-full h-full flex flex-col rounded-lg overflow-hidden shadow-2xl',
           'bg-amber-950/80 border',
           isSelected
-            ? 'border-amber-300 ring-2 ring-amber-400/80 shadow-[0_0_0_1px_rgba(251,191,36,0.30),0_0_24px_rgba(251,191,36,0.22)]'
+            ? 'border-amber-200 ring-[3px] ring-amber-300/95 shadow-[0_0_0_2px_rgba(251,191,36,0.45),0_0_36px_rgba(251,191,36,0.35)]'
             : 'border-amber-800/60',
         ].join(' ')}
         onMouseDown={handleSelect}
+        onClick={handleClickSelection}
       >
         {/* Drag handle */}
         <div className="flex items-center px-2 h-6 min-h-[24px] bg-amber-900/60 cursor-grab active:cursor-grabbing shrink-0">

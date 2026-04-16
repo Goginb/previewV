@@ -15,6 +15,10 @@ export interface VideoItem extends BaseItem {
   fileName: string
   /** Absolute path to the original source file on disk, even if srcUrl points to a proxy. */
   sourceFilePath?: string
+  /** Absolute path to a persistent lightweight ProRes proxy file, if generated. */
+  proxyFilePath?: string
+  /** Absolute path of source video used to build proxyFilePath (guard against stale proxy reuse). */
+  proxyForSourcePath?: string
   uiColor?: string
 }
 
@@ -90,6 +94,8 @@ export type ItemUpdate = {
   fileName?: string
   sourceVideoId?: string
   sourceFilePath?: string
+  proxyFilePath?: string
+  proxyForSourcePath?: string
   projectAssetPath?: string
   // BackdropItem
   color?: string

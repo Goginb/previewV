@@ -22,6 +22,7 @@ import { getVideoPlaybackSuspended, setVideoPlaybackSuspended } from '../utils/v
 import { setVideoUserPausedByUser } from '../utils/videoUserPausedRegistry'
 import { setManualPlaybackAllowedInSuspended } from '../utils/videoSuspendedManualAllowRegistry'
 import { requestVideoWarmupEarly } from '../utils/warmupCanvasMedia'
+import { shouldGenerateProxiesForImport } from '../utils/proresImportPrompt'
 import { BACKDROP_COLOR_PRESETS, BackdropTile, createBackdropItem } from './BackdropTile'
 import {
   backdropHeaderHeight,
@@ -70,16 +71,24 @@ function mediaUrlToFilePath(url: string): string | null {
   }
 }
 
-async function resolveDroppedVideoUrl(file: File): Promise<string> {
+async function resolveDroppedVideoUrl(
+  file: File,
+  projectPath: string | null,
+  generateProxy: boolean,
+): Promise<{ srcUrl: string; proxyFilePath?: string; proxyForSourcePath?: string }> {
   const nativePath = (file as File & { path?: string }).path
-  if (!nativePath) return fileToUrl(file)
+  if (!nativePath) return { srcUrl: fileToUrl(file) }
   const projectAPI = (window as any).electronAPI?.projectAPI
-  if (!projectAPI?.resolveVideoSource) return fileToUrl(file)
+  if (!projectAPI?.resolveVideoSource) return { srcUrl: fileToUrl(file) }
   try {
-    const resolved = await projectAPI.resolveVideoSource(nativePath)
-    return resolved?.srcUrl || fileToUrl(file)
+    const resolved = await projectAPI.resolveVideoSource(nativePath, { projectPath, generateProxy })
+    return {
+      srcUrl: resolved?.srcUrl || fileToUrl(file),
+      ...(resolved?.proxyFilePath ? { proxyFilePath: resolved.proxyFilePath } : {}),
+      ...(resolved?.proxyForSourcePath ? { proxyForSourcePath: resolved.proxyForSourcePath } : {}),
+    }
   } catch {
-    return fileToUrl(file)
+    return { srcUrl: fileToUrl(file) }
   }
 }
 
@@ -1421,6 +1430,10 @@ export const Canvas: React.FC = () => {
       const files = Array.from(e.dataTransfer.files)
       const videoFiles = files.filter(isVideoFile)
       const rasterFiles = files.filter(isRasterImportFile)
+      const droppedVideoPaths = videoFiles
+        .map((file) => (file as File & { path?: string }).path)
+        .filter((path): path is string => !!path)
+      const generateProxy = await shouldGenerateProxiesForImport(droppedVideoPaths, currentProjectPath)
 
       const dropMediaCount = videoFiles.length + rasterFiles.filter((f) => !isVideoFile(f)).length
       if (dropMediaCount > 20) {
@@ -1430,7 +1443,12 @@ export const Canvas: React.FC = () => {
       let i = 0
       const droppedVideoUrls: string[] = []
       const newItems: CanvasItem[] = []
-      const deferredVideoResolves: Promise<{ id: string; srcUrl: string } | null>[] = []
+      const deferredVideoResolves: Promise<{
+        id: string
+        srcUrl: string
+        proxyFilePath?: string
+        proxyForSourcePath?: string
+      } | null>[] = []
       for (const file of videoFiles) {
         const dw = VIDEO_TILE_DEFAULT.width
         const dh = VIDEO_TILE_DEFAULT.height
@@ -1451,10 +1469,15 @@ export const Canvas: React.FC = () => {
         }
         newItems.push(tile)
         deferredVideoResolves.push(
-          resolveDroppedVideoUrl(file)
-            .then((resolvedUrl) => {
-              if (!resolvedUrl || resolvedUrl === srcUrl) return null
-              return { id: tileId, srcUrl: resolvedUrl }
+          resolveDroppedVideoUrl(file, currentProjectPath, generateProxy)
+            .then((resolved) => {
+              if (!resolved.srcUrl || resolved.srcUrl === srcUrl) return null
+              return {
+                id: tileId,
+                srcUrl: resolved.srcUrl,
+                ...(resolved.proxyFilePath ? { proxyFilePath: resolved.proxyFilePath } : {}),
+                ...(resolved.proxyForSourcePath ? { proxyForSourcePath: resolved.proxyForSourcePath } : {}),
+              }
             })
             .catch(() => null),
         )
@@ -1499,14 +1522,26 @@ export const Canvas: React.FC = () => {
       if (deferredVideoResolves.length > 0) {
         void Promise.all(deferredVideoResolves).then((resolved) => {
           const updates = resolved
-            .filter((r): r is { id: string; srcUrl: string } => !!r)
-            .map((r) => ({ id: r.id, updates: { srcUrl: r.srcUrl } }))
+            .filter((r): r is {
+              id: string
+              srcUrl: string
+              proxyFilePath?: string
+              proxyForSourcePath?: string
+            } => !!r)
+            .map((r) => ({
+              id: r.id,
+              updates: {
+                srcUrl: r.srcUrl,
+                ...(r.proxyFilePath ? { proxyFilePath: r.proxyFilePath } : {}),
+                ...(r.proxyForSourcePath ? { proxyForSourcePath: r.proxyForSourcePath } : {}),
+              },
+            }))
           if (updates.length === 0) return
           updateItemsBatch(updates, { recordHistory: false, markDirty: false })
         })
       }
     },
-    [addItems, updateItemsBatch, viewport],
+    [addItems, currentProjectPath, updateItemsBatch, viewport],
   )
 
   const handleMouseDown = useCallback(

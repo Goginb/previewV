@@ -23,8 +23,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     confirmCloseWindow: () => ipcRenderer.invoke('window:confirm-close'),
     resolveImageSource: (path: string) =>
       ipcRenderer.invoke('resolve-image-source', path),
-    resolveVideoSource: (path: string) =>
-      ipcRenderer.invoke('resolve-video-source', path),
+    resolveVideoSource: (
+      path: string,
+      options?: { projectPath?: string | null; existingProxyPath?: string | null; generateProxy?: boolean },
+    ) =>
+      ipcRenderer.invoke('resolve-video-source', { path, ...(options ?? {}) }),
+    generateVideoProxies: (payload: { paths: string[]; projectPath?: string | null }) =>
+      ipcRenderer.invoke('generate-video-proxies', payload),
+    inspectVideoSources: (payload: { paths: string[]; projectPath?: string | null }) =>
+      ipcRenderer.invoke('inspect-video-sources', payload),
+    confirmGenerateProxies: (payload: { count: number; unsavedProject: boolean }) =>
+      ipcRenderer.invoke('confirm-generate-proxies', payload),
     pickFolderDialog: () => ipcRenderer.invoke('pick-folder-dialog'),
     enumerateFolderMedia: (folderPath: string) =>
       ipcRenderer.invoke('enumerate-folder-media', folderPath),
@@ -83,6 +92,20 @@ ipcRenderer.on('window:always-on-top-changed', (_event, payload: { value: boolea
     }),
   )
 })
+
+ipcRenderer.on(
+  'video-proxy-progress',
+  (
+    _event,
+    payload: { stage: 'start' | 'progress' | 'done'; completed: number; total: number; line: string },
+  ) => {
+    window.dispatchEvent(
+      new CustomEvent('video-proxy-progress', {
+        detail: payload,
+      }),
+    )
+  },
+)
 
 // Open a project by file path (Windows double click / file association)
 ipcRenderer.on('app-open-project-by-path', (_event, payload: { path: string }) => {

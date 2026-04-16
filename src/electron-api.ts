@@ -33,7 +33,19 @@ export interface ElectronProjectAPI {
   showUnsavedDialog: (opts?: { fileLabel?: string }) => Promise<'save' | 'discard' | 'cancel'>
   confirmCloseWindow: () => Promise<void>
   resolveImageSource: (path: string) => Promise<ResolvedImageImport>
-  resolveVideoSource: (path: string) => Promise<ResolvedVideoImport>
+  resolveVideoSource: (
+    path: string,
+    options?: { projectPath?: string | null; existingProxyPath?: string | null; generateProxy?: boolean },
+  ) => Promise<ResolvedVideoImport>
+  generateVideoProxies: (payload: {
+    paths: string[]
+    projectPath?: string | null
+  }) => Promise<Array<{ path: string; resolved: ResolvedVideoImport }>>
+  inspectVideoSources: (payload: {
+    paths: string[]
+    projectPath?: string | null
+  }) => Promise<Array<{ path: string; isProres: boolean; hasProxy: boolean }>>
+  confirmGenerateProxies: (payload: { count: number; unsavedProject: boolean }) => Promise<boolean>
   pickFolderDialog: () => Promise<string | null>
   enumerateFolderMedia: (folderPath: string) => Promise<string[]>
   duplicateMediaImportDialog: (payload: {
@@ -74,4 +86,6 @@ export interface ResolvedVideoImport {
   srcUrl: string
   sourceFilePath: string
   transcoded: boolean
+  proxyFilePath?: string
+  proxyForSourcePath?: string
 }

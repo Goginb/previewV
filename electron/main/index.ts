@@ -209,6 +209,8 @@ let pendingOpenPath: string | null = findPreviewVPathFromArgv(process.argv)
 
 app.commandLine.appendSwitch('no-sandbox')
 if (process.platform === 'win32') {
+  // Prioritize playback stability over GPU path performance on heterogeneous workstations.
+  app.disableHardwareAcceleration()
   // On Windows, Chromium's DirectComposition video overlays can produce
   // black video surfaces while playback/timeline continues on transformed UIs.
   app.commandLine.appendSwitch('disable-direct-composition-video-overlays')
@@ -216,14 +218,8 @@ if (process.platform === 'win32') {
   app.commandLine.appendSwitch('disable-accelerated-video-decode')
 }
 
-if (!app.requestSingleInstanceLock) {
-  // In case electron-behaves oddly, keep app running. (Electron always has this API.)
-} else {
-  const gotLock = app.requestSingleInstanceLock()
-  if (!gotLock) {
-    app.quit()
-  }
-}
+// Intentionally allow multiple independent PreviewV processes/windows.
+// This lets users open unrelated projects side-by-side without reusing a single app instance.
 
 // Must be called before app is ready.
 // Registers a privileged "media://" scheme that the renderer can use
@@ -246,11 +242,13 @@ const PREVIEW_CACHE_DIR = join(tmpdir(), 'previewv-raster-cache')
 const PREVIEW_IMAGE_EXT = new Set(['.tif', '.tiff', '.dpx', '.exr'])
 const DIRECT_IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'])
 const VIDEO_PROXY_EXT = new Set(['.mov', '.mkv', '.avi', '.m4v'])
+const PRORES_PROXY_DIR_NAME = 'Prores_proxy_temp'
 const rasterPreviewCache = new Map<
   string,
   { mtimeMs: number; size: number; previewPath: string; width: number; height: number }
 >()
 const videoProxyCache = new Map<string, { mtimeMs: number; size: number; proxyPath: string }>()
+const proresProbeCache = new Map<string, { mtimeMs: number; size: number; isProres: boolean }>()
 
 /** Recursive folder import: same extensions as the canvas (video + raster). */
 const FOLDER_VIDEO_EXT = new Set(['.mp4', '.webm', '.mov', '.mkv', '.avi', '.m4v', '.ogv'])
@@ -355,9 +353,16 @@ function projectVideoSnapshotProxyPath(projectPath: string, sourceFilePath: stri
 }
 
 function getVideoProxyCacheDir(): string {
-  // Keep proxies in per-user data to avoid cross-machine stale paths when running
-  // from a shared distribution folder.
-  return join(app.getPath('userData'), 'cache', 'video-proxy')
+  // Runtime-only proxy folder: ephemeral, not persisted as project cache.
+  return join(tmpdir(), 'previewv-video-runtime-proxy')
+}
+
+function getDesktopProresProxyDir(): string {
+  return join(app.getPath('desktop'), PRORES_PROXY_DIR_NAME)
+}
+
+function getProjectProresProxyDir(projectPath: string): string {
+  return join(dirname(projectPath), PRORES_PROXY_DIR_NAME)
 }
 
 function isLegacyTempProxyPath(filePath: string): boolean {
@@ -519,12 +524,18 @@ async function transcodeVideoProxy(filePath: string, outputPath: string): Promis
         '-y',
         '-i',
         filePath,
+        '-map',
+        '0:v:0',
+        '-map',
+        '0:a:0?',
         '-c:v',
         'libx264',
         '-preset',
-        'veryfast',
+        'ultrafast',
         '-crf',
-        '20',
+        '23',
+        '-vf',
+        'scale=trunc(min(1280\\,iw)/2)*2:trunc((min(1280\\,iw)/a)/2)*2',
         '-pix_fmt',
         'yuv420p',
         '-movflags',
@@ -552,7 +563,7 @@ async function transcodeVideoProxy(filePath: string, outputPath: string): Promis
         // ignore
       }
       finish(() => reject(new Error(`ffmpeg proxy timeout for "${basename(filePath)}"`)))
-    }, 180_000)
+    }, 900_000)
     p.stderr?.on('data', (d: Buffer) => {
       err += d.toString()
     })
@@ -567,10 +578,115 @@ async function transcodeVideoProxy(filePath: string, outputPath: string): Promis
   })
 }
 
-async function resolveVideoSourceFromPath(filePath: string): Promise<{
+async function detectProResCodec(filePath: string): Promise<boolean> {
+  const normalizedPath = normalize(filePath)
+  const stat = await fs.stat(normalizedPath)
+  const cacheKey = normalizePathKey(normalizedPath)
+  const cached = proresProbeCache.get(cacheKey)
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    return cached.isProres
+  }
+
+  const ff = await getFfmpegPath()
+  const probeResult = await new Promise<boolean>((resolve) => {
+    const p = spawn(ff, ['-hide_banner', '-i', normalizedPath], { windowsHide: true })
+    let stderr = ''
+    const timeoutId = setTimeout(() => {
+      try {
+        p.kill()
+      } catch {
+        // ignore
+      }
+      resolve(false)
+    }, 15000)
+    p.stderr?.on('data', (d: Buffer) => {
+      stderr += d.toString()
+    })
+    p.on('error', () => {
+      clearTimeout(timeoutId)
+      resolve(false)
+    })
+    p.on('close', () => {
+      clearTimeout(timeoutId)
+      resolve(/\bVideo:\s*prores\b/i.test(stderr))
+    })
+  })
+
+  proresProbeCache.set(cacheKey, {
+    mtimeMs: stat.mtimeMs,
+    size: stat.size,
+    isProres: probeResult,
+  })
+  return probeResult
+}
+
+async function transcodeProresPersistentProxy(filePath: string, outputPath: string): Promise<void> {
+  const ff = await getFfmpegPath()
+  await new Promise<void>((resolve, reject) => {
+    const p = spawn(
+      ff,
+      [
+        '-y',
+        '-i',
+        filePath,
+        '-map',
+        '0:v:0',
+        '-c:v',
+        'libx264',
+        '-preset',
+        'veryfast',
+        '-crf',
+        '30',
+        '-vf',
+        'scale=trunc(min(960\\,iw)/2)*2:trunc((min(960\\,iw)/a)/2)*2',
+        '-pix_fmt',
+        'yuv420p',
+        '-movflags',
+        '+faststart',
+        '-an',
+        outputPath,
+      ],
+      { windowsHide: true },
+    )
+    let err = ''
+    let settled = false
+    const finish = (fn: () => void) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeoutId)
+      fn()
+    }
+    const timeoutId = setTimeout(() => {
+      try {
+        p.kill()
+      } catch {
+        // ignore
+      }
+      finish(() => reject(new Error(`ffmpeg prores proxy timeout for "${basename(filePath)}"`)))
+    }, 900_000)
+    p.stderr?.on('data', (d: Buffer) => {
+      err += d.toString()
+    })
+    p.on('error', (error) => finish(() => reject(error)))
+    p.on('close', (code) => {
+      if (settled) return
+      finish(() => {
+        if (code === 0) resolve()
+        else reject(new Error(err.trim() || `ffmpeg exited with code ${code}`))
+      })
+    })
+  })
+}
+
+async function resolveVideoSourceFromPath(
+  filePath: string,
+  options?: { projectPath?: string | null; existingProxyPath?: string | null; generateProxy?: boolean },
+): Promise<{
   srcUrl: string
   sourceFilePath: string
   transcoded: boolean
+  proxyFilePath?: string
+  proxyForSourcePath?: string
 }> {
   const requestedPath = normalize(filePath)
   const normalizedPath = await resolveExistingVideoPath(requestedPath)
@@ -579,6 +695,90 @@ async function resolveVideoSourceFromPath(filePath: string): Promise<{
   if (!stat.isFile()) throw new Error('Not a file')
 
   const ext = extname(normalizedPath).toLowerCase()
+  const preferredProjectPath = options?.projectPath ?? null
+  const existingProxyPath = options?.existingProxyPath ? normalize(options.existingProxyPath) : null
+  const generateProxy = options?.generateProxy === true
+  const shouldCheckProres = ext === '.mov'
+  const isProres = shouldCheckProres ? await detectProResCodec(normalizedPath) : false
+
+  if (isProres) {
+    const proxyDir = preferredProjectPath
+      ? getProjectProresProxyDir(preferredProjectPath)
+      : getDesktopProresProxyDir()
+    const proxyFileName = `${basename(normalizedPath, extname(normalizedPath))}-${createHash('sha1')
+      .update(normalizePathKey(normalizedPath))
+      .digest('hex')
+      .slice(0, 10)}.mp4`
+    const proxyPath = join(proxyDir, proxyFileName)
+
+    if (existingProxyPath) {
+      try {
+        const existingStat = await fs.stat(existingProxyPath)
+        if (existingStat.isFile()) {
+          await appendVideoDebugLog(`using saved prores proxy "${existingProxyPath}"`)
+          return {
+            srcUrl: localPathToMediaUrl(existingProxyPath),
+            sourceFilePath: normalizedPath,
+            transcoded: true,
+            proxyFilePath: existingProxyPath,
+            proxyForSourcePath: normalizedPath,
+          }
+        }
+      } catch {
+        // continue with target proxy path
+      }
+    }
+
+    if (!generateProxy) {
+      await appendVideoDebugLog(`prores detected, keeping direct source until explicit proxy generation "${normalizedPath}"`)
+      return {
+        srcUrl: localPathToMediaUrl(normalizedPath),
+        sourceFilePath: normalizedPath,
+        transcoded: false,
+      }
+    }
+
+    await fs.mkdir(proxyDir, { recursive: true })
+    try {
+      const proxyStat = await fs.stat(proxyPath)
+      if (proxyStat.isFile() && proxyStat.mtimeMs >= stat.mtimeMs) {
+        await appendVideoDebugLog(`using persistent prores proxy "${proxyPath}"`)
+        return {
+          srcUrl: localPathToMediaUrl(proxyPath),
+          sourceFilePath: normalizedPath,
+          transcoded: true,
+          proxyFilePath: proxyPath,
+          proxyForSourcePath: normalizedPath,
+        }
+      }
+    } catch {
+      // proxy does not exist yet
+    }
+
+    await appendVideoDebugLog(`transcoding persistent prores proxy "${normalizedPath}" -> "${proxyPath}"`)
+    try {
+      await transcodeProresPersistentProxy(normalizedPath, proxyPath)
+      return {
+        srcUrl: localPathToMediaUrl(proxyPath),
+        sourceFilePath: normalizedPath,
+        transcoded: true,
+        proxyFilePath: proxyPath,
+        proxyForSourcePath: normalizedPath,
+      }
+    } catch (error) {
+      await appendVideoDebugLog(
+        `persistent prores transcode failed for "${normalizedPath}": ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+      return {
+        srcUrl: localPathToMediaUrl(normalizedPath),
+        sourceFilePath: normalizedPath,
+        transcoded: false,
+      }
+    }
+  }
+
   if (!VIDEO_PROXY_EXT.has(ext)) {
     await appendVideoDebugLog(`using direct media url for "${normalizedPath}"`)
     return {
@@ -594,7 +794,7 @@ async function resolveVideoSourceFromPath(filePath: string): Promise<{
   if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
     try {
       await fs.access(cached.proxyPath)
-      await appendVideoDebugLog(`using in-memory cached proxy "${cached.proxyPath}"`)
+      await appendVideoDebugLog(`using runtime in-memory proxy "${cached.proxyPath}"`)
       return {
         srcUrl: localPathToMediaUrl(cached.proxyPath),
         sourceFilePath: normalizedPath,
@@ -605,18 +805,16 @@ async function resolveVideoSourceFromPath(filePath: string): Promise<{
     }
   }
 
-  // Persisted cache reuse across app restarts:
-  // if deterministic proxy file already exists and is not older than source,
-  // skip costly re-transcode on first load.
+  await ensureVideoProxyCacheDir()
   try {
     const proxyStat = await fs.stat(proxyPath)
     if (proxyStat.isFile() && proxyStat.mtimeMs >= stat.mtimeMs) {
-      await appendVideoDebugLog(`using persisted proxy "${proxyPath}"`)
       videoProxyCache.set(cacheKey, {
         mtimeMs: stat.mtimeMs,
         size: stat.size,
         proxyPath,
       })
+      await appendVideoDebugLog(`using runtime proxy "${proxyPath}"`)
       return {
         srcUrl: localPathToMediaUrl(proxyPath),
         sourceFilePath: normalizedPath,
@@ -624,55 +822,68 @@ async function resolveVideoSourceFromPath(filePath: string): Promise<{
       }
     }
   } catch {
-    // no persistent proxy yet — fall through to transcode
+    // no runtime proxy yet
   }
 
-  await ensureVideoProxyCacheDir()
   try {
-    await appendVideoDebugLog(`transcoding to proxy "${proxyPath}"`)
+    await appendVideoDebugLog(`transcoding runtime proxy "${normalizedPath}" -> "${proxyPath}"`)
     await transcodeVideoProxy(normalizedPath, proxyPath)
-    await appendVideoDebugLog(`transcode success "${proxyPath}"`)
+    videoProxyCache.set(cacheKey, {
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+      proxyPath,
+    })
+    return {
+      srcUrl: localPathToMediaUrl(proxyPath),
+      sourceFilePath: normalizedPath,
+      transcoded: true,
+    }
   } catch (error) {
     await appendVideoDebugLog(
-      `transcode failed for "${normalizedPath}": ${error instanceof Error ? error.message : String(error)}`,
+      `runtime transcode failed for "${normalizedPath}": ${error instanceof Error ? error.message : String(error)}`,
     )
-    // If proxy regeneration fails on this machine (codec/policy/permissions),
-    // keep using an already existing proxy file instead of breaking the tile.
-    try {
-      const existingProxy = await fs.stat(proxyPath)
-      if (existingProxy.isFile()) {
-        await appendVideoDebugLog(`using existing proxy fallback "${proxyPath}" for "${normalizedPath}"`)
-        videoProxyCache.set(cacheKey, {
-          mtimeMs: stat.mtimeMs,
-          size: stat.size,
-          proxyPath,
-        })
-        return {
-          srcUrl: localPathToMediaUrl(proxyPath),
-          sourceFilePath: normalizedPath,
-          transcoded: true,
-        }
-      }
-    } catch {
-      // no existing proxy to reuse
-    }
-    await appendVideoDebugLog(`falling back to direct media url for "${normalizedPath}"`)
+    await appendVideoDebugLog(`fallback to direct media url for "${normalizedPath}"`)
     return {
       srcUrl: localPathToMediaUrl(normalizedPath),
       sourceFilePath: normalizedPath,
       transcoded: false,
     }
   }
-  videoProxyCache.set(cacheKey, {
-    mtimeMs: stat.mtimeMs,
-    size: stat.size,
-    proxyPath,
-  })
-  return {
-    srcUrl: localPathToMediaUrl(proxyPath),
-    sourceFilePath: normalizedPath,
-    transcoded: true,
+}
+
+async function inspectVideoSourcePath(
+  filePath: string,
+  options?: { projectPath?: string | null },
+): Promise<{ path: string; isProres: boolean; hasProxy: boolean }> {
+  const requestedPath = normalize(filePath)
+  const normalizedPath = await resolveExistingVideoPath(requestedPath)
+  const ext = extname(normalizedPath).toLowerCase()
+  if (ext !== '.mov') {
+    return { path: normalizedPath, isProres: false, hasProxy: false }
   }
+
+  const isProres = await detectProResCodec(normalizedPath).catch(() => false)
+  if (!isProres) {
+    return { path: normalizedPath, isProres: false, hasProxy: false }
+  }
+
+  const projectPath = options?.projectPath ?? null
+  const proxyDir = projectPath ? getProjectProresProxyDir(projectPath) : getDesktopProresProxyDir()
+  const proxyFileName = `${basename(normalizedPath, extname(normalizedPath))}-${createHash('sha1')
+    .update(normalizePathKey(normalizedPath))
+    .digest('hex')
+    .slice(0, 10)}.mp4`
+  const proxyPath = join(proxyDir, proxyFileName)
+
+  let hasProxy = false
+  try {
+    const [sourceStat, proxyStat] = await Promise.all([fs.stat(normalizedPath), fs.stat(proxyPath)])
+    hasProxy = proxyStat.isFile() && proxyStat.mtimeMs >= sourceStat.mtimeMs
+  } catch {
+    hasProxy = false
+  }
+
+  return { path: normalizedPath, isProres: true, hasProxy }
 }
 
 async function ensureSpecialImagePreview(filePath: string): Promise<{
@@ -818,6 +1029,95 @@ async function touchRecentProject(userDataDir: string, projectPath: string) {
   return [projectPath, ...filtered].slice(0, 10)
 }
 
+function tokenizeVideoName(value: string): string[] {
+  const base = basename(value, extname(value))
+  return base
+    .toLowerCase()
+    .replace(/[\u0400-\u04ff]/g, ' ')
+    .replace(/[^a-z0-9;]+/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+}
+
+function extractTimecodes(value: string): string[] {
+  const normalized = value.toLowerCase()
+  const matches = normalized.match(/\d{2};\d{2};\d{2};\d{2}/g)
+  if (!matches) return []
+  return Array.from(new Set(matches))
+}
+
+function scoreCandidateName(targetName: string, candidateName: string): number {
+  const targetTokens = tokenizeVideoName(targetName)
+  const candidateTokens = tokenizeVideoName(candidateName)
+  const targetSet = new Set(targetTokens)
+  const candidateSet = new Set(candidateTokens)
+
+  let score = 0
+  for (const token of targetSet) {
+    if (candidateSet.has(token)) score += 10
+  }
+
+  const targetTimecodes = extractTimecodes(targetName)
+  const candidateTimecodes = new Set(extractTimecodes(candidateName))
+  for (const tc of targetTimecodes) {
+    if (candidateTimecodes.has(tc)) score += 120
+  }
+
+  const targetBase = basename(targetName, extname(targetName)).toLowerCase()
+  const candidateBase = basename(candidateName, extname(candidateName)).toLowerCase()
+  const commonPrefixLen = Math.min(
+    targetBase.length,
+    candidateBase.length,
+    (() => {
+      let i = 0
+      while (i < targetBase.length && i < candidateBase.length && targetBase[i] === candidateBase[i]) i += 1
+      return i
+    })(),
+  )
+  score += Math.min(40, commonPrefixLen)
+  score -= Math.abs(targetBase.length - candidateBase.length)
+
+  return score
+}
+
+async function findBestVideoFilenameMatch(
+  dirs: Set<string>,
+  fileName: string,
+): Promise<string | null> {
+  const wantedExt = extname(fileName).toLowerCase()
+  let best: { path: string; score: number; size: number } | null = null
+
+  for (const dir of dirs) {
+    let entries: Awaited<ReturnType<typeof fs.readdir>>
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true })
+    } catch {
+      continue
+    }
+
+    for (const entry of entries) {
+      if (!entry.isFile()) continue
+      if (wantedExt && extname(entry.name).toLowerCase() !== wantedExt) continue
+      const fullPath = join(dir, entry.name)
+      let st: Awaited<ReturnType<typeof fs.stat>>
+      try {
+        st = await fs.stat(fullPath)
+      } catch {
+        continue
+      }
+      if (!st.isFile()) continue
+      const score = scoreCandidateName(fileName, entry.name)
+      if (best === null || score > best.score || (score === best.score && st.size > best.size)) {
+        best = { path: fullPath, score, size: st.size }
+      }
+    }
+  }
+
+  if (!best) return null
+  // Guard against random mismatches: require at least some meaningful overlap.
+  return best.score >= 30 ? best.path : null
+}
+
 async function readProjectFromDisk(
   projectPath: string,
   options?: { resolveVideoSources?: boolean },
@@ -829,27 +1129,13 @@ async function readProjectFromDisk(
     resolveAssetPath: (relativePath) => resolveProjectAssetPath(projectPath, relativePath),
   })
 
-  // Fast-path: if a local proxy for the original source already exists, use it
-  // immediately to avoid long post-open hydration.
+  // Keep video src bound to source files; avoid proxy path stickiness from older builds.
   for (const item of project.items) {
-    if (item.type !== 'video' || !item.sourceFilePath) continue
-    const ext = extname(item.sourceFilePath).toLowerCase()
-    if (!VIDEO_PROXY_EXT.has(ext)) continue
-    const snapshotProxyPath = projectVideoSnapshotProxyPath(projectPath, item.sourceFilePath)
-    try {
-      await fs.access(snapshotProxyPath)
-      item.srcUrl = localPathToMediaUrl(snapshotProxyPath)
-      continue
-    } catch {
-      // No project-level snapshot yet.
-    }
-    const cachedProxyPath = videoProxyCacheFilePath(item.sourceFilePath)
-    try {
-      await fs.access(cachedProxyPath)
-      item.srcUrl = localPathToMediaUrl(cachedProxyPath)
-    } catch {
-      // No local proxy cache yet on this machine.
-    }
+    if (item.type !== 'video') continue
+    const sourcePath = item.sourceFilePath ?? mediaUrlToLocalPath(item.srcUrl)
+    if (!sourcePath) continue
+    const proxyPath = item.proxyFilePath
+    item.srcUrl = localPathToMediaUrl(proxyPath || sourcePath)
   }
 
   if (options?.resolveVideoSources !== false) {
@@ -878,27 +1164,39 @@ async function readProjectFromDisk(
       const primarySourcePath = item.sourceFilePath ?? mediaUrlToLocalPath(item.srcUrl)
       if (!primarySourcePath) continue
       try {
-        const resolved = await resolveVideoSourceFromPath(primarySourcePath)
+        const resolved = await resolveVideoSourceFromPath(primarySourcePath, {
+          projectPath,
+          existingProxyPath:
+            item.proxyFilePath &&
+            item.proxyForSourcePath &&
+            normalizePathKey(item.proxyForSourcePath) === normalizePathKey(primarySourcePath)
+              ? item.proxyFilePath
+              : null,
+        })
         item.srcUrl = resolved.srcUrl
         item.sourceFilePath = resolved.sourceFilePath
+        item.proxyFilePath = resolved.proxyFilePath
+        item.proxyForSourcePath = resolved.proxyForSourcePath
         if (!isLegacyTempProxyPath(resolved.sourceFilePath)) {
           knownVideoDirs.add(dirname(resolved.sourceFilePath))
         }
       } catch {
-        if (
-          primarySourcePath &&
-          isLegacyTempProxyPath(primarySourcePath) &&
-          item.fileName
-        ) {
-          const repaired = await tryResolveByFilename(item.fileName)
+        await appendVideoDebugLog(`resolve-video-source failed for "${primarySourcePath}"`)
+        if (item.fileName) {
+          let repaired = await tryResolveByFilename(item.fileName)
+          if (!repaired) {
+            repaired = await findBestVideoFilenameMatch(knownVideoDirs, item.fileName)
+          }
           if (repaired) {
             try {
-              const resolved = await resolveVideoSourceFromPath(repaired)
+              const resolved = await resolveVideoSourceFromPath(repaired, { projectPath })
               item.srcUrl = resolved.srcUrl
               item.sourceFilePath = resolved.sourceFilePath
+              item.proxyFilePath = resolved.proxyFilePath
+              item.proxyForSourcePath = resolved.proxyForSourcePath
               knownVideoDirs.add(dirname(resolved.sourceFilePath))
               await appendVideoDebugLog(
-                `repaired legacy proxy item by filename "${item.fileName}" -> "${resolved.sourceFilePath}"`,
+                `repaired missing video by fuzzy filename match "${item.fileName}" -> "${resolved.sourceFilePath}"`,
               )
               continue
             } catch {
@@ -922,60 +1220,18 @@ async function writeProjectToDisk(projectPath: string, project: ProjectFile) {
 }
 
 async function persistProjectVideoSnapshot(projectPath: string, items: CanvasItem[]): Promise<void> {
-  const videoItems = items.filter((item): item is Extract<CanvasItem, { type: 'video' }> => item.type === 'video')
-  if (videoItems.length === 0) return
-
-  await fs.mkdir(projectVideoSnapshotDir(projectPath), { recursive: true })
-
-  for (const item of videoItems) {
-    const sourcePath = item.sourceFilePath ?? mediaUrlToLocalPath(item.srcUrl)
-    if (!sourcePath) continue
-    const ext = extname(sourcePath).toLowerCase()
-    if (!VIDEO_PROXY_EXT.has(ext)) continue
-
-    const localProxyPath = videoProxyCacheFilePath(sourcePath)
-    const snapshotProxyPath = projectVideoSnapshotProxyPath(projectPath, sourcePath)
-    try {
-      const [sourceStat, localProxyStat] = await Promise.all([fs.stat(sourcePath), fs.stat(localProxyPath)])
-      if (!sourceStat.isFile() || !localProxyStat.isFile()) continue
-      if (localProxyStat.mtimeMs < sourceStat.mtimeMs) continue
-      await fs.copyFile(localProxyPath, snapshotProxyPath)
-    } catch {
-      // Best-effort optimization only.
-    }
-  }
+  void projectPath
+  void items
+  // Video preview disk cache is intentionally disabled.
 }
 
 async function cloneProjectVideoSnapshotIfNeeded(
   sourceProjectPath: string | null | undefined,
   targetProjectPath: string,
 ): Promise<void> {
-  if (!sourceProjectPath) return
-  const normalizedSource =
-    extname(sourceProjectPath).toLowerCase() === PROJECT_EXT
-      ? sourceProjectPath
-      : `${sourceProjectPath}${PROJECT_EXT}`
-  const normalizedTarget =
-    extname(targetProjectPath).toLowerCase() === PROJECT_EXT
-      ? targetProjectPath
-      : `${targetProjectPath}${PROJECT_EXT}`
-  if (normalizePathKey(normalizedSource) === normalizePathKey(normalizedTarget)) return
-
-  const sourceSnapshotDir = projectVideoSnapshotDir(normalizedSource)
-  const targetSnapshotDir = projectVideoSnapshotDir(normalizedTarget)
-  try {
-    await fs.access(sourceSnapshotDir)
-  } catch {
-    return
-  }
-  try {
-    await fs.access(targetSnapshotDir)
-    return
-  } catch {
-    // continue
-  }
-  await fs.mkdir(dirname(targetSnapshotDir), { recursive: true })
-  await fs.cp(sourceSnapshotDir, targetSnapshotDir, { recursive: true })
+  void sourceProjectPath
+  void targetProjectPath
+  // Video preview disk cache is intentionally disabled.
 }
 
 let activeWindow: BrowserWindow | null = null
@@ -1348,12 +1604,25 @@ app.whenReady().then(() => {
     return resolveImageSourceFromPath(filePath)
   })
 
-  ipcMain.handle('resolve-video-source', async (_e, filePath: unknown) => {
-    if (typeof filePath !== 'string' || !filePath.trim()) {
+  ipcMain.handle('resolve-video-source', async (_e, payload: unknown) => {
+    const filePath =
+      typeof payload === 'string'
+        ? payload
+        : isRecord(payload) && typeof payload.path === 'string'
+          ? payload.path
+          : ''
+    const projectPath =
+      isRecord(payload) && typeof payload.projectPath === 'string' ? payload.projectPath : null
+    const existingProxyPath =
+      isRecord(payload) && typeof payload.existingProxyPath === 'string'
+        ? payload.existingProxyPath
+        : null
+    const generateProxy = isRecord(payload) && payload.generateProxy === true
+    if (!filePath.trim()) {
       throw new Error('Invalid path')
     }
     try {
-      return await resolveVideoSourceFromPath(filePath)
+      return await resolveVideoSourceFromPath(filePath, { projectPath, existingProxyPath, generateProxy })
     } catch (error) {
       await appendVideoDebugLog(
         `resolve-video-source failed for "${String(filePath)}": ${error instanceof Error ? error.message : String(error)}`,
@@ -1361,6 +1630,87 @@ app.whenReady().then(() => {
       throw error
     }
   })
+
+  ipcMain.handle('inspect-video-sources', async (_e, payload: { paths?: unknown; projectPath?: unknown }) => {
+    const incoming =
+      Array.isArray(payload?.paths)
+        ? payload.paths.filter((p): p is string => typeof p === 'string' && p.trim().length > 0)
+        : []
+    const uniquePaths = Array.from(new Set(incoming.map((p) => normalize(p.trim()))))
+    const projectPath =
+      typeof payload?.projectPath === 'string' && payload.projectPath.trim().length > 0
+        ? normalize(payload.projectPath.trim())
+        : null
+    const out: Array<{ path: string; isProres: boolean; hasProxy: boolean }> = []
+    for (const path of uniquePaths) {
+      out.push(await inspectVideoSourcePath(path, { projectPath }))
+    }
+    return out
+  })
+
+  ipcMain.handle(
+    'confirm-generate-proxies',
+    async (event, payload: { count?: unknown; unsavedProject?: unknown }) => {
+      const win = BrowserWindow.fromWebContents(event.sender)
+      if (!win) return false
+      const count = typeof payload?.count === 'number' ? payload.count : 0
+      const unsavedProject = payload?.unsavedProject === true
+      const { response } = await dialog.showMessageBox(win, {
+        type: 'question',
+        buttons: ['Generate proxies', 'Import without proxies'],
+        defaultId: 0,
+        cancelId: 1,
+        title: 'PreviewV',
+        message:
+          count > 1
+            ? `${count} imported videos use ProRes and may play back as black frames.`
+            : 'A ProRes video was detected and may play back as a black frame.',
+        detail: unsavedProject
+          ? 'Generate lightweight proxies now? The project is not saved yet, so proxies will be stored on the Desktop in Prores_proxy_temp.'
+          : 'Generate lightweight proxies now for more reliable playback?',
+      })
+      return response === 0
+    },
+  )
+
+  ipcMain.handle(
+    'generate-video-proxies',
+    async (
+      event,
+      payload: { paths?: unknown; projectPath?: unknown },
+    ): Promise<Array<{ path: string; resolved: Awaited<ReturnType<typeof resolveVideoSourceFromPath>> }>> => {
+      const incoming =
+        Array.isArray(payload?.paths)
+          ? payload.paths.filter((p): p is string => typeof p === 'string' && p.trim().length > 0)
+          : []
+      const uniquePaths = Array.from(new Set(incoming.map((p) => normalize(p.trim()))))
+      const total = uniquePaths.length
+      const projectPath =
+        typeof payload?.projectPath === 'string' && payload.projectPath.trim().length > 0
+          ? normalize(payload.projectPath.trim())
+          : null
+      const sendProgress = (stage: 'start' | 'progress' | 'done', completed: number, line: string) => {
+        event.sender.send('video-proxy-progress', { stage, completed, total, line })
+      }
+
+      sendProgress('start', 0, total > 0 ? 'Preparing proxy generation...' : 'No video paths provided.')
+      const out: Array<{ path: string; resolved: Awaited<ReturnType<typeof resolveVideoSourceFromPath>> }> = []
+      let completed = 0
+      for (const path of uniquePaths) {
+        const file = basename(path)
+        sendProgress('progress', completed, `Processing ${file}...`)
+        const resolved = await resolveVideoSourceFromPath(path, {
+          projectPath,
+          generateProxy: true,
+        })
+        out.push({ path, resolved })
+        completed += 1
+        sendProgress('progress', completed, `Processed ${file}`)
+      }
+      sendProgress('done', completed, total > 0 ? 'Proxy generation finished.' : 'Nothing to process.')
+      return out
+    },
+  )
 
   ipcMain.handle('scan-dailies', async (_e, payload: any) => {
     return await scanDailiesFolder(payload)

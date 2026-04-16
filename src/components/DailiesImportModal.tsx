@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { useUiStore } from '../store/uiStore'
 import { useCanvasStore } from '../store/canvasStore'
 import { defaultVideoTileSizeForNew } from '../utils/tileSizing'
+import { shouldGenerateProxiesForImport } from '../utils/proresImportPrompt'
 import type { CanvasItem } from '../types'
 
 export const DailiesImportModal: React.FC = () => {
@@ -80,6 +81,8 @@ export const DailiesImportModal: React.FC = () => {
 
       const state = useCanvasStore.getState()
       const { viewport } = state
+      const videoPaths = paths.filter((p) => /\.(mp4|webm|mov|mkv|avi|m4v|ogv)$/i.test(p))
+      const generateProxy = await shouldGenerateProxiesForImport(videoPaths, state.currentProjectPath)
       
       // Place new items below existing content, or at screen center if canvas is empty
       const ROW_GAP = 40
@@ -109,7 +112,10 @@ export const DailiesImportModal: React.FC = () => {
         const isVid = /\.(mp4|webm|mov|mkv|avi|m4v|ogv)$/i.test(p)
         const fileName = p.split(/[/\\]/).pop() || 'Media'
         if (isVid) {
-          const resolved = await api.resolveVideoSource(p)
+          const resolved = await api.resolveVideoSource(p, {
+            projectPath: state.currentProjectPath,
+            generateProxy,
+          })
           const dim = defaultVideoTileSizeForNew()
           const dw = dim.width
           const dh = dim.height
@@ -119,6 +125,8 @@ export const DailiesImportModal: React.FC = () => {
             srcUrl: resolved.srcUrl,
             fileName,
             sourceFilePath: resolved.sourceFilePath,
+            ...(resolved.proxyFilePath ? { proxyFilePath: resolved.proxyFilePath } : {}),
+            ...(resolved.proxyForSourcePath ? { proxyForSourcePath: resolved.proxyForSourcePath } : {}),
             x: startX + i * (dw + 40),
             y: startY,
             width: dw,

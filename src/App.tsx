@@ -78,6 +78,11 @@ const App: React.FC = () => {
   const [closePrompt, setClosePrompt] = useState<null | { fileLabel: string; busy: boolean }>(
     null,
   )
+  const [proxyPrompt, setProxyPrompt] = useState<null | {
+    count: number
+    unsavedProject: boolean
+    resolve: (value: boolean) => void
+  }>(null)
   const projectVideoHydrationRunRef = useRef(0)
 
   const isDailiesModalOpen = useUiStore((s) => s.isDailiesModalOpen)
@@ -178,6 +183,23 @@ const App: React.FC = () => {
     }
     window.addEventListener('app-request-unsaved-close', onRequestUnsavedClose)
     return () => window.removeEventListener('app-request-unsaved-close', onRequestUnsavedClose)
+  }, [])
+
+  useEffect(() => {
+    const onRequestProxyPrompt = (
+      e: CustomEvent<{ count: number; unsavedProject: boolean; resolve: (value: boolean) => void }>,
+    ) => {
+      setProxyPrompt(e.detail)
+    }
+    window.addEventListener(
+      'previewv-request-generate-proxy-confirmation',
+      onRequestProxyPrompt as EventListener,
+    )
+    return () =>
+      window.removeEventListener(
+        'previewv-request-generate-proxy-confirmation',
+        onRequestProxyPrompt as EventListener,
+      )
   }, [])
 
   useEffect(() => {
@@ -438,6 +460,50 @@ const App: React.FC = () => {
                 }}
               >
                 Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {proxyPrompt && (
+        <div className="fixed inset-0 z-[6600] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <div
+            className="w-[min(92vw,540px)] rounded-xl border p-4"
+            style={{ background: 'var(--menu-bg)', borderColor: 'var(--menu-border)' }}
+          >
+            <h3 className="text-base font-semibold text-themeText-100">
+              Generate lightweight proxies?
+            </h3>
+            <p className="mt-2 text-sm text-themeText-300">
+              {proxyPrompt.count > 1
+                ? `${proxyPrompt.count} imported videos use ProRes and may play back unreliably.`
+                : 'An imported video uses ProRes and may play back unreliably.'}
+            </p>
+            <p className="mt-2 text-sm text-themeText-300">
+              {proxyPrompt.unsavedProject
+                ? 'The project is not saved yet, so generated proxies will be stored on the Desktop in `Prores_proxy_temp`.'
+                : 'Generate lightweight proxies now for more reliable playback?'}
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded border border-[var(--menu-border)] px-3 py-1.5 text-themeText-200 hover:bg-themeBg-hover"
+                onClick={() => {
+                  proxyPrompt.resolve(false)
+                  setProxyPrompt(null)
+                }}
+              >
+                Import without proxies
+              </button>
+              <button
+                type="button"
+                className="rounded bg-fuchsia-700 px-3 py-1.5 text-white hover:bg-fuchsia-600"
+                onClick={() => {
+                  proxyPrompt.resolve(true)
+                  setProxyPrompt(null)
+                }}
+              >
+                Generate proxies
               </button>
             </div>
           </div>
