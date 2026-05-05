@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     readClipboardText: () => clipboard.readText(),
     writeClipboardText: (text: string) => clipboard.writeText(text),
     revealFileInFolder: (path: string) => ipcRenderer.invoke('reveal-file-in-folder', { path }),
+    openProxiesFolder: (projectPath: string | null) =>
+      ipcRenderer.invoke('open-proxies-folder', { projectPath }),
     openProjectDialog: () => ipcRenderer.invoke('open-project-dialog'),
     openProjectByPath: (path: string) =>
       ipcRenderer.invoke('open-project-by-path', { path }),

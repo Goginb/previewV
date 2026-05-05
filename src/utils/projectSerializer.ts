@@ -13,6 +13,7 @@ import type {
   ProjectMeta,
   ViewportState,
 } from '../types/project'
+import { isNoteFontFamily } from './noteStyle'
 
 export const PROJECT_VERSION = 2
 
@@ -84,13 +85,30 @@ function optionalBackdropSaturation(v: unknown): number | undefined {
   return Math.max(0, Math.min(200, v))
 }
 
+function optionalNoteFontSizeTier(v: unknown): 's' | 'm' | 'l' | undefined {
+  if (v === undefined) return undefined
+  if (v === 's' || v === 'm' || v === 'l') return v
+  return undefined
+}
+
+function optionalNoteFontFamily(v: unknown) {
+  if (v === undefined) return undefined
+  return isNoteFontFamily(v) ? v : undefined
+}
+
 function normalizeToForwardSlashes(path: string): string {
   return path.replace(/\\/g, '/')
 }
 
 export function localPathToMediaUrl(localPath: string): string {
   const normalized = normalizeToForwardSlashes(localPath).replace(/^\/+/, '')
-  return `media:///${normalized}`
+  // Encode each path segment so reserved chars (incl. #, %, spaces, unicode) are safe in URL.
+  const encoded = normalized
+    .split('/')
+    .filter((part, idx, arr) => part.length > 0 || (idx === arr.length - 1 && normalized.endsWith('/')))
+    .map((part) => encodeURIComponent(part))
+    .join('/')
+  return `media:///${encoded}`
 }
 
 export function mediaUrlToLocalPath(mediaUrl: string): string {
@@ -190,7 +208,22 @@ function validateItemV1(raw: unknown): ProjectCanvasItemV1 {
   if (type === 'note') {
     const text = mustBeString(raw.text, 'item.text')
     const fontSize = optionalNumber(raw.fontSize, 'item.fontSize')
-    return { type: 'note', id, x, y, width, height, text, ...(fontSize ? { fontSize } : {}) }
+    const fontSizeTier = optionalNoteFontSizeTier(raw.fontSizeTier)
+    const color = optionalString(raw.color, 'item.color')
+    const fontFamily = optionalNoteFontFamily(raw.fontFamily)
+    return {
+      type: 'note',
+      id,
+      x,
+      y,
+      width,
+      height,
+      text,
+      ...(fontSize ? { fontSize } : {}),
+      ...(fontSizeTier ? { fontSizeTier } : {}),
+      ...(color !== undefined ? { color } : {}),
+      ...(fontFamily !== undefined ? { fontFamily } : {}),
+    }
   }
 
   throw new Error(`Invalid project: unknown item.type "${type}"`)
@@ -209,6 +242,8 @@ function validateItemV2(raw: unknown): ProjectCanvasItemV2 {
   if (type === 'video') {
     const fileName = mustBeString(raw.fileName, 'item.fileName')
     const videoPath = mustBeString(raw.videoPath, 'item.videoPath')
+    const videoProxyPath = optionalString(raw.videoProxyPath, 'item.videoProxyPath')
+    const proxyForVideoPath = optionalString(raw.proxyForVideoPath, 'item.proxyForVideoPath')
     const aspectApplied = raw.aspectApplied
     const uiColor = optionalString(raw.uiColor, 'item.uiColor')
     if (aspectApplied !== undefined && typeof aspectApplied !== 'boolean') {
@@ -223,6 +258,8 @@ function validateItemV2(raw: unknown): ProjectCanvasItemV2 {
       height,
       fileName,
       videoPath,
+      ...(videoProxyPath !== undefined ? { videoProxyPath } : {}),
+      ...(proxyForVideoPath !== undefined ? { proxyForVideoPath } : {}),
       ...(aspectApplied !== undefined ? { aspectApplied } : {}),
       ...(uiColor !== undefined ? { uiColor } : {}),
     }
@@ -282,7 +319,22 @@ function validateItemV2(raw: unknown): ProjectCanvasItemV2 {
   if (type === 'note') {
     const text = mustBeString(raw.text, 'item.text')
     const fontSize = optionalNumber(raw.fontSize, 'item.fontSize')
-    return { type: 'note', id, x, y, width, height, text, ...(fontSize ? { fontSize } : {}) }
+    const fontSizeTier = optionalNoteFontSizeTier(raw.fontSizeTier)
+    const color = optionalString(raw.color, 'item.color')
+    const fontFamily = optionalNoteFontFamily(raw.fontFamily)
+    return {
+      type: 'note',
+      id,
+      x,
+      y,
+      width,
+      height,
+      text,
+      ...(fontSize ? { fontSize } : {}),
+      ...(fontSizeTier ? { fontSizeTier } : {}),
+      ...(color !== undefined ? { color } : {}),
+      ...(fontFamily !== undefined ? { fontFamily } : {}),
+    }
   }
 
   if (type === 'backdrop') {
@@ -434,6 +486,9 @@ export function serializeProject(params: SerializeProjectOptions): ProjectFileV2
       height: item.height,
       text: item.text,
       ...(item.fontSize ? { fontSize: item.fontSize } : {}),
+      ...(item.fontSizeTier ? { fontSizeTier: item.fontSizeTier } : {}),
+      ...(item.color !== undefined ? { color: item.color } : {}),
+      ...(item.fontFamily !== undefined ? { fontFamily: item.fontFamily } : {}),
     }
   })
 
@@ -475,6 +530,8 @@ export function deserializeProject(
           fileName: validated.fileName,
           srcUrl: localPathToMediaUrl(validated.videoPath),
           sourceFilePath: validated.videoPath,
+          ...(validated.videoProxyPath !== undefined ? { proxyFilePath: validated.videoProxyPath } : {}),
+          ...(validated.proxyForVideoPath !== undefined ? { proxyForSourcePath: validated.proxyForVideoPath } : {}),
           ...(validated.aspectApplied !== undefined ? { aspectApplied: validated.aspectApplied } : {}),
           ...(validated.uiColor !== undefined ? { uiColor: validated.uiColor } : {}),
         }
@@ -510,6 +567,9 @@ export function deserializeProject(
         height: validated.height,
         text: validated.text,
         ...(validated.fontSize ? { fontSize: validated.fontSize } : {}),
+        ...(validated.fontSizeTier ? { fontSizeTier: validated.fontSizeTier } : {}),
+        ...(validated.color !== undefined ? { color: validated.color } : {}),
+        ...(validated.fontFamily !== undefined ? { fontFamily: validated.fontFamily } : {}),
       }
       return note
     })
@@ -612,6 +672,9 @@ export function deserializeProject(
       height: validated.height,
       text: validated.text,
       ...(validated.fontSize ? { fontSize: validated.fontSize } : {}),
+      ...(validated.fontSizeTier ? { fontSizeTier: validated.fontSizeTier } : {}),
+      ...(validated.color !== undefined ? { color: validated.color } : {}),
+      ...(validated.fontFamily !== undefined ? { fontFamily: validated.fontFamily } : {}),
     }
     return note
   })

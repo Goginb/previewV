@@ -246,6 +246,53 @@ test('serializeProject preserves backdrop items', () => {
   })
 })
 
+test('serialize/deserialize preserves note color and font family', () => {
+  const items: CanvasItem[] = [
+    {
+      type: 'note',
+      id: 'note-1',
+      x: 24,
+      y: 48,
+      width: 260,
+      height: 180,
+      text: 'Styled note',
+      fontSize: 14,
+      fontSizeTier: 'm',
+      color: '#1d4ed8',
+      fontFamily: 'georgia',
+    },
+  ]
+
+  const serialized = serializeProject({
+    items,
+    viewport: { x: 0, y: 0, scale: 1 },
+    meta: META,
+    assetPathForImage: () => 'unused.png',
+  })
+
+  const note = serialized.items.find((item) => item.type === 'note' && item.id === 'note-1')
+  assert.deepEqual(note, {
+    type: 'note',
+    id: 'note-1',
+    x: 24,
+    y: 48,
+    width: 260,
+    height: 180,
+    text: 'Styled note',
+    fontSize: 14,
+    fontSizeTier: 'm',
+    color: '#1d4ed8',
+    fontFamily: 'georgia',
+  })
+
+  const reopened = deserializeProject(serialized)
+  const reopenedNote = reopened.items.find(
+    (item) => item.type === 'note' && item.id === 'note-1',
+  )
+
+  assert.deepEqual(reopenedNote, items[0])
+})
+
 test('deserializeProject maps v2 backdrops', () => {
   const project = deserializeProject({
     version: 2,

@@ -33,11 +33,13 @@ export async function shouldGenerateProxiesForImport(
 
   const preload = usePreloadStore.getState()
   preload.setOpen(true)
-  preload.setProgress(8, 'Checking imported videos for ProRes...', 'Inspecting Videos')
+  preload.setProgress(8, 'Checking imported videos (ProRes / MJPEG)...', 'Inspecting Videos')
 
   try {
     const inspected = await api.inspectVideoSources({ paths: videoPaths, projectPath })
-    const missingProxyEntries = inspected.filter((entry) => entry.isProres && !entry.hasProxy)
+    const missingProxyEntries = inspected.filter(
+      (entry) => (entry.isProres || entry.isMjpeg) && !entry.hasProxy,
+    )
     if (missingProxyEntries.length === 0) {
       preload.reset()
       return false

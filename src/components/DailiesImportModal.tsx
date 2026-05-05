@@ -19,6 +19,7 @@ export const DailiesImportModal: React.FC = () => {
   } = useUiStore()
 
   const [isScanning, setIsScanning] = useState(false)
+  const [importLastVersionOnly, setImportLastVersionOnly] = useState(false)
   
   const [availableYears, setAvailableYears] = useState<string[]>([])
   const [availableProjects, setAvailableProjects] = useState<string[]>([])
@@ -71,6 +72,7 @@ export const DailiesImportModal: React.FC = () => {
         project: dailiesProject,
         scene: dailiesScene,
         priorities: dailiesPriorities,
+        lastVersionOnly: importLastVersionOnly,
       })
 
       if (paths.length === 0) {
@@ -280,7 +282,19 @@ export const DailiesImportModal: React.FC = () => {
             </div>
           ))}
           <p className="text-[11px] text-themeText-400 mt-2 leading-tight">
-            Скрипт зайдёт в папку каждой сцены, отфильтрует файлы по этим совпадениям (от 1 до 5) и возьмёт новейшую версию из самого высокого найденного приоритета.
+            Скрипт зайдёт в папку каждой сцены и отфильтрует файлы по этим совпадениям (от 1 до 5). По умолчанию импортируются все версии из самого высокого найденного приоритета.
+          </p>
+          <label className="mt-2 inline-flex items-center gap-2 text-xs text-themeText-200 select-none">
+            <input
+              type="checkbox"
+              checked={importLastVersionOnly}
+              onChange={(e) => setImportLastVersionOnly(e.target.checked)}
+              className="h-4 w-4 rounded border-[var(--menu-border)] bg-[var(--app-bg)] accent-indigo-500"
+            />
+            Import last version only
+          </label>
+          <p className="text-[11px] text-themeText-400 leading-tight">
+            Когда включено, импортируется только последняя версия из этого приоритета.
           </p>
         </section>
 

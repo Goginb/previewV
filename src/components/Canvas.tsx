@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useCanvasStore } from '../store/canvasStore'
-import { useCanvasPanZoom, spacePanActiveRef } from '../hooks/useCanvasPanZoom'
+import { useCanvasPanZoom, marqueeSelectActiveRef, spacePanActiveRef } from '../hooks/useCanvasPanZoom'
 import { useClampedMenuPosition } from '../hooks/useClampedMenuPosition'
 import { useVideoPlaybackManager } from '../hooks/useVideoPlaybackManager'
 import { VideoTile } from './VideoTile'
@@ -16,12 +16,32 @@ import { imageExportRegistry } from '../utils/imageExportRegistry'
 import { flushImageAnnotations } from '../utils/flushImageAnnotations'
 import { importImageFile, isRasterImportFile } from '../utils/imageImport'
 import { isTypingTarget } from '../utils/keyboard'
-import { getNoteCreationMetrics, getNoteCreationMetricsForText } from '../utils/noteCreation'
+import {
+  getNoteCreationMetrics,
+  getNoteCreationMetricsForText,
+  getNoteFontPx,
+  MAX_NOTE_FONT_PX,
+  MIN_NOTE_FONT_PX,
+  NOTE_FONT_SIZE_OPTIONS,
+} from '../utils/noteCreation'
+import {
+  DEFAULT_NOTE_COLOR,
+  DEFAULT_NOTE_FONT_FAMILY,
+  NOTE_FONT_FAMILY_OPTIONS,
+} from '../utils/noteStyle'
+import {
+  DEFAULT_SELECTION_VIDEO_UI_COLOR,
+  buildColorUpdatesForIds,
+  getContextColorableIds,
+  getSelectedColorableIds,
+  resolveSharedColorForIds,
+} from '../utils/selectionColors'
 import { defaultVideoTileSizeForNew, imageTileViewSize } from '../utils/tileSizing'
 import { getVideoPlaybackSuspended, setVideoPlaybackSuspended } from '../utils/videoGlobalPlayback'
 import { setVideoUserPausedByUser } from '../utils/videoUserPausedRegistry'
 import { setManualPlaybackAllowedInSuspended } from '../utils/videoSuspendedManualAllowRegistry'
 import { requestVideoWarmupEarly } from '../utils/warmupCanvasMedia'
+import { resolveFarZoomMode } from '../utils/navigationMode'
 import { shouldGenerateProxiesForImport } from '../utils/proresImportPrompt'
 import { BACKDROP_COLOR_PRESETS, BackdropTile, createBackdropItem } from './BackdropTile'
 import {
@@ -31,7 +51,7 @@ import {
   itemFullyInsideRect,
   sortBackdropsForRender,
 } from '../utils/backdrops'
-import type { CanvasItem, ImageItem, NoteItem, VideoItem } from '../types'
+import type { CanvasItem, ImageItem, NoteFontFamily, NoteItem, VideoItem } from '../types'
 import { useUiStore } from '../store/uiStore'
 import logoGreenFx from '../assets/logo-greenfx.png'
 
@@ -55,7 +75,8 @@ function fileToUrl(file: File): string {
   const nativePath = (file as File & { path?: string }).path
   if (nativePath) {
     const normalized = nativePath.replace(/\\/g, '/').replace(/^\//, '')
-    return `media:///${normalized}`
+    const encoded = normalized.split('/').map((part) => encodeURIComponent(part)).join('/')
+    return `media:///${encoded}`
   }
   return URL.createObjectURL(file)
 }
@@ -93,7 +114,7 @@ async function resolveDroppedVideoUrl(
 }
 
 const VIDEO_TILE_DEFAULT = defaultVideoTileSizeForNew()
-const DEFAULT_VIDEO_UI_COLOR = '#6366f1'
+const DEFAULT_VIDEO_UI_COLOR = DEFAULT_SELECTION_VIDEO_UI_COLOR
 
 const MARQUEE_CLICK_THRESHOLD = 4
 
@@ -199,6 +220,7 @@ export const Canvas: React.FC = () => {
   const frameAllItemsInViewport = useCanvasStore((s) => s.frameAllItemsInViewport)
   const imageEditModeId = useCanvasStore((s) => s.imageEditModeId)
   const setImageEditModeId = useCanvasStore((s) => s.setImageEditModeId)
+  const showBackgroundGrid = useUiStore((s) => s.showBackgroundGrid)
   const gridSizeX = useUiStore((s) => s.gridSizeX)
   const gridSizeY = useUiStore((s) => s.gridSizeY)
   const theme = useUiStore((s) => s.theme)
@@ -210,7 +232,12 @@ export const Canvas: React.FC = () => {
   const lastCommandContextRef = useRef<'text' | 'canvas'>('canvas')
   const internalClipboardSystemSignatureRef = useRef<string | null>(null)
   const lastObservedSystemClipboardSignatureRef = useRef<string | null>(null)
-  const [ctxMenu, setCtxMenu] = useState<null | { x: number; y: number; kind: 'canvas' | 'video' | 'image'; itemId?: string }>(null)
+  const [ctxMenu, setCtxMenu] = useState<null | {
+    x: number
+    y: number
+    kind: 'canvas' | 'video' | 'image' | 'note'
+    itemId?: string
+  }>(null)
   const { menuRef: canvasMenuRef, menuPosition: canvasMenuPosition } = useClampedMenuPosition(
     ctxMenu ? { x: ctxMenu.x, y: ctxMenu.y } : null,
   )
@@ -220,6 +247,7 @@ export const Canvas: React.FC = () => {
   const videoSearchInputRef = useRef<HTMLInputElement>(null)
   const [sourcePathModalOpen, setSourcePathModalOpen] = useState(false)
   const sourcePathInputRef = useRef<HTMLInputElement>(null)
+  const [isFarZoomMode, setIsFarZoomMode] = useState(() => resolveFarZoomMode(false, viewport.scale))
 
   const readSystemClipboardText = useCallback(
     () => window.electronAPI?.projectAPI.readClipboardText?.() ?? '',
@@ -338,7 +366,11 @@ export const Canvas: React.FC = () => {
       const trimmedText = text.trim()
       if (!trimmedText) return null
       const { x: vx, y: vy, scale } = state.viewport
-      const noteMetrics = getNoteCreationMetricsForText(scale, trimmedText)
+      const noteMetrics = getNoteCreationMetricsForText(
+        scale,
+        trimmedText,
+        DEFAULT_NOTE_FONT_FAMILY,
+      )
       const note: NoteItem = {
         type: 'note',
         id: `note-${Date.now()}`,
@@ -347,6 +379,9 @@ export const Canvas: React.FC = () => {
         width: noteMetrics.width,
         height: noteMetrics.height,
         fontSize: noteMetrics.fontSize,
+        fontSizeTier: noteMetrics.fontSizeTier,
+        color: DEFAULT_NOTE_COLOR,
+        fontFamily: DEFAULT_NOTE_FONT_FAMILY,
         text: trimmedText,
       }
       addItem(note)
@@ -566,7 +601,7 @@ export const Canvas: React.FC = () => {
 
   useCanvasPanZoom(containerRef)
   useVideoPlaybackManager(containerRef)
-  const selectedIdSet = new Set(selectedIds)
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds])
   const hiddenItemIds = useMemo(() => {
     const set = new Set<string>()
     for (const it of items) {
@@ -587,6 +622,63 @@ export const Canvas: React.FC = () => {
     )
     return [...nonBackdrops, ...backdrops]
   }, [items])
+  const renderedItemNodes = useMemo(
+    () =>
+      renderItems.map((item: CanvasItem) => {
+        const sel = selectedIdSet.has(item.id)
+        if (item.type === 'video') {
+          return (
+            <VideoTile
+              key={item.id}
+              tile={item}
+              scale={viewport.scale}
+              isSelected={sel}
+              isHidden={hiddenItemIds.has(item.id)}
+              isFarZoomMode={isFarZoomMode}
+            />
+          )
+        }
+        if (item.type === 'note') {
+          return (
+            <NoteTile
+              key={item.id}
+              note={item}
+              scale={viewport.scale}
+              isSelected={sel}
+              isHidden={hiddenItemIds.has(item.id)}
+              isFarZoomMode={isFarZoomMode}
+            />
+          )
+        }
+        if (item.type === 'image') {
+          return (
+            <ImageTile
+              key={item.id}
+              item={item}
+              scale={viewport.scale}
+              isSelected={sel}
+              isHidden={hiddenItemIds.has(item.id)}
+              isFarZoomMode={isFarZoomMode}
+            />
+          )
+        }
+        if (item.type === 'backdrop') {
+          return (
+            <BackdropTile
+              key={item.id}
+              backdrop={item}
+              scale={viewport.scale}
+              isSelected={sel}
+              isHidden={hiddenItemIds.has(item.id)}
+              nestingDepth={backdropDepthMap.get(item.id) ?? 0}
+              hiddenItemIds={hiddenItemIds}
+            />
+          )
+        }
+        return null
+      }),
+    [items, backdropDepthMap, hiddenItemIds, isFarZoomMode, renderItems, selectedIdSet, viewport.scale],
+  )
   const videoSearchItems = useMemo(
     () =>
       items
@@ -602,22 +694,64 @@ export const Canvas: React.FC = () => {
   }, [videoSearchItems, videoSearchQuery])
   const activeVideoSearchItem = filteredVideoSearchItems[videoSearchActiveIndex] ?? null
   const projectPathValue = currentProjectPath ?? ''
-  const ctxVideoItem =
-    ctxMenu?.kind === 'video' && ctxMenu.itemId
-      ? items.find((item): item is VideoItem => item.type === 'video' && item.id === ctxMenu.itemId) ?? null
+  const ctxNoteItem =
+    ctxMenu?.kind === 'note' && ctxMenu.itemId
+      ? items.find((item): item is NoteItem => item.type === 'note' && item.id === ctxMenu.itemId) ?? null
       : null
+  const selectedColorableIds = useMemo(
+    () => getSelectedColorableIds(items, selectedIds),
+    [items, selectedIds],
+  )
+  const ctxMenuColorTargetIds = useMemo(() => {
+    if (!ctxMenu) return []
+    if (ctxMenu.kind === 'canvas') return selectedColorableIds
+    return getContextColorableIds(items, selectedIds, ctxMenu.itemId)
+  }, [ctxMenu, items, selectedColorableIds, selectedIds])
+  const ctxMenuSharedColor = useMemo(
+    () =>
+      resolveSharedColorForIds(items, ctxMenuColorTargetIds, {
+        videoUiColor: DEFAULT_VIDEO_UI_COLOR,
+        noteColor: DEFAULT_NOTE_COLOR,
+      }),
+    [ctxMenuColorTargetIds, items],
+  )
 
-  const applyVideoUiColor = useCallback((targetId: string, color: string) => {
+  const applyContextMenuColor = useCallback((color: string) => {
+    if (ctxMenuColorTargetIds.length === 0) return
+    const updates = buildColorUpdatesForIds(items, ctxMenuColorTargetIds, color)
+    if (!updates.length) return
+    updateItemsBatch(updates, { recordHistory: true })
+  }, [ctxMenuColorTargetIds, items, updateItemsBatch])
+
+  const applyNoteFontFamily = useCallback((targetId: string, fontFamily: NoteFontFamily) => {
     const state = useCanvasStore.getState()
-    const selectedVideoIds = state.selectedIds.filter((id) =>
-      state.items.some((item) => item.id === id && item.type === 'video'),
+    const selectedNoteIds = state.selectedIds.filter((id) =>
+      state.items.some((item) => item.id === id && item.type === 'note'),
     )
     const ids =
-      selectedVideoIds.length > 0 && selectedVideoIds.includes(targetId)
-        ? selectedVideoIds
+      selectedNoteIds.length > 0 && selectedNoteIds.includes(targetId)
+        ? selectedNoteIds
         : [targetId]
     updateItemsBatch(
-      ids.map((id) => ({ id, updates: { uiColor: color } })),
+      ids.map((id) => ({ id, updates: { fontFamily } })),
+      { recordHistory: true },
+    )
+  }, [updateItemsBatch])
+
+  const applyNoteFontSize = useCallback((targetId: string, fontSize: number) => {
+    const state = useCanvasStore.getState()
+    const selectedNoteIds = state.selectedIds.filter((id) =>
+      state.items.some((item) => item.id === id && item.type === 'note'),
+    )
+    const ids =
+      selectedNoteIds.length > 0 && selectedNoteIds.includes(targetId)
+        ? selectedNoteIds
+        : [targetId]
+    updateItemsBatch(
+      ids.map((id) => ({
+        id,
+        updates: { fontSize, fontSizeTier: undefined },
+      })),
       { recordHistory: true },
     )
   }, [updateItemsBatch])
@@ -636,6 +770,9 @@ export const Canvas: React.FC = () => {
       width: noteMetrics.width,
       height: noteMetrics.height,
       fontSize: noteMetrics.fontSize,
+      fontSizeTier: noteMetrics.fontSizeTier,
+      color: DEFAULT_NOTE_COLOR,
+      fontFamily: DEFAULT_NOTE_FONT_FAMILY,
       text: '',
     }
     addItem(note)
@@ -751,6 +888,10 @@ export const Canvas: React.FC = () => {
       alert(`Failed to copy project path: ${getClipboardErrorMessage(error)}`)
     }
   }, [getClipboardErrorMessage, projectPathValue, writeSystemClipboardText])
+
+  useEffect(() => {
+    setIsFarZoomMode((currentMode) => resolveFarZoomMode(currentMode, viewport.scale))
+  }, [viewport.scale])
 
   useEffect(() => {
     if (!videoSearchOpen) return
@@ -877,10 +1018,12 @@ export const Canvas: React.FC = () => {
       const d = marqueeDrag.current
       if (!d?.active || !containerRef.current) {
         marqueeDrag.current = null
+        marqueeSelectActiveRef.current = false
         setMarquee(null)
         return
       }
       marqueeDrag.current = null
+      marqueeSelectActiveRef.current = false
       const rect = containerRef.current.getBoundingClientRect()
       const bx = e.clientX - rect.left
       const by = e.clientY - rect.top
@@ -1007,21 +1150,71 @@ export const Canvas: React.FC = () => {
         return
       }
 
+      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyB' && !e.shiftKey && !e.altKey && !isTypingTarget(e)) {
+        e.preventDefault()
+        const projectAPI = (window as any).electronAPI?.projectAPI
+        if (!projectAPI?.openProxiesFolder) return
+        const state = useCanvasStore.getState()
+        void projectAPI
+          .openProxiesFolder(state.currentProjectPath ?? null)
+          .then((ok: boolean) => {
+            if (!ok) alert('Не удалось открыть папку с прокси.')
+          })
+          .catch(() => {
+            alert('Не удалось открыть папку с прокси.')
+          })
+        return
+      }
+
       if (e.code === 'Space' && !isTypingTarget(e)) {
         const state = useCanvasStore.getState()
+        const allVideoIds = state.items
+          .filter((it): it is VideoItem => it.type === 'video')
+          .map((it) => it.id)
+        if (allVideoIds.length === 0) return
+        e.preventDefault()
+
         const selectedVideoIds = state.selectedIds.filter((id) =>
           state.items.some((it) => it.id === id && it.type === 'video'),
         )
-        if (selectedVideoIds.length === 0) return
-        e.preventDefault()
 
+        // No selected videos -> global Play all / Stop all.
+        if (selectedVideoIds.length === 0) {
+          const mountedVideos = Array.from(videoRegistry.entries())
+          const hasPlayingNow = mountedVideos.some(([, video]) => !video.paused)
+          const suspended = getVideoPlaybackSuspended()
+
+          if (hasPlayingNow || !suspended) {
+            // Stop all: global suspend + force-pause mounted players.
+            setVideoPlaybackSuspended(true)
+            for (const [id, video] of mountedVideos) {
+              setManualPlaybackAllowedInSuspended(id, false)
+              setVideoUserPausedByUser(id, true)
+              try {
+                video.pause()
+              } catch {
+                // ignore
+              }
+            }
+            return
+          }
+
+          // Play all: leave cap/visibility logic to playback manager.
+          setVideoPlaybackSuspended(false)
+          for (const id of allVideoIds) {
+            setVideoUserPausedByUser(id, false)
+            setManualPlaybackAllowedInSuspended(id, false)
+          }
+          return
+        }
+
+        // Selected videos only: toggle selected subset.
         const selectedVideos = selectedVideoIds
           .map((id) => ({ id, video: videoRegistry.get(id) }))
           .filter((entry): entry is { id: string; video: HTMLVideoElement } => !!entry.video)
-        if (selectedVideos.length === 0) return
+        const selectedAnyPlaying = selectedVideos.some(({ video }) => !video.paused)
 
-        const shouldPause = selectedVideos.some(({ video }) => !video.paused)
-        if (shouldPause) {
+        if (selectedAnyPlaying) {
           for (const { id, video } of selectedVideos) {
             setManualPlaybackAllowedInSuspended(id, false)
             setVideoUserPausedByUser(id, true)
@@ -1031,24 +1224,20 @@ export const Canvas: React.FC = () => {
               // ignore
             }
           }
-        } else {
-          const suspended = getVideoPlaybackSuspended()
-          for (const { id, video } of selectedVideos) {
-            setVideoUserPausedByUser(id, false)
-            if (suspended) {
-              setManualPlaybackAllowedInSuspended(id, true)
-            }
-            try {
-              void video.play().catch(() => {})
-            } catch {
-              // ignore
-            }
-          }
+          return
+        }
+
+        // Play selected (with same viewport cap handled by playback manager).
+        const suspended = getVideoPlaybackSuspended()
+        if (suspended) setVideoPlaybackSuspended(false)
+        for (const id of selectedVideoIds) {
+          setVideoUserPausedByUser(id, false)
+          setManualPlaybackAllowedInSuspended(id, false)
         }
         return
       }
 
-      if (e.code === 'Delete' && !isTypingTarget(e)) {
+      if ((e.code === 'Delete' || e.code === 'Backspace') && !isTypingTarget(e)) {
         const ids = useCanvasStore.getState().selectedIds
         if (ids.length) removeItems(ids)
         return
@@ -1259,6 +1448,9 @@ export const Canvas: React.FC = () => {
           width:  noteMetrics.width,
           height: noteMetrics.height,
           fontSize: noteMetrics.fontSize,
+          fontSizeTier: noteMetrics.fontSizeTier,
+          color: DEFAULT_NOTE_COLOR,
+          fontFamily: DEFAULT_NOTE_FONT_FAMILY,
         }
         addItem(note)
         selectOne(note.id)
@@ -1369,27 +1561,35 @@ export const Canvas: React.FC = () => {
       if (t.closest?.('[data-backdrop-ctx-menu="true"]')) return
       const videoRoot = t.closest?.('[data-video-tile-root="true"]') as HTMLElement | null
       const imageRoot = t.closest?.('[data-image-tile-root="true"]') as HTMLElement | null
+      const noteRoot = t.closest?.('[data-note-tile-root="true"]') as HTMLElement | null
       const isBg = t.getAttribute('data-canvas-bg') === 'true'
-      if (!videoRoot && !imageRoot && !isBg) return
+      if (!videoRoot && !imageRoot && !noteRoot && !isBg) return
+      if (noteRoot && isTypingTarget(t)) return
       e.preventDefault()
       e.stopPropagation()
       if (videoRoot) {
         const id = videoRoot.getAttribute('data-item-id') ?? undefined
-        if (id) selectOne(id)
+        if (id && !selectedIds.includes(id)) selectOne(id)
         setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'video', itemId: id })
         return
       }
       if (imageRoot) {
         const id = imageRoot.getAttribute('data-item-id') ?? undefined
-        if (id) selectOne(id)
+        if (id && !selectedIds.includes(id)) selectOne(id)
         setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'image', itemId: id })
+        return
+      }
+      if (noteRoot) {
+        const id = noteRoot.getAttribute('data-item-id') ?? undefined
+        if (id && !selectedIds.includes(id)) selectOne(id)
+        setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'note', itemId: id })
         return
       }
       setCtxMenu({ x: e.clientX, y: e.clientY, kind: 'canvas' })
     }
     window.addEventListener('contextmenu', onContextMenu, true)
     return () => window.removeEventListener('contextmenu', onContextMenu, true)
-  }, [selectOne])
+  }, [selectOne, selectedIds])
 
   const contentBounds = useMemo(() => {
     if (!items.length) return null
@@ -1579,6 +1779,7 @@ export const Canvas: React.FC = () => {
         ay,
         additive: e.ctrlKey || e.metaKey,
       }
+      marqueeSelectActiveRef.current = true
       setMarquee({ ax, ay, bx: ax, by: ay })
     },
     [clearSelection],
@@ -1597,30 +1798,32 @@ export const Canvas: React.FC = () => {
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
-      <div
-        data-canvas-bg="true"
-        className="absolute inset-0 pointer-events-none"
-        style={{
-          backgroundImage: [
-            'linear-gradient(to right, var(--grid-major-color) 1px, transparent 1px)',
-            'linear-gradient(to bottom, var(--grid-major-color) 1px, transparent 1px)',
-            'linear-gradient(to right, var(--grid-minor-color) 1px, transparent 1px)',
-            'linear-gradient(to bottom, var(--grid-minor-color) 1px, transparent 1px)',
-          ].join(','),
-          backgroundSize: [
-            `${gridSizeX * 5 * viewport.scale}px ${gridSizeY * 5 * viewport.scale}px`,
-            `${gridSizeX * 5 * viewport.scale}px ${gridSizeY * 5 * viewport.scale}px`,
-            `${gridSizeX * viewport.scale}px ${gridSizeY * viewport.scale}px`,
-            `${gridSizeX * viewport.scale}px ${gridSizeY * viewport.scale}px`,
-          ].join(','),
-          backgroundPosition: [
-            `${viewport.x}px ${viewport.y}px`,
-            `${viewport.x}px ${viewport.y}px`,
-            `${viewport.x}px ${viewport.y}px`,
-            `${viewport.x}px ${viewport.y}px`,
-          ].join(','),
-        }}
-      />
+      {showBackgroundGrid && (
+        <div
+          data-canvas-bg="true"
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            backgroundImage: [
+              'linear-gradient(to right, var(--grid-major-color) 1px, transparent 1px)',
+              'linear-gradient(to bottom, var(--grid-major-color) 1px, transparent 1px)',
+              'linear-gradient(to right, var(--grid-minor-color) 1px, transparent 1px)',
+              'linear-gradient(to bottom, var(--grid-minor-color) 1px, transparent 1px)',
+            ].join(','),
+            backgroundSize: [
+              `${gridSizeX * 5 * viewport.scale}px ${gridSizeY * 5 * viewport.scale}px`,
+              `${gridSizeX * 5 * viewport.scale}px ${gridSizeY * 5 * viewport.scale}px`,
+              `${gridSizeX * viewport.scale}px ${gridSizeY * viewport.scale}px`,
+              `${gridSizeX * viewport.scale}px ${gridSizeY * viewport.scale}px`,
+            ].join(','),
+            backgroundPosition: [
+              `${viewport.x}px ${viewport.y}px`,
+              `${viewport.x}px ${viewport.y}px`,
+              `${viewport.x}px ${viewport.y}px`,
+              `${viewport.x}px ${viewport.y}px`,
+            ].join(','),
+          }}
+        />
+      )}
 
       {/* GreenFx theme watermark logo */}
       {theme === 'greenFx' && (
@@ -1682,56 +1885,7 @@ export const Canvas: React.FC = () => {
           />
         )}
         {/* Tiles first, backdrops last so backdrop headers stack above videos/images/notes (z-index + paint order). */}
-        {renderItems.map((item: CanvasItem) => {
-          const sel = selectedIdSet.has(item.id)
-          if (item.type === 'video') {
-            return (
-              <VideoTile
-                key={item.id}
-                tile={item}
-                scale={viewport.scale}
-                isSelected={sel}
-                isHidden={hiddenItemIds.has(item.id)}
-              />
-            )
-          }
-          if (item.type === 'note') {
-            return (
-              <NoteTile 
-                key={item.id} 
-                note={item} 
-                scale={viewport.scale} 
-                isSelected={sel} 
-                isHidden={hiddenItemIds.has(item.id)}
-              />
-            )
-          }
-          if (item.type === 'image') {
-            return (
-              <ImageTile 
-                key={item.id} 
-                item={item} 
-                scale={viewport.scale} 
-                isSelected={sel} 
-                isHidden={hiddenItemIds.has(item.id)}
-              />
-            )
-          }
-          if (item.type === 'backdrop') {
-            return (
-              <BackdropTile
-                key={item.id}
-                backdrop={item}
-                scale={viewport.scale}
-                isSelected={sel}
-                isHidden={hiddenItemIds.has(item.id)}
-                nestingDepth={backdropDepthMap.get(item.id) ?? 0}
-                hiddenItemIds={hiddenItemIds}
-              />
-            )
-          }
-          return null
-        })}
+        {renderedItemNodes}
       </div>
 
       {items.length === 0 && (
@@ -1743,7 +1897,7 @@ export const Canvas: React.FC = () => {
               Видео: MP4, WebM, MOV… · Изображения: JPEG, PNG, TIFF, EXR, DPX…
             </p>
             <p className="text-xs mt-3 opacity-40">
-              Ctrl+A · A · Ctrl+O · L · B · \ · N / F3 · F4
+              Ctrl+A · A · Ctrl+O · Ctrl+B · L · B · \ · N / F3 · F4
             </p>
           </div>
         </div>
@@ -1946,12 +2100,18 @@ export const Canvas: React.FC = () => {
             onMouseDown={(e) => e.stopPropagation()}
           >
             <div className="px-2 py-1 text-[11px] font-semibold text-themeText-400 select-none uppercase tracking-wide">
-              {ctxMenu.kind === 'video' ? 'Video tile' : ctxMenu.kind === 'image' ? 'Image tile' : 'Canvas'}
+              {ctxMenu.kind === 'video'
+                ? 'Video tile'
+                : ctxMenu.kind === 'image'
+                  ? 'Image tile'
+                  : ctxMenu.kind === 'note'
+                    ? 'Note'
+                    : 'Canvas'}
             </div>
             <div className="h-px my-1 mx-1" style={{ background: 'var(--theme-divider)' }} />
 
             {/* --- SELECTION ACTIONS --- */}
-            {(ctxMenu.kind === 'video' || ctxMenu.kind === 'image') && ctxMenu.itemId && (
+            {(ctxMenu.kind === 'video' || ctxMenu.kind === 'image' || ctxMenu.kind === 'note') && ctxMenu.itemId && (
               <>
                 <button
                   type="button"
@@ -2016,30 +2176,40 @@ export const Canvas: React.FC = () => {
                     >
                       Capture frame (F3)
                     </button>
-                    <div className="px-2 pt-2 pb-1 text-[11px] text-themeText-400 select-none">Palette</div>
-                    <div className="px-2 pb-1 grid grid-cols-5 gap-1.5">
-                      {BACKDROP_COLOR_PRESETS.map((color) => {
-                        const isActive = (ctxVideoItem?.uiColor ?? DEFAULT_VIDEO_UI_COLOR).toLowerCase() === color.toLowerCase()
-                        return (
-                          <button
-                            key={color}
-                            type="button"
-                            className={[
-                              'h-7 w-7 rounded-md border transition-transform hover:scale-105',
-                              isActive ? 'ring-2 ring-zinc-100/70' : '',
-                            ].join(' ')}
-                            style={{
-                              background: color,
-                              borderColor: isActive ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.12)',
-                            }}
-                            title={color}
-                            onClick={() => {
-                              applyVideoUiColor(ctxMenu.itemId!, color)
-                              setCtxMenu(null)
-                            }}
-                          />
-                        )
-                      })}
+                  </>
+                ) : ctxMenu.kind === 'note' ? (
+                  <>
+                    <div className="px-2 pt-1 pb-1 text-[11px] text-themeText-400 select-none">Size</div>
+                    <div className="px-2 pb-1">
+                      <select
+                        className="w-full rounded border border-[var(--menu-border)] bg-[var(--app-bg)] px-2 py-1 text-sm text-themeText-100"
+                        value={
+                          ctxNoteItem
+                            ? Math.min(MAX_NOTE_FONT_PX, Math.max(MIN_NOTE_FONT_PX, getNoteFontPx(ctxNoteItem)))
+                            : getNoteFontPx({ fontSizeTier: 'm' })
+                        }
+                        onChange={(e) => applyNoteFontSize(ctxMenu.itemId!, Number(e.target.value))}
+                      >
+                        {NOTE_FONT_SIZE_OPTIONS.map((sizePx) => (
+                          <option key={sizePx} value={sizePx}>
+                            {sizePx} px
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="px-2 pt-1 pb-1 text-[11px] text-themeText-400 select-none">Font</div>
+                    <div className="px-2 pb-1">
+                      <select
+                        className="w-full rounded border border-[var(--menu-border)] bg-[var(--app-bg)] px-2 py-1 text-sm text-themeText-100"
+                        value={ctxNoteItem?.fontFamily ?? DEFAULT_NOTE_FONT_FAMILY}
+                        onChange={(e) => applyNoteFontFamily(ctxMenu.itemId!, e.target.value as NoteFontFamily)}
+                      >
+                        {NOTE_FONT_FAMILY_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                   </>
                 ) : (
@@ -2054,6 +2224,39 @@ export const Canvas: React.FC = () => {
                     Draw mode (F4)
                   </button>
                 )}
+                <div className="h-px my-1 mx-1" style={{ background: 'var(--theme-divider)' }} />
+              </>
+            )}
+
+            {ctxMenuColorTargetIds.length > 0 && (
+              <>
+                <div className="px-2 pt-2 pb-1 text-[11px] text-themeText-400 select-none">
+                  {ctxMenuColorTargetIds.length > 1 ? 'Selection palette' : 'Palette'}
+                </div>
+                <div className="px-2 pb-1 grid grid-cols-5 gap-1.5">
+                  {BACKDROP_COLOR_PRESETS.map((color) => {
+                    const isActive = ctxMenuSharedColor?.toLowerCase() === color.toLowerCase()
+                    return (
+                      <button
+                        key={color}
+                        type="button"
+                        className={[
+                          'h-7 w-7 rounded-md border transition-transform hover:scale-105',
+                          isActive ? 'ring-2 ring-zinc-100/70' : '',
+                        ].join(' ')}
+                        style={{
+                          background: color,
+                          borderColor: isActive ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.12)',
+                        }}
+                        title={color}
+                        onClick={() => {
+                          applyContextMenuColor(color)
+                          setCtxMenu(null)
+                        }}
+                      />
+                    )
+                  })}
+                </div>
                 <div className="h-px my-1 mx-1" style={{ background: 'var(--theme-divider)' }} />
               </>
             )}

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { Rnd } from 'react-rnd'
 import { MAX_SCALE, MIN_SCALE, useCanvasStore } from '../store/canvasStore'
 import { imageDrawUndoRegistry } from '../utils/imageDrawUndoRegistry'
@@ -38,9 +38,20 @@ interface ImageTileProps {
   scale: number
   isSelected: boolean
   isHidden?: boolean
+  isFarZoomMode?: boolean
 }
 
-export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected, isHidden }) => {
+function areImageTilePropsEqual(a: ImageTileProps, b: ImageTileProps): boolean {
+  return (
+    a.item === b.item &&
+    a.scale === b.scale &&
+    a.isSelected === b.isSelected &&
+    (a.isHidden ?? false) === (b.isHidden ?? false) &&
+    (a.isFarZoomMode ?? false) === (b.isFarZoomMode ?? false)
+  )
+}
+
+export const ImageTile = memo(function ImageTile({ item, scale, isSelected, isHidden, isFarZoomMode }: ImageTileProps) {
   const updateItem   = useCanvasStore((s) => s.updateItem)
   const updateItemsBatch = useCanvasStore((s) => s.updateItemsBatch)
   const selectOne    = useCanvasStore((s) => s.selectOne)
@@ -86,6 +97,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected, i
   const [tool,  setTool]  = useState<DrawTool>('pencil')
   const [color, setColor] = useState('#ef4444')
   const [size,  setSize]  = useState(5)
+  const showNavigationPreview = !!isFarZoomMode && !isEditing
 
   // Drawing refs — no state to avoid mid-stroke re-renders
   const drawing   = useRef(false)
@@ -175,6 +187,7 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected, i
   }, [item.id])
 
   const handleSelect = useCallback((e: React.MouseEvent<HTMLElement>) => {
+    if (e.button !== 0) return
     if (e.ctrlKey || e.metaKey) toggleSelect(item.id)
     else if (!(isSelected && selectedIds.length > 1)) selectOne(item.id)
   }, [isSelected, item.id, selectOne, selectedIds.length, toggleSelect])
@@ -706,27 +719,43 @@ export const ImageTile: React.FC<ImageTileProps> = ({ item, scale, isSelected, i
 
         {/* ── Image + drawing canvas ─────────────────────────────────── */}
         <div ref={areaRef} className="flex-1 relative overflow-hidden bg-black">
-          <img
-            ref={baseImgRef}
-            src={item.srcUrl}
-            onLoad={onBaseImageLoad}
-            className="absolute inset-0 w-full h-full object-contain select-none"
-            style={{ pointerEvents: isEditing ? 'none' : 'auto' }}
-            draggable={false}
-            alt=""
-          />
-          <canvas
-            ref={canvasRef}
-            className={['absolute inset-0 w-full h-full', !isEditing && 'pointer-events-none opacity-0'].filter(Boolean).join(' ')}
-            style={{ cursor: isEditing ? CURSOR[tool] : 'default' }}
-            onMouseDown={onDown}
-            onMouseMove={onMove}
-            onMouseUp={onUp}
-            onMouseLeave={onUp}
-          />
+          {showNavigationPreview ? (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-zinc-950 px-3 text-center select-none">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full border border-emerald-500/30 bg-emerald-500/10 text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-200">
+                IMG
+              </div>
+              <div className="max-w-full truncate text-[11px] font-medium text-zinc-100/88">
+                {item.fileName ?? (item.sourceVideoId ? 'Frame' : 'Image')}
+              </div>
+              <div className="text-[10px] tabular-nums text-zinc-400">
+                {Math.round(item.width)}x{Math.round(item.height)}
+              </div>
+            </div>
+          ) : (
+            <>
+              <img
+                ref={baseImgRef}
+                src={item.srcUrl}
+                onLoad={onBaseImageLoad}
+                className="absolute inset-0 w-full h-full object-contain select-none"
+                style={{ pointerEvents: isEditing ? 'none' : 'auto' }}
+                draggable={false}
+                alt=""
+              />
+              <canvas
+                ref={canvasRef}
+                className={['absolute inset-0 w-full h-full', !isEditing && 'pointer-events-none opacity-0'].filter(Boolean).join(' ')}
+                style={{ cursor: isEditing ? CURSOR[tool] : 'default' }}
+                onMouseDown={onDown}
+                onMouseMove={onMove}
+                onMouseUp={onUp}
+                onMouseLeave={onUp}
+              />
+            </>
+          )}
         </div>
 
       </div>
     </Rnd>
   )
-}
+}, areImageTilePropsEqual)

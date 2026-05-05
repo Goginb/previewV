@@ -20,6 +20,7 @@ import {
   finishProjectOpenProgress,
   updateProjectOpenProgress,
 } from './utils/warmupCanvasMedia'
+import { setVideoPlaybackSuspended } from './utils/videoGlobalPlayback'
 import type { ElectronProjectAPI } from './electron-api'
 import type { DeserializedProject } from './types/project'
 
@@ -152,6 +153,8 @@ const App: React.FC = () => {
         await waitForUiPaint()
         updateProjectOpenProgress(sessionId, 88, 'Preparing media...')
         await waitForUiPaint()
+        // Heavy projects should open in "Stop all" mode by default to avoid startup playback spikes.
+        setVideoPlaybackSuspended(true)
         loadProjectState(res.project, res.path)
         startProjectVideoHydration(res.project)
         completeProjectOpenProgress(sessionId)
@@ -476,13 +479,13 @@ const App: React.FC = () => {
             </h3>
             <p className="mt-2 text-sm text-themeText-300">
               {proxyPrompt.count > 1
-                ? `${proxyPrompt.count} imported videos use ProRes and may play back unreliably.`
-                : 'An imported video uses ProRes and may play back unreliably.'}
+                ? `${proxyPrompt.count} imported files are ProRes or MJPEG-in-MOV (e.g. Nuke proxies). Chromium often cannot play them and shows a black frame.`
+                : 'This file is ProRes or MJPEG-in-MOV. It may not play in the viewer without a lightweight proxy.'}
             </p>
             <p className="mt-2 text-sm text-themeText-300">
               {proxyPrompt.unsavedProject
                 ? 'The project is not saved yet, so generated proxies will be stored on the Desktop in `Prores_proxy_temp`.'
-                : 'Generate lightweight proxies now for more reliable playback?'}
+                : 'Proxies are saved next to your project file in `Prores_proxy_temp`. Generate them now?'}
             </p>
             <div className="mt-4 flex justify-end gap-2">
               <button

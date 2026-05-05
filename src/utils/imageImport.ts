@@ -63,16 +63,26 @@ export async function importImageFile(file: File): Promise<ImportedImagePayload>
   const nativePath = (file as File & { path?: string }).path
   const api = window.electronAPI?.projectAPI
 
-  if (nativePath && api?.resolveImageSource) {
-    return api.resolveImageSource(nativePath)
-  }
-
   if (needsFileSystemPath(name)) {
+    if (nativePath && api?.resolveImageSource) {
+      return api.resolveImageSource(nativePath)
+    }
     throw new Error('This format requires a local file path in the desktop app.')
   }
 
   if (!canDecodeWithImageElement(ext)) {
     throw new Error(`Unsupported format: ${ext || 'unknown'}`)
+  }
+
+  if (nativePath && api?.resolveImageSource) {
+    try {
+      const resolved = await api.resolveImageSource(nativePath)
+      // Guard against broken/blocked media:// links: if load fails, fall back to file blob below.
+      await decodeWithImageElement(resolved.srcUrl)
+      return resolved
+    } catch {
+      // Fall back to blob/data URL import for better resilience on drag-and-drop paths.
+    }
   }
 
   const raw = await new Promise<string>((resolve, reject) => {

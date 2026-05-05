@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Rnd } from 'react-rnd'
 import { useCanvasStore } from '../store/canvasStore'
 import { videoRegistry } from '../utils/videoRegistry'
@@ -17,6 +17,17 @@ interface VideoTileProps {
   scale: number
   isSelected: boolean
   isHidden?: boolean
+  isFarZoomMode?: boolean
+}
+
+function areVideoTilePropsEqual(a: VideoTileProps, b: VideoTileProps): boolean {
+  return (
+    a.tile === b.tile &&
+    a.scale === b.scale &&
+    a.isSelected === b.isSelected &&
+    (a.isHidden ?? false) === (b.isHidden ?? false) &&
+    (a.isFarZoomMode ?? false) === (b.isFarZoomMode ?? false)
+  )
 }
 
 function formatTime(sec: number): string {
@@ -70,7 +81,7 @@ function mixTowardWhite(hex: string, amount01: number): string {
   return `#${[nr, ng, nb].map((x) => x.toString(16).padStart(2, '0')).join('')}`
 }
 
-export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, isHidden }) => {
+export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHidden, isFarZoomMode }: VideoTileProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const trackRef = useRef<HTMLDivElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -578,13 +589,16 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
   const progressPct = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0
   const uiColor = tile.uiColor ?? DEFAULT_VIDEO_UI_COLOR
   const uiColorSoft = mixTowardWhite(uiColor, 0.18)
+  const showNavigationPreview = !!isFarZoomMode
   const rootBorder = isSelected ? uiColorSoft : hexToRgba(uiColor, 0.42)
   const rootShadow = isSelected
     ? `0 0 0 2px ${hexToRgba(uiColor, 0.45)}, 0 0 0 5px ${hexToRgba(uiColor, 0.28)}, 0 0 40px ${hexToRgba(uiColor, 0.38)}`
     : undefined
   const headerBackground = `linear-gradient(180deg, ${hexToRgba(uiColor, 0.28)}, rgba(20, 24, 36, 0.92))`
   const controlsBackground = `linear-gradient(180deg, rgba(10, 14, 24, 0.97), ${hexToRgba(uiColor, 0.20)})`
+  const previewBackground = `radial-gradient(circle at 50% 35%, ${hexToRgba(uiColor, 0.20)}, rgba(8, 10, 18, 0.96) 72%)`
   const handleSelect = useCallback((e: React.MouseEvent<HTMLElement>) => {
+    if (e.button !== 0) return
     if (e.ctrlKey || e.metaKey) toggleSelect(tile.id)
     else if (!(isSelected && selectedIds.length > 1)) selectOne(tile.id)
   }, [isSelected, selectOne, selectedIds.length, tile.id, toggleSelect])
@@ -768,10 +782,31 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
             bottom: CONTROLS_H,
           }}
         >
+          {showNavigationPreview && (
+            <div
+              className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-3 text-center select-none"
+              style={{ background: previewBackground }}
+            >
+              <div
+                className="flex h-10 w-10 items-center justify-center rounded-full border text-[10px] font-semibold uppercase tracking-[0.18em]"
+                style={{
+                  borderColor: hexToRgba(uiColorSoft, 0.34),
+                  background: hexToRgba(uiColor, 0.18),
+                  color: hexToRgba(uiColorSoft, 0.96),
+                }}
+              >
+                VID
+              </div>
+              <div className="max-w-full truncate text-[11px] font-medium" style={{ color: hexToRgba(uiColorSoft, 0.92) }}>
+                {tile.fileName}
+              </div>
+            </div>
+          )}
           <video
             ref={videoRef}
             src={activeSrcUrl}
             className="absolute inset-0 w-full h-full object-contain"
+            style={{ display: showNavigationPreview ? 'none' : undefined }}
             loop
             muted
             playsInline
@@ -779,9 +814,25 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
           />
         </div>
 
+        {showNavigationPreview && (
+          <div
+            className="absolute left-0 right-0 bottom-0 z-30 flex items-center justify-between px-3 text-[10px] select-none"
+            style={{
+              height: CONTROLS_H,
+              background: controlsBackground,
+              borderTop: `1px solid ${hexToRgba(uiColor, 0.30)}`,
+              color: hexToRgba(uiColorSoft, 0.88),
+            }}
+          >
+            <span className="truncate">Navigation preview</span>
+            <span className="shrink-0 tabular-nums">{Math.round(tile.width)}x{Math.round(tile.height)}</span>
+          </div>
+        )}
+
         <div
           className="video-controls absolute left-0 right-0 bottom-0 z-30 flex items-center gap-1.5 px-2 pointer-events-auto"
           style={{
+            display: showNavigationPreview ? 'none' : undefined,
             height: CONTROLS_H,
             background: controlsBackground,
             borderTop: `1px solid ${hexToRgba(uiColor, 0.30)}`,
@@ -887,4 +938,4 @@ export const VideoTile: React.FC<VideoTileProps> = ({ tile, scale, isSelected, i
       </div>
     </Rnd>
   )
-}
+}, areVideoTilePropsEqual)

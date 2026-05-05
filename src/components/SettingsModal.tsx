@@ -5,6 +5,8 @@ import { useUiStore, type AppTheme } from '../store/uiStore'
 export const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const theme = useUiStore((s) => s.theme)
   const setTheme = useUiStore((s) => s.setTheme)
+  const showBackgroundGrid = useUiStore((s) => s.showBackgroundGrid)
+  const setShowBackgroundGrid = useUiStore((s) => s.setShowBackgroundGrid)
   const gridSizeX = useUiStore((s) => s.gridSizeX)
   const gridSizeY = useUiStore((s) => s.gridSizeY)
   const setGridSize = useUiStore((s) => s.setGridSize)
@@ -58,6 +60,15 @@ export const SettingsModal: React.FC<{ onClose: () => void }> = ({ onClose }) =>
                 <option value="camouflage">Camouflage</option>
                 <option value="greenFx">Green Fx style</option>
               </select>
+            </label>
+
+            <label className="flex items-center gap-2 rounded border border-[var(--menu-border)] bg-[var(--app-bg)] px-3 py-2 text-sm text-themeText-300">
+              <input
+                type="checkbox"
+                checked={showBackgroundGrid}
+                onChange={(e) => setShowBackgroundGrid(e.target.checked)}
+              />
+              <span>Show background grid</span>
             </label>
 
             <label className="flex flex-col gap-1 text-sm text-themeText-300">

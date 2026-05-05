@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Rnd } from 'react-rnd'
 import { createPortal } from 'react-dom'
 import { useCanvasStore } from '../store/canvasStore'
@@ -9,6 +9,13 @@ import { useClampedMenuPosition } from '../hooks/useClampedMenuPosition'
 import { backdropDomRegistry } from '../utils/backdropDomRegistry'
 import { tileDomRegistry } from '../utils/tileDomRegistry'
 import { getNoteCreationMetrics } from '../utils/noteCreation'
+import { DEFAULT_NOTE_COLOR, DEFAULT_NOTE_FONT_FAMILY } from '../utils/noteStyle'
+import {
+  DEFAULT_SELECTION_VIDEO_UI_COLOR,
+  buildColorUpdatesForIds,
+  getContextColorableIds,
+  resolveSharedColorForIds,
+} from '../utils/selectionColors'
 import {
   backdropHeaderHeight,
   BACKDROP_BODY_Z,
@@ -166,9 +173,54 @@ interface BackdropTileProps {
   hiddenItemIds?: Set<string>
 }
 
-export const BackdropTile: React.FC<BackdropTileProps> = ({ backdrop, scale, isSelected, isHidden, nestingDepth = 0, hiddenItemIds }) => {
+function attachedIdsEqual(a: string[] | undefined, b: string[] | undefined): boolean {
+  if (a === b) return true
+  const la = a?.length ?? 0
+  const lb = b?.length ?? 0
+  if (la !== lb) return false
+  if (!a || !b) return true
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false
+  }
+  return true
+}
+
+/** Compare fields that affect rendering — not only `backdrop` reference (avoids stale color UI). */
+function areBackdropTilePropsEqual(a: BackdropTileProps, b: BackdropTileProps): boolean {
+  const A = a.backdrop
+  const B = b.backdrop
+  return (
+    A.id === B.id &&
+    A.x === B.x &&
+    A.y === B.y &&
+    A.width === B.width &&
+    A.height === B.height &&
+    A.color === B.color &&
+    (A.brightness ?? 40) === (B.brightness ?? 40) &&
+    (A.saturation ?? 100) === (B.saturation ?? 100) &&
+    A.label === B.label &&
+    (A.labelSize ?? 'md') === (B.labelSize ?? 'md') &&
+    A.collapsed === B.collapsed &&
+    A.expandedHeight === B.expandedHeight &&
+    A.displayMode === B.displayMode &&
+    attachedIdsEqual(A.attachedVideoIds, B.attachedVideoIds) &&
+    a.scale === b.scale &&
+    a.isSelected === b.isSelected &&
+    (a.isHidden ?? false) === (b.isHidden ?? false) &&
+    (a.nestingDepth ?? 0) === (b.nestingDepth ?? 0) &&
+    a.hiddenItemIds === b.hiddenItemIds
+  )
+}
+
+export const BackdropTile = memo(function BackdropTile({
+  backdrop,
+  scale,
+  isSelected,
+  isHidden,
+  nestingDepth = 0,
+  hiddenItemIds,
+}: BackdropTileProps) {
   const items = useCanvasStore((s) => s.items)
-  const viewport = useCanvasStore((s) => s.viewport)
   const addItem = useCanvasStore((s) => s.addItem)
   const updateItem = useCanvasStore((s) => s.updateItem)
   const updateItemsBatch = useCanvasStore((s) => s.updateItemsBatch)
@@ -184,6 +236,28 @@ export const BackdropTile: React.FC<BackdropTileProps> = ({ backdrop, scale, isS
   const setAlwaysOnTop = useUiStore((s) => s.setAlwaysOnTop)
 
   const backdrops = useMemo(() => items.filter((item): item is BackdropItem => item.type === 'backdrop'), [items])
+  const selectionColorTargetIds = useMemo(
+    () => getContextColorableIds(items, selectedIds, backdrop.id),
+    [backdrop.id, items, selectedIds],
+  )
+  const selectionSharedColor = useMemo(
+    () =>
+      resolveSharedColorForIds(items, selectionColorTargetIds, {
+        videoUiColor: DEFAULT_SELECTION_VIDEO_UI_COLOR,
+        noteColor: DEFAULT_NOTE_COLOR,
+      }),
+    [items, selectionColorTargetIds],
+  )
+  const applySelectionColor = useCallback((color: string) => {
+    const updates = buildColorUpdatesForIds(items, selectionColorTargetIds, color)
+    if (!updates.length) return
+    updateItemsBatch(updates, { recordHistory: true })
+  }, [items, selectionColorTargetIds, updateItemsBatch])
+  const previewSelectionColor = useCallback((color: string) => {
+    const updates = buildColorUpdatesForIds(items, selectionColorTargetIds, color)
+    if (!updates.length) return
+    updateItemsBatch(updates)
+  }, [items, selectionColorTargetIds, updateItemsBatch])
 
   const [ctxMenu, setCtxMenu] = useState<null | { x: number; y: number }>(null)
   const { menuRef: backdropMenuRef, menuPosition: backdropMenuPosition } = useClampedMenuPosition(
@@ -221,8 +295,9 @@ export const BackdropTile: React.FC<BackdropTileProps> = ({ backdrop, scale, isS
       if (e.defaultPrevented) return
       const target = e.target as HTMLElement | null
       if (target?.closest?.('[data-backdrop-ctx-menu="true"]')) return
-      const worldX = (e.clientX - viewport.x) / viewport.scale
-      const worldY = (e.clientY - viewport.y) / viewport.scale
+      const { x: vx, y: vy, scale: vpScale } = useCanvasStore.getState().viewport
+      const worldX = (e.clientX - vx) / vpScale
+      const worldY = (e.clientY - vy) / vpScale
       const hitBackdrop = findBackdropAtPoint(
         backdrops.filter((item) => !hiddenItemIds?.has(item.id)),
         worldX,
@@ -236,7 +311,7 @@ export const BackdropTile: React.FC<BackdropTileProps> = ({ backdrop, scale, isS
     }
     window.addEventListener('contextmenu', onContextMenu, true)
     return () => window.removeEventListener('contextmenu', onContextMenu, true)
-  }, [backdrop.id, viewport.x, viewport.y, viewport.scale, isSelected, selectOne, backdrops, isHidden, hiddenItemIds])
+  }, [backdrop.id, isSelected, selectOne, backdrops, isHidden, hiddenItemIds])
 
   useEffect(() => {
     if (isHidden) return
@@ -259,26 +334,31 @@ export const BackdropTile: React.FC<BackdropTileProps> = ({ backdrop, scale, isS
 
   const runCommonMenuNewNote = useCallback(() => {
     if (!ctxMenu) return
-    const noteMetrics = getNoteCreationMetrics(viewport.scale)
+    const { x: vx, y: vy, scale: vpScale } = useCanvasStore.getState().viewport
+    const noteMetrics = getNoteCreationMetrics(vpScale)
     const note: NoteItem = {
       type: 'note',
       id: `note-${Date.now()}`,
-      x: (ctxMenu.x - viewport.x) / viewport.scale - noteMetrics.width / 2,
-      y: (ctxMenu.y - viewport.y) / viewport.scale - noteMetrics.height / 2,
+      x: (ctxMenu.x - vx) / vpScale - noteMetrics.width / 2,
+      y: (ctxMenu.y - vy) / vpScale - noteMetrics.height / 2,
       width: noteMetrics.width,
       height: noteMetrics.height,
       fontSize: noteMetrics.fontSize,
+      fontSizeTier: noteMetrics.fontSizeTier,
+      color: DEFAULT_NOTE_COLOR,
+      fontFamily: DEFAULT_NOTE_FONT_FAMILY,
       text: '',
     }
     addItem(note)
     selectOne(note.id)
     setCtxMenu(null)
-  }, [addItem, ctxMenu, selectOne, viewport.scale, viewport.x, viewport.y])
+  }, [addItem, ctxMenu, selectOne])
 
   const runCommonMenuAddBackdrop = useCallback(() => {
     if (!ctxMenu) return
-    const worldX = (ctxMenu.x - viewport.x) / viewport.scale
-    const worldY = (ctxMenu.y - viewport.y) / viewport.scale
+    const { x: vx, y: vy, scale: vpScale } = useCanvasStore.getState().viewport
+    const worldX = (ctxMenu.x - vx) / vpScale
+    const worldY = (ctxMenu.y - vy) / vpScale
     const nextBackdrop = createBackdropItem({
       id: `backdrop-${Date.now()}`,
       x: worldX - 400,
@@ -289,13 +369,14 @@ export const BackdropTile: React.FC<BackdropTileProps> = ({ backdrop, scale, isS
     addItem(nextBackdrop)
     selectOne(nextBackdrop.id)
     setCtxMenu(null)
-  }, [addItem, ctxMenu, selectOne, viewport.scale, viewport.x, viewport.y])
+  }, [addItem, ctxMenu, selectOne])
 
   const runCommonMenuPaste = useCallback(() => {
     if (!ctxMenu) return
-    pasteClipboard((ctxMenu.x - viewport.x) / viewport.scale, (ctxMenu.y - viewport.y) / viewport.scale)
+    const { x: vx, y: vy, scale: vpScale } = useCanvasStore.getState().viewport
+    pasteClipboard((ctxMenu.x - vx) / vpScale, (ctxMenu.y - vy) / vpScale)
     setCtxMenu(null)
-  }, [ctxMenu, pasteClipboard, viewport.scale, viewport.x, viewport.y])
+  }, [ctxMenu, pasteClipboard])
 
   const runCommonMenuGridAlign = useCallback(() => {
     gridAlignTiles()
@@ -374,8 +455,6 @@ export const BackdropTile: React.FC<BackdropTileProps> = ({ backdrop, scale, isS
   const resizeRafRef = useRef<number>(0)
   const pendingResizeRef = useRef<null | { x: number; y: number; width: number; height: number }>(null)
   const resizeActiveRef = useRef(false)
-  const dragPositionRafRef = useRef<number>(0)
-  const pendingDragPositionRef = useRef<null | { x: number; y: number }>(null)
 
   const scheduleResizeUpdate = useCallback(
     (next: { x: number; y: number; width: number; height: number }) => {
@@ -396,24 +475,6 @@ export const BackdropTile: React.FC<BackdropTileProps> = ({ backdrop, scale, isS
           ],
           { markDirty: false, recordHistory: false },
         )
-      })
-    },
-    [backdrop.id, updateItemsBatch],
-  )
-
-  const scheduleDragPositionUpdate = useCallback(
-    (next: { x: number; y: number }) => {
-      pendingDragPositionRef.current = next
-      if (dragPositionRafRef.current) return
-      dragPositionRafRef.current = requestAnimationFrame(() => {
-        dragPositionRafRef.current = 0
-        const p = pendingDragPositionRef.current
-        pendingDragPositionRef.current = null
-        if (!p) return
-        updateItemsBatch([{ id: backdrop.id, updates: { x: p.x, y: p.y } }], {
-          markDirty: false,
-          recordHistory: false,
-        })
       })
     },
     [backdrop.id, updateItemsBatch],
@@ -456,10 +517,10 @@ export const BackdropTile: React.FC<BackdropTileProps> = ({ backdrop, scale, isS
     const liveTargetsSet = new Set<HTMLElement>()
     for (const id of startItems.keys()) {
       const backdropDom = backdropDomRegistry.get(id)
-      if (id !== backdrop.id) {
-        if (backdropDom?.body) liveTargetsSet.add(backdropDom.body)
-        if (backdropDom?.header) liveTargetsSet.add(backdropDom.header)
-      }
+      // The dragged backdrop header is moved by react-rnd itself; do not live-transform it.
+      // But its body must follow during drag to avoid "header/content move now, body catches up on drop".
+      if (backdropDom?.body) liveTargetsSet.add(backdropDom.body)
+      if (id !== backdrop.id && backdropDom?.header) liveTargetsSet.add(backdropDom.header)
       const tileDom = tileDomRegistry.get(id)
       if (tileDom) liveTargetsSet.add(tileDom)
     }
@@ -480,6 +541,7 @@ export const BackdropTile: React.FC<BackdropTileProps> = ({ backdrop, scale, isS
   }, [backdrop.id, backdrop.x, backdrop.y])
 
   const handleSelect = useCallback((e: React.MouseEvent<HTMLElement>) => {
+    if (e.button !== 0) return
     if (e.ctrlKey || e.metaKey) toggleSelect(backdrop.id)
     else if (!(isSelected && selectedIds.length > 1)) selectOne(backdrop.id)
   }, [backdrop.id, isSelected, selectOne, selectedIds.length, toggleSelect])
@@ -677,7 +739,6 @@ export const BackdropTile: React.FC<BackdropTileProps> = ({ backdrop, scale, isS
         onDrag={(_, d) => {
           const drag = dragRef.current
           if (!drag) return
-          scheduleDragPositionUpdate({ x: d.x, y: d.y })
           const dx = d.x - drag.startBackdrop.x
           const dy = d.y - drag.startBackdrop.y
           applyLiveDragTransforms(drag, dx, dy)
@@ -687,12 +748,6 @@ export const BackdropTile: React.FC<BackdropTileProps> = ({ backdrop, scale, isS
           suppressClickUntilRef.current = Date.now() + CLICK_SUPPRESS_AFTER_DRAG_MS
           const drag = dragRef.current
           dragRef.current = null
-          if (dragPositionRafRef.current) {
-            cancelAnimationFrame(dragPositionRafRef.current)
-            dragPositionRafRef.current = 0
-          }
-          pendingDragPositionRef.current = null
-
           const finish = () => requestAnimationFrame(() => clearLiveDragTransforms(drag))
 
           if (!drag) {
@@ -902,10 +957,12 @@ export const BackdropTile: React.FC<BackdropTileProps> = ({ backdrop, scale, isS
             {backdrop.displayMode === 'frame' ? 'Solid fill mode' : 'Frame mode'}
           </button>
           <div className="h-px my-2 bg-zinc-800/80" />
-          <div className="text-[11px] text-zinc-400 mb-1 select-none">Palette</div>
+          <div className="text-[11px] text-zinc-400 mb-1 select-none">
+            {selectionColorTargetIds.length > 1 ? 'Selection palette' : 'Palette'}
+          </div>
           <div className="grid grid-cols-5 gap-1.5">
             {BACKDROP_COLOR_PRESETS.map((color) => {
-              const isActive = backdrop.color.toLowerCase() === color.toLowerCase()
+              const isActive = selectionSharedColor?.toLowerCase() === color.toLowerCase()
               return (
                 <button
                   key={color}
@@ -920,7 +977,7 @@ export const BackdropTile: React.FC<BackdropTileProps> = ({ backdrop, scale, isS
                   }}
                   title={color}
                   onClick={() => {
-                    updateItem(backdrop.id, { color })
+                    applySelectionColor(color)
                   }}
                 />
               )
@@ -937,7 +994,7 @@ export const BackdropTile: React.FC<BackdropTileProps> = ({ backdrop, scale, isS
               value={Math.round(hueBase)}
               onChange={(e) => {
                 const v = Number(e.target.value)
-                updateItem(backdrop.id, { color: hueToBaseHex(v) })
+                previewSelectionColor(hueToBaseHex(v))
               }}
             />
             <span className="text-[11px] text-zinc-400 tabular-nums w-10 text-right">
@@ -1002,7 +1059,7 @@ export const BackdropTile: React.FC<BackdropTileProps> = ({ backdrop, scale, isS
       )}
     </>
   )
-}
+}, areBackdropTilePropsEqual)
 
 export function createBackdropItem(params: {
   id: string

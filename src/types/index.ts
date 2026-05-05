@@ -22,10 +22,25 @@ export interface VideoItem extends BaseItem {
   uiColor?: string
 }
 
+export type NoteFontSizeTier = 's' | 'm' | 'l'
+export type NoteFontFamily =
+  | 'system'
+  | 'segoe'
+  | 'arial'
+  | 'georgia'
+  | 'times'
+  | 'verdana'
+  | 'trebuchet'
+  | 'courier'
+
 export interface NoteItem extends BaseItem {
   type: 'note'
   text: string
   fontSize?: number
+  /** When set, body text uses fixed tier px; otherwise `fontSize` is used (legacy). */
+  fontSizeTier?: NoteFontSizeTier
+  color?: string
+  fontFamily?: NoteFontFamily
 }
 
 export interface ImageItem extends BaseItem {
@@ -86,6 +101,8 @@ export type ItemUpdate = {
   // NoteItem
   text?: string
   fontSize?: number
+  fontSizeTier?: NoteFontSizeTier
+  fontFamily?: NoteFontFamily
   // ImageItem
   srcUrl?: string
   storage?: ImageStorage

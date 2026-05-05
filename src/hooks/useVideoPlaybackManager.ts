@@ -4,11 +4,12 @@ import { videoRegistry } from '../utils/videoRegistry'
 import { videoUserPausedIds } from '../utils/videoUserPausedRegistry'
 import { getVideoPlaybackSuspended } from '../utils/videoGlobalPlayback'
 import { isManualPlaybackAllowedInSuspended } from '../utils/videoSuspendedManualAllowRegistry'
+import { resolveFarZoomMode } from '../utils/navigationMode'
 import type { VideoItem } from '../types'
 
 const UPDATE_MS = 600
 /** Extra margin so tiles near the edge still count as visible (less “dead” previews). */
-const BUFFER_PX = 96
+const BUFFER_PX = 240
 /** Concurrent playing cap — keep decoder pressure low enough that pan/zoom stays responsive. */
 const MAX_PLAYING = 12
 /**
@@ -114,6 +115,7 @@ function setsEqual(a: Set<string>, b: Set<string>): boolean {
 export function useVideoPlaybackManager(containerRef: React.RefObject<HTMLElement | null>) {
   const playingRef = useRef<Set<string>>(new Set())
   const viewportBusyUntilRef = useRef(0)
+  const farZoomModeRef = useRef(resolveFarZoomMode(false, useCanvasStore.getState().viewport.scale))
 
   useEffect(() => {
     const tick = () => {
@@ -142,15 +144,19 @@ export function useVideoPlaybackManager(containerRef: React.RefObject<HTMLElemen
       }
 
       const state = useCanvasStore.getState()
-      const desiredIds = computeDesiredPlayback({
-        containerWidth: w,
-        containerHeight: h,
-        viewportX: state.viewport.x,
-        viewportY: state.viewport.y,
-        scale: state.viewport.scale,
-        selectedIds: state.selectedIds,
-        items: state.items,
-      })
+      const farZoomMode = resolveFarZoomMode(farZoomModeRef.current, state.viewport.scale)
+      farZoomModeRef.current = farZoomMode
+      const desiredIds = farZoomMode
+        ? []
+        : computeDesiredPlayback({
+            containerWidth: w,
+            containerHeight: h,
+            viewportX: state.viewport.x,
+            viewportY: state.viewport.y,
+            scale: state.viewport.scale,
+            selectedIds: state.selectedIds,
+            items: state.items,
+          })
 
       const desiredSet = new Set(desiredIds)
       const currentPlaying = playingRef.current
@@ -232,6 +238,7 @@ export function useVideoPlaybackManager(containerRef: React.RefObject<HTMLElemen
       const viewportChanged = state.viewport !== prevViewport
       prevItems = state.items
       prevSelectedIds = state.selectedIds
+      farZoomModeRef.current = resolveFarZoomMode(farZoomModeRef.current, state.viewport.scale)
       prevViewport = state.viewport
       if (viewportChanged) {
         viewportBusyUntilRef.current = Date.now() + VIEWPORT_SETTLE_MS

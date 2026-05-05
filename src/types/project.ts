@@ -1,4 +1,4 @@
-import type { CanvasItem } from './index'
+import type { CanvasItem, NoteFontFamily } from './index'
 
 export interface ViewportState {
   x: number
@@ -69,6 +69,9 @@ export type ProjectCanvasItemV1 =
       height: number
       text: string
       fontSize?: number
+      fontSizeTier?: 's' | 'm' | 'l'
+      color?: string
+      fontFamily?: NoteFontFamily
     }
 
 export type ProjectCanvasItemV2 =
@@ -130,6 +133,9 @@ export type ProjectCanvasItemV2 =
       height: number
       text: string
       fontSize?: number
+      fontSizeTier?: 's' | 'm' | 'l'
+      color?: string
+      fontFamily?: NoteFontFamily
     }
   | {
       type: 'backdrop'

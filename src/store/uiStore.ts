@@ -6,6 +6,7 @@ export type AppTheme = 'default' | 'light' | 'pink' | 'camouflage' | 'greenFx'
 interface UiState {
   alwaysOnTop: boolean
   theme: AppTheme
+  showBackgroundGrid: boolean
   gridSizeX: number
   gridSizeY: number
   
@@ -23,6 +24,7 @@ interface UiState {
 
   setAlwaysOnTop: (v: boolean) => void
   setTheme: (theme: AppTheme) => void
+  setShowBackgroundGrid: (show: boolean) => void
   setGridSize: (x: number, y: number) => void
   
   setDailiesYear: (year: string) => void
@@ -45,12 +47,13 @@ function clampGrid(v: number): number {
   return Math.max(8, Math.min(256, Math.round(v)))
 }
 
-function readPrefs(): Partial<Pick<UiState, 'theme' | 'gridSizeX' | 'gridSizeY' | 'dailiesYear' | 'dailiesProject' | 'dailiesScene' | 'dailiesPriorities' | 'prmYear' | 'prmProject' | 'prmScene' | 'prmPriorities'>> {
+function readPrefs(): Partial<Pick<UiState, 'theme' | 'showBackgroundGrid' | 'gridSizeX' | 'gridSizeY' | 'dailiesYear' | 'dailiesProject' | 'dailiesScene' | 'dailiesPriorities' | 'prmYear' | 'prmProject' | 'prmScene' | 'prmPriorities'>> {
   try {
     const raw = localStorage.getItem(UI_PREFS_KEY)
     if (!raw) return {}
     const parsed = JSON.parse(raw) as {
       theme?: AppTheme
+      showBackgroundGrid?: boolean
       gridSizeX?: number
       gridSizeY?: number
       dailiesYear?: string
@@ -64,6 +67,7 @@ function readPrefs(): Partial<Pick<UiState, 'theme' | 'gridSizeX' | 'gridSizeY' 
     }
     return {
       theme: parsed.theme ?? 'default',
+      showBackgroundGrid: parsed.showBackgroundGrid ?? false,
       gridSizeX: clampGrid(parsed.gridSizeX ?? 32),
       gridSizeY: clampGrid(parsed.gridSizeY ?? 32),
       dailiesYear: parsed.dailiesYear ?? new Date().getFullYear().toString(),
@@ -80,7 +84,7 @@ function readPrefs(): Partial<Pick<UiState, 'theme' | 'gridSizeX' | 'gridSizeY' 
   }
 }
 
-function savePrefs(state: Pick<UiState, 'theme' | 'gridSizeX' | 'gridSizeY' | 'dailiesYear' | 'dailiesProject' | 'dailiesScene' | 'dailiesPriorities' | 'prmYear' | 'prmProject' | 'prmScene' | 'prmPriorities'>): void {
+function savePrefs(state: Pick<UiState, 'theme' | 'showBackgroundGrid' | 'gridSizeX' | 'gridSizeY' | 'dailiesYear' | 'dailiesProject' | 'dailiesScene' | 'dailiesPriorities' | 'prmYear' | 'prmProject' | 'prmScene' | 'prmPriorities'>): void {
   try {
     localStorage.setItem(UI_PREFS_KEY, JSON.stringify(state))
   } catch {
@@ -93,6 +97,7 @@ const boot = readPrefs()
 export const useUiStore = create<UiState>((set) => ({
   alwaysOnTop: false,
   theme: boot.theme ?? 'default',
+  showBackgroundGrid: boot.showBackgroundGrid ?? false,
   gridSizeX: boot.gridSizeX ?? 32,
   gridSizeY: boot.gridSizeY ?? 32,
   dailiesYear: boot.dailiesYear ?? new Date().getFullYear().toString(),
@@ -113,6 +118,12 @@ export const useUiStore = create<UiState>((set) => ({
       const next = { ...state, theme }
       savePrefs(next)
       return { theme }
+    }),
+  setShowBackgroundGrid: (showBackgroundGrid) =>
+    set((state) => {
+      const next = { ...state, showBackgroundGrid }
+      savePrefs(next)
+      return { showBackgroundGrid }
     }),
   setGridSize: (x, y) =>
     set((state) => {

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 
 import type { CanvasItem } from '../src/types'
 import { useCanvasStore } from '../src/store/canvasStore'
+import { buildColorUpdatesForIds, getContextColorableIds } from '../src/utils/selectionColors'
 
 const META = {
   createdAt: '2026-03-23T00:00:00.000Z',
@@ -156,4 +157,65 @@ test('getProjectDataForSave refreshes nested backdrop attachments from geometry'
 
   assert.deepEqual(outer.attachedVideoIds, ['inner-bd', 'note-a'])
   assert.deepEqual(inner.attachedVideoIds, ['note-a'])
+})
+
+test('mixed selected colorable items produce color updates for all selected types', () => {
+  const items: CanvasItem[] = [
+    {
+      type: 'video',
+      id: 'video-a',
+      x: 0,
+      y: 0,
+      width: 320,
+      height: 180,
+      fileName: 'clip.mov',
+      srcUrl: 'media:///clip.mov',
+    },
+    {
+      type: 'backdrop',
+      id: 'bd-a',
+      x: 20,
+      y: 20,
+      width: 800,
+      height: 400,
+      color: '#475569',
+      brightness: 40,
+      saturation: 100,
+      label: '',
+      labelSize: 'md',
+      collapsed: false,
+      displayMode: 'solid',
+      attachedVideoIds: [],
+    },
+    {
+      type: 'note',
+      id: 'note-a',
+      x: 60,
+      y: 60,
+      width: 160,
+      height: 120,
+      text: 'hello',
+    },
+    {
+      type: 'image',
+      id: 'img-a',
+      x: 100,
+      y: 100,
+      width: 200,
+      height: 120,
+      srcUrl: 'data:image/png;base64,AAAA',
+      storage: 'asset',
+      sourceVideoId: '',
+    },
+  ]
+
+  const ids = getContextColorableIds(items, ['video-a', 'bd-a', 'note-a', 'img-a'], 'img-a')
+  assert.deepEqual(ids, ['video-a', 'bd-a', 'note-a'])
+
+  const updates = buildColorUpdatesForIds(items, ids, '#1d4ed8')
+  assert.deepEqual(updates, [
+    { id: 'video-a', updates: { uiColor: '#1d4ed8' } },
+    { id: 'bd-a', updates: { color: '#1d4ed8' } },
+    { id: 'note-a', updates: { color: '#1d4ed8' } },
+  ])
 })

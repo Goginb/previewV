@@ -6,6 +6,7 @@ export interface ScanDailiesOpts {
   project: string
   scene: string
   priorities: string[]
+  lastVersionOnly?: boolean
 }
 
 function parseKeywords(prioStr: string): string[] {
@@ -58,13 +59,13 @@ export async function scanDailiesFolder(opts: ScanDailiesOpts): Promise<string[]
         continue
       }
 
-      let bestFile: string | null = null
       let bestPriorityIndex = Infinity
 
       // Natural sort (e.g. v001, v002, v010)
       const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
       shotFiles.sort(collator.compare)
 
+      const matchedByFile = new Map<string, number>()
       for (const fileName of shotFiles) {
         const lowerName = fileName.toLowerCase()
         const tokens = lowerName.split(/[^a-z0-9]/) // Split by _, ., -, etc.
@@ -82,21 +83,26 @@ export async function scanDailiesFolder(opts: ScanDailiesOpts): Promise<string[]
         }
 
         if (matchedPriorityIndex !== -1) {
-          // Found a match
-          // If it's a better (lower index) priority, replace it
+          matchedByFile.set(fileName, matchedPriorityIndex)
           if (matchedPriorityIndex < bestPriorityIndex) {
             bestPriorityIndex = matchedPriorityIndex
-            bestFile = fileName
-          } else if (matchedPriorityIndex === bestPriorityIndex) {
-            // Same priority tier: since array is sorted naturally ascending,
-            // later items are newer versions (e.g. v002 overrides v001).
-            bestFile = fileName
           }
         }
       }
 
-      if (bestFile) {
-        resultPaths.push(path.join(shotPath, bestFile))
+      if (bestPriorityIndex === Infinity) continue
+
+      const bestTierFiles = shotFiles.filter((fileName) => matchedByFile.get(fileName) === bestPriorityIndex)
+      if (bestTierFiles.length === 0) continue
+
+      if (opts.lastVersionOnly) {
+        // Last item in naturally sorted list is the newest version.
+        resultPaths.push(path.join(shotPath, bestTierFiles[bestTierFiles.length - 1]!))
+      } else {
+        // Import all matched versions for the highest found priority tier.
+        for (const fileName of bestTierFiles) {
+          resultPaths.push(path.join(shotPath, fileName))
+        }
       }
     }
   } catch (err: any) {

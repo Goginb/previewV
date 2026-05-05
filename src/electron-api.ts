@@ -19,6 +19,8 @@ export interface ElectronProjectAPI {
   readClipboardText: () => string
   writeClipboardText: (text: string) => void
   revealFileInFolder: (path: string) => Promise<boolean>
+  /** Opens `Prores_proxy_temp` next to the project, or on the Desktop if the project is unsaved. */
+  openProxiesFolder: (projectPath: string | null) => Promise<boolean>
   openProjectDialog: () => Promise<{ path: string; project: DeserializedProject } | null>
   openProjectByPath: (path: string) => Promise<{ path: string; project: DeserializedProject } | null>
   saveProject: (payload: {
@@ -44,7 +46,7 @@ export interface ElectronProjectAPI {
   inspectVideoSources: (payload: {
     paths: string[]
     projectPath?: string | null
-  }) => Promise<Array<{ path: string; isProres: boolean; hasProxy: boolean }>>
+  }) => Promise<Array<{ path: string; isProres: boolean; isMjpeg: boolean; hasProxy: boolean }>>
   confirmGenerateProxies: (payload: { count: number; unsavedProject: boolean }) => Promise<boolean>
   pickFolderDialog: () => Promise<string | null>
   enumerateFolderMedia: (folderPath: string) => Promise<string[]>
@@ -56,6 +58,7 @@ export interface ElectronProjectAPI {
     project: string
     scene: string
     priorities: string[]
+    lastVersionOnly?: boolean
   }) => Promise<string[]>
   getDailiesYears: () => Promise<string[]>
   getDailiesProjects: (year: string) => Promise<string[]>
