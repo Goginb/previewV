@@ -11,6 +11,7 @@ import { setManualPlaybackAllowedInSuspended } from '../utils/videoSuspendedManu
 import type { VideoItem } from '../types'
 import { computeAttachedItemIds } from '../utils/backdrops'
 import { localPathToMediaUrl, mediaUrlToLocalPath } from '../utils/projectSerializer'
+import { useVideoSourceActivationStore } from '../store/videoSourceActivationStore'
 import {
   ESTIMATING_VIDEO_PANEL_HEIGHT,
   EstimatingVideoFields,
@@ -118,6 +119,9 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
   const dragOriginsRef = useRef<Map<string, { x: number; y: number }> | null>(null)
   const dragPeerElementsRef = useRef<HTMLElement[]>([])
   const durationRef = useRef(0)
+  const isViewportSourceActive = useVideoSourceActivationStore(
+    (state) => !!state.activeSourceIds[tile.id],
+  )
   const estimatingIntegrationActive = useEstimatingIntegrationStore((state) => state.active)
   const selectEstimatingShotBySourcePath = useEstimatingIntegrationStore(
     (state) => state.selectShotBySourcePath,
@@ -129,6 +133,8 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
   })
   const estimatingPanelHeight =
     estimatingIntegrationActive && integrationShotId ? ESTIMATING_VIDEO_PANEL_HEIGHT : 0
+  const showNavigationPreview = !!isFarZoomMode
+  const shouldAttachVideoSource = isViewportSourceActive && !isHidden && !showNavigationPreview
   const srcCandidates = useMemo(() => {
     const out: string[] = []
     const pushUnique = (v: string | undefined) => {
@@ -399,6 +405,7 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
 
     const attemptRecovery = (reason: string) => {
       if (isHidden) return
+      if (!shouldAttachVideoSource) return
       if (scrubRef.current) return
 
       const now = Date.now()
@@ -465,6 +472,7 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
     const onStalled = () => attemptRecovery('stalled')
     const onEmptied = () => attemptRecovery('emptied')
     const onError = () => {
+      if (!shouldAttachVideoSource) return
       const current = (v.currentSrc && v.currentSrc.trim()) || activeSrcUrl
       if (current) failedSrcUrlsRef.current.add(current)
       const fallback = srcCandidates.find((src) => !failedSrcUrlsRef.current.has(src))
@@ -494,7 +502,16 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
       v.removeEventListener('emptied', onEmptied)
       v.removeEventListener('error', onError)
     }
-  }, [activeSrcUrl, isHidden, scheduleSyncAfterSeek, srcCandidates, syncFromVideo, tile.fileName, tile.id])
+  }, [
+    activeSrcUrl,
+    isHidden,
+    scheduleSyncAfterSeek,
+    shouldAttachVideoSource,
+    srcCandidates,
+    syncFromVideo,
+    tile.fileName,
+    tile.id,
+  ])
 
   const beginScrub = useCallback(() => {
     const v = videoRef.current
@@ -609,7 +626,6 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
   const progressPct = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0
   const uiColor = tile.uiColor ?? DEFAULT_VIDEO_UI_COLOR
   const uiColorSoft = mixTowardWhite(uiColor, 0.18)
-  const showNavigationPreview = !!isFarZoomMode
   const rootBorder = isSelected ? uiColorSoft : hexToRgba(uiColor, 0.42)
   const rootShadow = isSelected
     ? `0 0 0 2px ${hexToRgba(uiColor, 0.45)}, 0 0 0 5px ${hexToRgba(uiColor, 0.28)}, 0 0 40px ${hexToRgba(uiColor, 0.38)}`
@@ -642,6 +658,28 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
     }
   }, [isSelected, selectOne, selectedIds.length, tile.id])
   const dragHandleClassName = 'video-root-drag-handle'
+
+  useEffect(() => {
+    const v = videoRef.current
+    if (!v || shouldAttachVideoSource) return
+
+    try {
+      v.pause()
+    } catch {
+      // ignore
+    }
+
+    if (v.currentSrc || v.getAttribute('src')) {
+      v.removeAttribute('src')
+      try {
+        v.load()
+      } catch {
+        // ignore
+      }
+    }
+
+    setPaused(true)
+  }, [shouldAttachVideoSource])
 
   return (
     <Rnd
@@ -836,7 +874,7 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
           )}
           <video
             ref={videoRef}
-            src={activeSrcUrl}
+            src={shouldAttachVideoSource ? activeSrcUrl : undefined}
             className="absolute inset-0 w-full h-full object-contain"
             style={{ display: showNavigationPreview ? 'none' : undefined }}
             loop

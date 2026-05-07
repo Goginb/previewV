@@ -6,6 +6,7 @@ import { getVideoPlaybackSuspended } from '../utils/videoGlobalPlayback'
 import { isManualPlaybackAllowedInSuspended } from '../utils/videoSuspendedManualAllowRegistry'
 import { resolveFarZoomMode } from '../utils/navigationMode'
 import type { VideoItem } from '../types'
+import { useVideoSourceActivationStore } from '../store/videoSourceActivationStore'
 
 const UPDATE_MS = 600
 /** Extra margin so tiles near the edge still count as visible (less “dead” previews). */
@@ -23,7 +24,13 @@ function isVideoItem(item: any): item is VideoItem {
   return item && item.type === 'video'
 }
 
-function computeDesiredPlayback(params: {
+interface VisibleVideoCandidate {
+  id: string
+  distSq: number
+  selected: boolean
+}
+
+function computeVisibleVideoCandidates(params: {
   containerWidth: number
   containerHeight: number
   viewportX: number
@@ -31,7 +38,7 @@ function computeDesiredPlayback(params: {
   scale: number
   selectedIds: string[]
   items: any[]
-}): string[] {
+}): VisibleVideoCandidate[] {
   const {
     containerWidth,
     containerHeight,
@@ -46,7 +53,7 @@ function computeDesiredPlayback(params: {
   const centerX = containerWidth / 2
   const centerY = containerHeight / 2
 
-  const candidates: { id: string; distSq: number; selected: boolean }[] = []
+  const candidates: VisibleVideoCandidate[] = []
 
   // Skip videos hidden by collapsed backdrops.
   const hiddenVideoIds = new Set<string>()
@@ -86,6 +93,10 @@ function computeDesiredPlayback(params: {
     candidates.push({ id, distSq: dx * dx + dy * dy, selected })
   }
 
+  return candidates
+}
+
+function computeDesiredPlayback(candidates: VisibleVideoCandidate[]): string[] {
   if (candidates.length === 0) return []
 
   const selectedCandidates = candidates.filter((c) => c.selected).sort((a, b) => a.distSq - b.distSq)
@@ -126,6 +137,28 @@ export function useVideoPlaybackManager(containerRef: React.RefObject<HTMLElemen
       const h = Math.max(1, Math.floor(rect.height))
       if (w <= 0 || h <= 0) return
 
+      if (Date.now() < viewportBusyUntilRef.current) {
+        return
+      }
+
+      const state = useCanvasStore.getState()
+      const farZoomMode = resolveFarZoomMode(farZoomModeRef.current, state.viewport.scale)
+      farZoomModeRef.current = farZoomMode
+      const visibleCandidates = farZoomMode
+        ? []
+        : computeVisibleVideoCandidates({
+            containerWidth: w,
+            containerHeight: h,
+            viewportX: state.viewport.x,
+            viewportY: state.viewport.y,
+            scale: state.viewport.scale,
+            selectedIds: state.selectedIds,
+            items: state.items,
+          })
+      useVideoSourceActivationStore
+        .getState()
+        .setActiveSourceIds(visibleCandidates.map((candidate) => candidate.id))
+
       if (getVideoPlaybackSuspended()) {
         for (const [id, video] of videoRegistry) {
           if (isManualPlaybackAllowedInSuspended(id)) continue
@@ -139,24 +172,7 @@ export function useVideoPlaybackManager(containerRef: React.RefObject<HTMLElemen
         return
       }
 
-      if (Date.now() < viewportBusyUntilRef.current) {
-        return
-      }
-
-      const state = useCanvasStore.getState()
-      const farZoomMode = resolveFarZoomMode(farZoomModeRef.current, state.viewport.scale)
-      farZoomModeRef.current = farZoomMode
-      const desiredIds = farZoomMode
-        ? []
-        : computeDesiredPlayback({
-            containerWidth: w,
-            containerHeight: h,
-            viewportX: state.viewport.x,
-            viewportY: state.viewport.y,
-            scale: state.viewport.scale,
-            selectedIds: state.selectedIds,
-            items: state.items,
-          })
+      const desiredIds = computeDesiredPlayback(visibleCandidates)
 
       const desiredSet = new Set(desiredIds)
       const currentPlaying = playingRef.current
@@ -255,6 +271,7 @@ export function useVideoPlaybackManager(containerRef: React.RefObject<HTMLElemen
       unsub()
       if (deferredTickTimer) window.clearTimeout(deferredTickTimer)
       if (rafScheduled) cancelAnimationFrame(rafScheduled)
+      useVideoSourceActivationStore.getState().clearActiveSourceIds()
     }
   }, [containerRef])
 }

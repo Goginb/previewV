@@ -12,6 +12,13 @@ import type {
 } from './types'
 
 type ShotSyncStatus = 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
+export const ESTIMATING_TASK_ADJUST_STEP = 0.25
+
+interface TaskAdjustModifierState {
+  ctrlKey?: boolean
+  metaKey?: boolean
+  shiftKey?: boolean
+}
 
 interface ShotUiState {
   status: ShotSyncStatus
@@ -38,6 +45,12 @@ interface EstimatingIntegrationState {
     context: EstimatingLaunchContext,
   ) => Promise<EstimatingVideoBootstrapResult>
   setDraftValue: (shotId: string, taskKey: string, value: string) => void
+  adjustDraftValue: (
+    shotId: string,
+    taskKey: string,
+    direction: -1 | 1,
+    modifiers?: TaskAdjustModifierState,
+  ) => void
   saveShot: (shotId: string) => Promise<void>
   selectShotBySourcePath: (sourcePath: string) => Promise<void>
 }
@@ -88,6 +101,43 @@ function parseDraftValue(value: string): number | null {
   }
   const parsed = Number(trimmed)
   return Number.isFinite(parsed) ? parsed : null
+}
+
+function clampTaskValue(value: number): number {
+  return Number(Math.max(0, value).toFixed(4))
+}
+
+function getTaskAdjustStep(modifiers?: TaskAdjustModifierState): number {
+  if (modifiers?.ctrlKey || modifiers?.metaKey) {
+    return 1
+  }
+  if (modifiers?.shiftKey) {
+    return 2
+  }
+  return ESTIMATING_TASK_ADJUST_STEP
+}
+
+function resolveAdjustableTaskValue(
+  shot: EstimatingSessionShot,
+  taskKey: string,
+  draftValue?: string,
+): number {
+  const draft = draftValue === undefined ? null : parseDraftValue(draftValue)
+  if (draft !== null) {
+    return draft
+  }
+
+  const task = shot.tasks.find((entry) => entry.key === taskKey)
+  if (!task) {
+    return 0
+  }
+  if (task.currentValue !== null) {
+    return task.currentValue
+  }
+  if (task.originalValue !== null) {
+    return task.originalValue
+  }
+  return 0
 }
 
 function buildWritableTasks(
@@ -227,6 +277,37 @@ export const useEstimatingIntegrationStore = create<EstimatingIntegrationState>(
         },
       },
     })),
+
+  adjustDraftValue: (shotId, taskKey, direction, modifiers) =>
+    set((state) => {
+      const shot = state.shotsById[shotId]
+      if (!shot) {
+        return state
+      }
+
+      const currentDraftValue = state.draftsByShotId[shotId]?.[taskKey]
+      const nextValue = clampTaskValue(
+        resolveAdjustableTaskValue(shot, taskKey, currentDraftValue) +
+          getTaskAdjustStep(modifiers) * direction,
+      )
+
+      return {
+        draftsByShotId: {
+          ...state.draftsByShotId,
+          [shotId]: {
+            ...(state.draftsByShotId[shotId] ?? {}),
+            [taskKey]: Number(nextValue.toFixed(4)).toString(),
+          },
+        },
+        uiByShotId: {
+          ...state.uiByShotId,
+          [shotId]: {
+            status: 'dirty',
+            message: '',
+          },
+        },
+      }
+    }),
 
   saveShot: async (shotId) => {
     const state = get()

@@ -1,5 +1,9 @@
 import React from 'react'
-import { useEstimatingIntegrationStore, getEstimatingStatusLabel } from './store'
+import {
+  ESTIMATING_TASK_ADJUST_STEP,
+  useEstimatingIntegrationStore,
+  getEstimatingStatusLabel,
+} from './store'
 
 interface EstimatingVideoFieldsProps {
   shotId: string
@@ -29,6 +33,7 @@ export const EstimatingVideoFields: React.FC<EstimatingVideoFieldsProps> = ({
   const ui = useEstimatingIntegrationStore((state) => state.uiByShotId[shotId] ?? { status: 'idle', message: '' })
   const language = useEstimatingIntegrationStore((state) => state.context?.language ?? 'en')
   const setDraftValue = useEstimatingIntegrationStore((state) => state.setDraftValue)
+  const adjustDraftValue = useEstimatingIntegrationStore((state) => state.adjustDraftValue)
   const saveShot = useEstimatingIntegrationStore((state) => state.saveShot)
   const selectShotBySourcePath = useEstimatingIntegrationStore((state) => state.selectShotBySourcePath)
 
@@ -79,31 +84,89 @@ export const EstimatingVideoFields: React.FC<EstimatingVideoFieldsProps> = ({
               <span className="truncate text-[9px] font-semibold uppercase tracking-[0.12em] text-slate-300">
                 {task.label}
               </span>
-              <input
-                className="w-full rounded border px-1.5 py-1 text-[11px] text-slate-50 outline-none"
-                style={{
-                  borderColor: 'rgba(45, 212, 191, 0.22)',
-                  background: 'rgba(2, 6, 23, 0.84)',
-                }}
-                value={value}
-                placeholder={placeholder}
-                inputMode="decimal"
-                onChange={(event) => setDraftValue(shotId, task.key, event.target.value)}
-                onFocus={() => {
-                  void selectShotBySourcePath(sourcePath)
-                }}
-                onBlur={() => {
-                  void saveShot(shotId)
-                }}
-                onKeyDown={(event) => {
-                  if (event.key !== 'Enter') {
-                    return
-                  }
-                  event.preventDefault()
-                  void saveShot(shotId)
-                  ;(event.currentTarget as HTMLInputElement).blur()
-                }}
-              />
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  className="shrink-0 rounded border px-1.5 py-1 text-[11px] font-semibold text-teal-100 transition hover:bg-teal-400/10"
+                  style={{
+                    borderColor: 'rgba(45, 212, 191, 0.22)',
+                    background: 'rgba(2, 6, 23, 0.84)',
+                  }}
+                  title={`-${ESTIMATING_TASK_ADJUST_STEP} | Ctrl: -1 | Shift: -2`}
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void selectShotBySourcePath(sourcePath)
+                    adjustDraftValue(shotId, task.key, -1, {
+                      ctrlKey: event.ctrlKey,
+                      metaKey: event.metaKey,
+                      shiftKey: event.shiftKey,
+                    })
+                  }}
+                >
+                  -
+                </button>
+                <input
+                  className="min-w-0 flex-1 rounded border px-1.5 py-1 text-[11px] text-slate-50 outline-none"
+                  style={{
+                    borderColor: 'rgba(45, 212, 191, 0.22)',
+                    background: 'rgba(2, 6, 23, 0.84)',
+                  }}
+                  value={value}
+                  placeholder={placeholder}
+                  inputMode="decimal"
+                  onChange={(event) => setDraftValue(shotId, task.key, event.target.value)}
+                  onFocus={() => {
+                    void selectShotBySourcePath(sourcePath)
+                  }}
+                  onBlur={() => {
+                    void saveShot(shotId)
+                  }}
+                  onKeyDown={(event) => {
+                    const isMinusKey = event.code === 'Minus' || event.code === 'NumpadSubtract'
+                    const isPlusKey =
+                      event.code === 'NumpadAdd' || (event.code === 'Equal' && event.shiftKey)
+
+                    if ((isMinusKey || isPlusKey) && (event.ctrlKey || event.metaKey || event.shiftKey)) {
+                      event.preventDefault()
+                      adjustDraftValue(shotId, task.key, isMinusKey ? -1 : 1, {
+                        ctrlKey: event.ctrlKey,
+                        metaKey: event.metaKey,
+                        shiftKey: event.shiftKey,
+                      })
+                      return
+                    }
+
+                    if (event.key !== 'Enter') {
+                      return
+                    }
+                    event.preventDefault()
+                    void saveShot(shotId)
+                    ;(event.currentTarget as HTMLInputElement).blur()
+                  }}
+                />
+                <button
+                  type="button"
+                  className="shrink-0 rounded border px-1.5 py-1 text-[11px] font-semibold text-teal-100 transition hover:bg-teal-400/10"
+                  style={{
+                    borderColor: 'rgba(45, 212, 191, 0.22)',
+                    background: 'rgba(2, 6, 23, 0.84)',
+                  }}
+                  title={`+${ESTIMATING_TASK_ADJUST_STEP} | Ctrl: +1 | Shift: +2`}
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void selectShotBySourcePath(sourcePath)
+                    adjustDraftValue(shotId, task.key, 1, {
+                      ctrlKey: event.ctrlKey,
+                      metaKey: event.metaKey,
+                      shiftKey: event.shiftKey,
+                    })
+                  }}
+                >
+                  +
+                </button>
+              </div>
             </label>
           )
         })}
