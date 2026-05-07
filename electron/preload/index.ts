@@ -6,6 +6,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getRuntimeInfo: () => ipcRenderer.invoke('app:get-runtime-info'),
     getAlwaysOnTop: () => ipcRenderer.invoke('window:get-always-on-top'),
   },
+  integrationAPI: {
+    getEstimatingLaunchContext: () => ipcRenderer.invoke('estimating:get-launch-context'),
+  },
   projectAPI: {
     readClipboardText: () => clipboard.readText(),
     writeClipboardText: (text: string) => clipboard.writeText(text),

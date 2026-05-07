@@ -23,6 +23,7 @@ import {
 import { setVideoPlaybackSuspended } from './utils/videoGlobalPlayback'
 import type { ElectronProjectAPI } from './electron-api'
 import type { DeserializedProject } from './types/project'
+import { useEstimatingIntegrationStore } from './integrations/estimating/store'
 
 type ProjectAPI = ElectronProjectAPI
 
@@ -393,6 +394,69 @@ const App: React.FC = () => {
     window.addEventListener('app-open-project-by-path', onOpen as any)
     return () => window.removeEventListener('app-open-project-by-path', onOpen as any)
   }, [openProjectWithProgress])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const bootstrapEstimatingIntegration = async () => {
+      const context =
+        await window.electronAPI?.integrationAPI?.getEstimatingLaunchContext?.().catch(() => null)
+      if (!context || cancelled) {
+        return
+      }
+
+      try {
+        const result =
+          await useEstimatingIntegrationStore.getState().initializeFromLaunchContext(context)
+        if (cancelled) {
+          return
+        }
+
+        const now = new Date().toISOString()
+        const project: DeserializedProject = {
+          items: result.items,
+          viewport: { x: 0, y: 0, scale: 1 },
+          meta: {
+            createdAt: now,
+            updatedAt: now,
+          },
+        }
+
+        setVideoPlaybackSuspended(true)
+        loadProjectState(project, null)
+
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            if (cancelled) return
+            const root = document.getElementById('previewv-canvas-root')
+            const rect = root?.getBoundingClientRect()
+            if (!rect) return
+
+            if (result.selectedItemId) {
+              useCanvasStore.getState().setSelection([result.selectedItemId])
+              useCanvasStore.getState().frameItemInViewport(
+                result.selectedItemId,
+                rect.width,
+                rect.height,
+                48,
+              )
+              return
+            }
+
+            useCanvasStore.getState().frameAllItemsInViewport(rect.width, rect.height)
+          })
+        })
+      } catch (error: any) {
+        alert(error?.message ?? String(error))
+      }
+    }
+
+    void bootstrapEstimatingIntegration()
+
+    return () => {
+      cancelled = true
+    }
+  }, [loadProjectState])
 
   return (
     <div className="relative w-full h-full min-h-[100dvh]" style={{ background: 'var(--app-bg)' }}>

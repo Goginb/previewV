@@ -10,7 +10,12 @@ import { getVideoPlaybackSuspended } from '../utils/videoGlobalPlayback'
 import { setManualPlaybackAllowedInSuspended } from '../utils/videoSuspendedManualAllowRegistry'
 import type { VideoItem } from '../types'
 import { computeAttachedItemIds } from '../utils/backdrops'
-import { localPathToMediaUrl } from '../utils/projectSerializer'
+import { localPathToMediaUrl, mediaUrlToLocalPath } from '../utils/projectSerializer'
+import {
+  ESTIMATING_VIDEO_PANEL_HEIGHT,
+  EstimatingVideoFields,
+} from '../integrations/estimating/EstimatingVideoFields'
+import { useEstimatingIntegrationStore } from '../integrations/estimating/store'
 
 interface VideoTileProps {
   tile: VideoItem
@@ -52,6 +57,10 @@ const DEFAULT_FRAME_DURATION = 1 / 24
 const MIN_FRAME_DURATION = 1 / 120
 const MAX_FRAME_DURATION = 1 / 8
 const CLICK_SUPPRESS_AFTER_DRAG_MS = 180
+
+function normalizeSourceKey(value: string): string {
+  return value.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase()
+}
 
 function hexToRgba(hex: string, alpha: number): string {
   const h = hex.replace('#', '').trim()
@@ -109,6 +118,17 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
   const dragOriginsRef = useRef<Map<string, { x: number; y: number }> | null>(null)
   const dragPeerElementsRef = useRef<HTMLElement[]>([])
   const durationRef = useRef(0)
+  const estimatingIntegrationActive = useEstimatingIntegrationStore((state) => state.active)
+  const selectEstimatingShotBySourcePath = useEstimatingIntegrationStore(
+    (state) => state.selectShotBySourcePath,
+  )
+  const sourcePathForIntegration = tile.sourceFilePath || mediaUrlToLocalPath(tile.srcUrl) || ''
+  const integrationShotId = useEstimatingIntegrationStore((state) => {
+    if (!state.active || !sourcePathForIntegration) return ''
+    return state.shotsBySourceKey[normalizeSourceKey(sourcePathForIntegration)]?.id || ''
+  })
+  const estimatingPanelHeight =
+    estimatingIntegrationActive && integrationShotId ? ESTIMATING_VIDEO_PANEL_HEIGHT : 0
   const srcCandidates = useMemo(() => {
     const out: string[] = []
     const pushUnique = (v: string | undefined) => {
@@ -599,9 +619,21 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
   const previewBackground = `radial-gradient(circle at 50% 35%, ${hexToRgba(uiColor, 0.20)}, rgba(8, 10, 18, 0.96) 72%)`
   const handleSelect = useCallback((e: React.MouseEvent<HTMLElement>) => {
     if (e.button !== 0) return
+    if (estimatingIntegrationActive && sourcePathForIntegration) {
+      void selectEstimatingShotBySourcePath(sourcePathForIntegration)
+    }
     if (e.ctrlKey || e.metaKey) toggleSelect(tile.id)
     else if (!(isSelected && selectedIds.length > 1)) selectOne(tile.id)
-  }, [isSelected, selectOne, selectedIds.length, tile.id, toggleSelect])
+  }, [
+    estimatingIntegrationActive,
+    isSelected,
+    selectEstimatingShotBySourcePath,
+    selectOne,
+    selectedIds.length,
+    sourcePathForIntegration,
+    tile.id,
+    toggleSelect,
+  ])
   const handleClickSelection = useCallback((e: React.MouseEvent<HTMLElement>) => {
     if (e.ctrlKey || e.metaKey) return
     if (Date.now() < suppressClickUntilRef.current) return
@@ -617,7 +649,7 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
       size={{ width: tile.width, height: tile.height }}
       scale={scale}
       minWidth={200}
-      minHeight={TITLE_H + 80 + CONTROLS_H}
+      minHeight={TITLE_H + 80 + CONTROLS_H + estimatingPanelHeight}
       cancel=".video-no-drag, .video-controls, button, [role='slider']"
       onDragStart={() => {
         window.dispatchEvent(new CustomEvent('canvas-history-action'))
@@ -779,7 +811,7 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
           className="absolute left-0 right-0 bg-black overflow-hidden"
           style={{
             top: TITLE_H,
-            bottom: CONTROLS_H,
+            bottom: CONTROLS_H + estimatingPanelHeight,
           }}
         >
           {showNavigationPreview && (
@@ -813,6 +845,10 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
             preload="metadata"
           />
         </div>
+
+        {integrationShotId && sourcePathForIntegration ? (
+          <EstimatingVideoFields shotId={integrationShotId} sourcePath={sourcePathForIntegration} />
+        ) : null}
 
         {showNavigationPreview && (
           <div

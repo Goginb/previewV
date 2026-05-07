@@ -5,6 +5,7 @@ import { videoRegistry } from '../utils/videoRegistry'
 import type { ItemUpdate, VideoItem } from '../types'
 import { mediaUrlToLocalPath } from '../utils/projectSerializer'
 import { usePreloadStore } from '../store/preloadStore'
+import { useEstimatingIntegrationStore } from '../integrations/estimating/store'
 
 function fileNameFromPath(path: string | null): string {
   if (!path) return 'Untitled'
@@ -24,6 +25,7 @@ export const ProjectTitleBar: React.FC = () => {
   const path = useCanvasStore((s) => s.currentProjectPath)
   const isDirty = useCanvasStore((s) => s.isDirty)
   const alwaysOnTop = useUiStore((s) => s.alwaysOnTop)
+  const estimatingIntegrationActive = useEstimatingIntegrationStore((s) => s.active)
   const name = fileNameFromPath(path)
   const isGeneratingProxyRef = React.useRef(false)
 
@@ -142,6 +144,14 @@ export const ProjectTitleBar: React.FC = () => {
               title="Window pinned (always on top). Ctrl+Shift+A toggles pin."
             >
               Pinned
+            </span>
+          )}
+          {estimatingIntegrationActive && (
+            <span
+              className="text-teal-300 ml-2 text-[10px] uppercase tracking-wide border border-teal-500/50 rounded px-1 py-0.5"
+              title="Launched from Supervisor Estimating Tool"
+            >
+              Estimating Link
             </span>
           )}
           {isDirty && (

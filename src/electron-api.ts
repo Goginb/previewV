@@ -14,6 +14,19 @@ export interface AppRuntimeInfo {
   versionMarkerPath: string | null
 }
 
+export interface EstimatingLaunchContext {
+  helperBaseUrl: string
+  sessionId: string
+  selectedShotId: string
+  saveDirectory: string
+  writableTaskKeys: string[]
+  language: 'en' | 'ru'
+}
+
+export interface ElectronIntegrationAPI {
+  getEstimatingLaunchContext: () => Promise<EstimatingLaunchContext | null>
+}
+
 /** Типы API, проброшенные из electron/preload (см. contextBridge). */
 export interface ElectronProjectAPI {
   readClipboardText: () => string

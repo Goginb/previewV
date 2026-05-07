@@ -32,6 +32,15 @@ import { scanPrmFolder, getPrmYears, getPrmProjects, getPrmScenes } from './prmS
 
 const PROJECT_EXT = '.previewv'
 
+interface EstimatingLaunchContext {
+  helperBaseUrl: string
+  sessionId: string
+  selectedShotId: string
+  saveDirectory: string
+  writableTaskKeys: string[]
+  language: 'en' | 'ru'
+}
+
 const PROJECT_OPEN_CHANNEL = 'app-open-project-by-path'
 const VERSION_MARKER_FILE = 'version'
 const LEGACY_VERSION_MARKER_PREFIX = 'PreviewV version '
@@ -129,6 +138,53 @@ function findPreviewVPathFromArgv(argv: string[]): string | null {
   }
 }
 
+function findArgValue(argv: string[], name: string): string {
+  const prefix = `--${name}=`
+  const entry = argv.find((value) => typeof value === 'string' && value.startsWith(prefix))
+  if (!entry) return ''
+  try {
+    return decodeURIComponent(entry.slice(prefix.length))
+  } catch {
+    return entry.slice(prefix.length)
+  }
+}
+
+function parseEstimatingLaunchContextFromArgv(argv: string[]): EstimatingLaunchContext | null {
+  const helperBaseUrl = findArgValue(argv, 'estimating-helper-url').trim()
+  const sessionId = findArgValue(argv, 'estimating-session-id').trim()
+
+  if (!helperBaseUrl || !sessionId) {
+    return null
+  }
+
+  let writableTaskKeys: string[] = []
+  const rawWritableTaskKeys = findArgValue(argv, 'estimating-writable-task-keys').trim()
+  if (rawWritableTaskKeys) {
+    try {
+      const parsed = JSON.parse(rawWritableTaskKeys)
+      if (Array.isArray(parsed)) {
+        writableTaskKeys = parsed
+          .filter((entry): entry is string => typeof entry === 'string')
+          .map((entry) => entry.trim())
+          .filter(Boolean)
+      }
+    } catch {
+      writableTaskKeys = []
+    }
+  }
+
+  const language = findArgValue(argv, 'estimating-language').trim().toLowerCase() === 'ru' ? 'ru' : 'en'
+
+  return {
+    helperBaseUrl,
+    sessionId,
+    selectedShotId: findArgValue(argv, 'estimating-selected-shot-id').trim(),
+    saveDirectory: findArgValue(argv, 'estimating-save-directory').trim(),
+    writableTaskKeys,
+    language,
+  }
+}
+
 function mimeFromMediaExt(filePath: string): string {
   const ext = extname(filePath).toLowerCase()
   const map: Record<string, string> = {
@@ -207,6 +263,7 @@ async function serveMediaProtocolRequest(request: Request): Promise<Response> {
 }
 
 let pendingOpenPath: string | null = findPreviewVPathFromArgv(process.argv)
+const launchEstimatingContext = parseEstimatingLaunchContextFromArgv(process.argv)
 
 app.commandLine.appendSwitch('no-sandbox')
 // Keep default Chromium video pipeline on Windows.
@@ -1765,6 +1822,7 @@ app.whenReady().then(() => {
   void syncInstalledVersionMarker()
 
   ipcMain.handle('window:get-always-on-top', () => alwaysOnTopEnabled)
+  ipcMain.handle('estimating:get-launch-context', async () => launchEstimatingContext)
 
   ipcMain.handle('app:get-runtime-info', async () => {
     const versionMarkerPath = await syncInstalledVersionMarker()
