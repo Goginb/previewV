@@ -13,6 +13,7 @@ import type {
 
 type ShotSyncStatus = 'idle' | 'dirty' | 'saving' | 'saved' | 'error'
 export const ESTIMATING_TASK_ADJUST_STEP = 0.25
+const ESTIMATING_SHOT_AUTOSAVE_DELAY_MS = 240
 
 interface TaskAdjustModifierState {
   ctrlKey?: boolean
@@ -45,6 +46,7 @@ interface EstimatingIntegrationState {
     context: EstimatingLaunchContext,
   ) => Promise<EstimatingVideoBootstrapResult>
   setDraftValue: (shotId: string, taskKey: string, value: string) => void
+  queueSaveShot: (shotId: string, options?: { immediate?: boolean }) => void
   adjustDraftValue: (
     shotId: string,
     taskKey: string,
@@ -52,6 +54,7 @@ interface EstimatingIntegrationState {
     modifiers?: TaskAdjustModifierState,
   ) => void
   saveShot: (shotId: string) => Promise<void>
+  saveDirtyShots: () => Promise<void>
   selectShotBySourcePath: (sourcePath: string) => Promise<void>
 }
 
@@ -188,6 +191,26 @@ function buildUiByShotId(shots: EstimatingSessionShot[]): Record<string, ShotUiS
   return Object.fromEntries(shots.map((shot) => [shot.id, { status: 'idle', message: '' }]))
 }
 
+const pendingShotSaveTimeouts = new Map<string, number>()
+const inFlightShotSaves = new Set<string>()
+
+function clearQueuedShotSave(shotId: string) {
+  const timeoutId = pendingShotSaveTimeouts.get(shotId)
+  if (typeof timeoutId === 'number') {
+    window.clearTimeout(timeoutId)
+    pendingShotSaveTimeouts.delete(shotId)
+  }
+}
+
+function collectDirtyShotIds(state: Pick<EstimatingIntegrationState, 'draftsByShotId' | 'uiByShotId'>) {
+  return Object.entries(state.uiByShotId)
+    .filter(
+      ([shotId, ui]) =>
+        !!state.draftsByShotId[shotId] && (ui.status === 'dirty' || ui.status === 'error'),
+    )
+    .map(([shotId]) => shotId)
+}
+
 function labelForStatus(language: 'en' | 'ru', status: ShotSyncStatus): string {
   if (status === 'saving') {
     return language === 'ru' ? 'сохр.' : 'saving'
@@ -278,6 +301,27 @@ export const useEstimatingIntegrationStore = create<EstimatingIntegrationState>(
       },
     })),
 
+  queueSaveShot: (shotId, options) => {
+    clearQueuedShotSave(shotId)
+
+    const state = get()
+    if (!state.context || !state.shotsById[shotId] || !state.draftsByShotId[shotId]) {
+      return
+    }
+
+    if (options?.immediate) {
+      void get().saveShot(shotId)
+      return
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      pendingShotSaveTimeouts.delete(shotId)
+      void get().saveShot(shotId)
+    }, ESTIMATING_SHOT_AUTOSAVE_DELAY_MS)
+
+    pendingShotSaveTimeouts.set(shotId, timeoutId)
+  },
+
   adjustDraftValue: (shotId, taskKey, direction, modifiers) =>
     set((state) => {
       const shot = state.shotsById[shotId]
@@ -310,14 +354,25 @@ export const useEstimatingIntegrationStore = create<EstimatingIntegrationState>(
     }),
 
   saveShot: async (shotId) => {
+    clearQueuedShotSave(shotId)
+
     const state = get()
     const context = state.context
     const shot = state.shotsById[shotId]
     const draft = state.draftsByShotId[shotId]
+    const ui = state.uiByShotId[shotId]
 
     if (!context || !shot || !draft) {
       return
     }
+
+    if (ui?.status === 'saving' || inFlightShotSaves.has(shotId)) {
+      get().queueSaveShot(shotId)
+      return
+    }
+
+    const submittedDraft = { ...draft }
+    inFlightShotSaves.add(shotId)
 
     set((current) => ({
       uiByShotId: {
@@ -341,28 +396,41 @@ export const useEstimatingIntegrationStore = create<EstimatingIntegrationState>(
           return [task.key, formatDraftValue(liveTask?.currentValue ?? null)]
         }),
       )
+      let shouldResave = false
 
-      set((current) => ({
-        shotsById: {
-          ...current.shotsById,
-          [shotId]: nextShot,
-        },
-        shotsBySourceKey: {
-          ...current.shotsBySourceKey,
-          ...(nextShot.media.path ? { [normalizeSourceKey(nextShot.media.path)]: nextShot } : {}),
-        },
-        draftsByShotId: {
-          ...current.draftsByShotId,
-          [shotId]: nextDraft,
-        },
-        uiByShotId: {
-          ...current.uiByShotId,
-          [shotId]: {
-            status: 'saved',
-            message: '',
+      set((current) => {
+        const latestDraft = current.draftsByShotId[shotId] ?? {}
+        const hasDraftChanged = state.writableTasks.some(
+          (task) => (latestDraft[task.key] ?? '') !== (submittedDraft[task.key] ?? ''),
+        )
+        shouldResave = hasDraftChanged
+
+        return {
+          shotsById: {
+            ...current.shotsById,
+            [shotId]: nextShot,
           },
-        },
-      }))
+          shotsBySourceKey: {
+            ...current.shotsBySourceKey,
+            ...(nextShot.media.path ? { [normalizeSourceKey(nextShot.media.path)]: nextShot } : {}),
+          },
+          draftsByShotId: {
+            ...current.draftsByShotId,
+            [shotId]: hasDraftChanged ? latestDraft : nextDraft,
+          },
+          uiByShotId: {
+            ...current.uiByShotId,
+            [shotId]: {
+              status: hasDraftChanged ? 'dirty' : 'saved',
+              message: '',
+            },
+          },
+        }
+      })
+
+      if (shouldResave) {
+        get().queueSaveShot(shotId)
+      }
     } catch (error) {
       set((current) => ({
         uiByShotId: {
@@ -373,7 +441,19 @@ export const useEstimatingIntegrationStore = create<EstimatingIntegrationState>(
           },
         },
       }))
+    } finally {
+      inFlightShotSaves.delete(shotId)
     }
+  },
+
+  saveDirtyShots: async () => {
+    const dirtyShotIds = collectDirtyShotIds(get())
+
+    dirtyShotIds.forEach((shotId) => {
+      clearQueuedShotSave(shotId)
+    })
+
+    await Promise.all(dirtyShotIds.map((shotId) => get().saveShot(shotId)))
   },
 
   selectShotBySourcePath: async (sourcePath) => {

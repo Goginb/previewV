@@ -12,13 +12,14 @@ async function parseJson<T>(response: Response): Promise<T> {
   return payload as T
 }
 
-function buildJsonRequest(url: string, body: unknown): Promise<Response> {
+function buildJsonRequest(url: string, body: unknown, init?: RequestInit): Promise<Response> {
   return fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
+    ...init,
   })
 }
 
@@ -44,7 +45,7 @@ export async function saveEstimatingShotValues(
       directory: context.saveDirectory,
     },
     writableTaskKeys: context.writableTaskKeys,
-  })
+  }, { keepalive: true })
   return parseJson<EstimatingSaveShotValuesResponse>(response)
 }
 

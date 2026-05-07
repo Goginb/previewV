@@ -537,6 +537,32 @@ const App: React.FC = () => {
     }
   }, [getProjectDataForSave, loadProjectState])
 
+  useEffect(() => {
+    const flushEstimatingDrafts = () => {
+      const integration = useEstimatingIntegrationStore.getState()
+      if (!integration.active) {
+        return
+      }
+      void integration.saveDirtyShots()
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        flushEstimatingDrafts()
+      }
+    }
+
+    window.addEventListener('beforeunload', flushEstimatingDrafts)
+    window.addEventListener('pagehide', flushEstimatingDrafts)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    return () => {
+      window.removeEventListener('beforeunload', flushEstimatingDrafts)
+      window.removeEventListener('pagehide', flushEstimatingDrafts)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [])
+
   return (
     <div className="relative w-full h-full min-h-[100dvh]" style={{ background: 'var(--app-bg)' }}>
       <ProjectLoadingOverlay />

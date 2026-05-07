@@ -33,6 +33,7 @@ export const EstimatingVideoFields: React.FC<EstimatingVideoFieldsProps> = ({
   const ui = useEstimatingIntegrationStore((state) => state.uiByShotId[shotId] ?? { status: 'idle', message: '' })
   const language = useEstimatingIntegrationStore((state) => state.context?.language ?? 'en')
   const setDraftValue = useEstimatingIntegrationStore((state) => state.setDraftValue)
+  const queueSaveShot = useEstimatingIntegrationStore((state) => state.queueSaveShot)
   const adjustDraftValue = useEstimatingIntegrationStore((state) => state.adjustDraftValue)
   const saveShot = useEstimatingIntegrationStore((state) => state.saveShot)
   const selectShotBySourcePath = useEstimatingIntegrationStore((state) => state.selectShotBySourcePath)
@@ -102,6 +103,7 @@ export const EstimatingVideoFields: React.FC<EstimatingVideoFieldsProps> = ({
                       metaKey: event.metaKey,
                       shiftKey: event.shiftKey,
                     })
+                    queueSaveShot(shotId)
                   }}
                 >
                   -
@@ -115,7 +117,10 @@ export const EstimatingVideoFields: React.FC<EstimatingVideoFieldsProps> = ({
                   value={value}
                   placeholder={placeholder}
                   inputMode="decimal"
-                  onChange={(event) => setDraftValue(shotId, task.key, event.target.value)}
+                  onChange={(event) => {
+                    setDraftValue(shotId, task.key, event.target.value)
+                    queueSaveShot(shotId)
+                  }}
                   onFocus={() => {
                     void selectShotBySourcePath(sourcePath)
                   }}
@@ -134,6 +139,7 @@ export const EstimatingVideoFields: React.FC<EstimatingVideoFieldsProps> = ({
                         metaKey: event.metaKey,
                         shiftKey: event.shiftKey,
                       })
+                      queueSaveShot(shotId)
                       return
                     }
 
@@ -162,6 +168,7 @@ export const EstimatingVideoFields: React.FC<EstimatingVideoFieldsProps> = ({
                       metaKey: event.metaKey,
                       shiftKey: event.shiftKey,
                     })
+                    queueSaveShot(shotId)
                   }}
                 >
                   +
