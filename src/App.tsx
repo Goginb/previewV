@@ -39,6 +39,59 @@ function fileLabelFromPath(path: string): string {
   return seg[seg.length - 1] ?? path
 }
 
+function getCanvasCenterWorldAnchor(): { x: number; y: number } {
+  const root = document.getElementById('previewv-canvas-root')
+  const rect = root?.getBoundingClientRect()
+  if (!rect) {
+    return { x: 0, y: 0 }
+  }
+
+  const viewport = useCanvasStore.getState().viewport
+  const screenCenterX = rect.width / 2
+  const screenCenterY = rect.height / 2
+
+  return {
+    x: (screenCenterX - viewport.x) / viewport.scale,
+    y: (screenCenterY - viewport.y) / viewport.scale,
+  }
+}
+
+function dedupeNormalizedPaths(paths: string[]): string[] {
+  const uniquePaths = new Map<string, string>()
+
+  for (const path of paths) {
+    const trimmed = path.trim()
+    if (!trimmed) {
+      continue
+    }
+
+    const normalized = normalizePathKey(trimmed)
+    if (!uniquePaths.has(normalized)) {
+      uniquePaths.set(normalized, trimmed)
+    }
+  }
+
+  return [...uniquePaths.values()]
+}
+
+function findImportedVideoItemId(sourcePath: string | null): string | null {
+  if (!sourcePath) {
+    return null
+  }
+
+  const normalizedTarget = normalizePathKey(sourcePath)
+  const matchingItem = useCanvasStore
+    .getState()
+    .items.find(
+      (item) =>
+        item.type === 'video' &&
+        !!item.sourceFilePath &&
+        normalizePathKey(item.sourceFilePath) === normalizedTarget,
+    )
+
+  return matchingItem?.id ?? null
+}
+
 async function ensureCanLeaveProject(projectAPI: ProjectAPI): Promise<boolean> {
   const { isDirty } = useCanvasStore.getState()
   if (!isDirty) return true
@@ -405,6 +458,8 @@ const App: React.FC = () => {
         return
       }
 
+      const projectAPI = window.electronAPI?.projectAPI
+
       try {
         const result =
           await useEstimatingIntegrationStore.getState().initializeFromLaunchContext(context)
@@ -412,18 +467,40 @@ const App: React.FC = () => {
           return
         }
 
-        const now = new Date().toISOString()
-        const project: DeserializedProject = {
-          items: result.items,
-          viewport: { x: 0, y: 0, scale: 1 },
-          meta: {
-            createdAt: now,
-            updatedAt: now,
-          },
+        if (!projectAPI?.enumerateFolderMedia) {
+          throw new Error('PreviewV desktop media import API is unavailable.')
         }
 
         setVideoPlaybackSuspended(true)
-        loadProjectState(project, null)
+        loadProjectState(createEmptyProject(), null)
+
+        const folderMediaRows = await Promise.all(
+          result.folderPaths.map((folderPath) =>
+            projectAPI.enumerateFolderMedia(folderPath).catch(() => []),
+          ),
+        )
+        if (cancelled) {
+          return
+        }
+
+        const importPaths = dedupeNormalizedPaths([
+          ...folderMediaRows.flat(),
+          ...result.mediaPaths,
+        ])
+        if (importPaths.length === 0) {
+          throw new Error(
+            context.language === 'ru'
+              ? 'Ne udalos nayti media v papkah proekta dlya PreviewV.'
+              : 'No project media folders could be imported into PreviewV.',
+          )
+        }
+
+        await importMediaPathsToCanvas(importPaths, getCanvasCenterWorldAnchor())
+        if (cancelled) {
+          return
+        }
+
+        loadProjectState(getProjectDataForSave(), null)
 
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
@@ -432,10 +509,12 @@ const App: React.FC = () => {
             const rect = root?.getBoundingClientRect()
             if (!rect) return
 
-            if (result.selectedItemId) {
-              useCanvasStore.getState().setSelection([result.selectedItemId])
+            const preferredItemId = findImportedVideoItemId(result.preferredMediaPath)
+
+            if (preferredItemId) {
+              useCanvasStore.getState().setSelection([preferredItemId])
               useCanvasStore.getState().frameItemInViewport(
-                result.selectedItemId,
+                preferredItemId,
                 rect.width,
                 rect.height,
                 48,
@@ -456,7 +535,7 @@ const App: React.FC = () => {
     return () => {
       cancelled = true
     }
-  }, [loadProjectState])
+  }, [getProjectDataForSave, loadProjectState])
 
   return (
     <div className="relative w-full h-full min-h-[100dvh]" style={{ background: 'var(--app-bg)' }}>

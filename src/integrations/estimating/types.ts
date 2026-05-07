@@ -11,6 +11,7 @@ export interface EstimatingShotTask extends EstimatingSessionTask {
 export interface EstimatingShotMedia {
   status: string
   path: string | null
+  expectedDirectory: string | null
   message: string
 }
 

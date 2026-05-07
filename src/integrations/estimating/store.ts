@@ -1,8 +1,5 @@
 import { create } from 'zustand'
 import type { EstimatingLaunchContext } from '../../electron-api'
-import type { VideoItem } from '../../types'
-import { defaultVideoTileSizeForNew } from '../../utils/tileSizing'
-import { localPathToMediaUrl } from '../../utils/projectSerializer'
 import {
   fetchEstimatingSessionSnapshot,
   saveEstimatingActiveShot,
@@ -22,8 +19,9 @@ interface ShotUiState {
 }
 
 interface EstimatingVideoBootstrapResult {
-  items: VideoItem[]
-  selectedItemId: string | null
+  folderPaths: string[]
+  mediaPaths: string[]
+  preferredMediaPath: string | null
 }
 
 interface EstimatingIntegrationState {
@@ -44,14 +42,36 @@ interface EstimatingIntegrationState {
   selectShotBySourcePath: (sourcePath: string) => Promise<void>
 }
 
-const ROW_CAP = 6
-const GAP = 20
-const START_X = 80
-const START_Y = 80
-const VIDEO_UI_COLOR = '#14b8a6'
-
 function normalizeSourceKey(value: string): string {
   return value.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase()
+}
+
+function parentDirectoryFromPath(value: string): string {
+  const trimmed = value.trim().replace(/[\\/]+$/, '')
+  const separatorIndex = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
+  return separatorIndex > 0 ? trimmed.slice(0, separatorIndex) : ''
+}
+
+function collectUniquePaths(values: Array<string | null | undefined>): string[] {
+  const uniquePaths = new Map<string, string>()
+
+  for (const value of values) {
+    if (typeof value !== 'string') {
+      continue
+    }
+
+    const trimmed = value.trim()
+    if (!trimmed) {
+      continue
+    }
+
+    const key = normalizeSourceKey(trimmed)
+    if (!uniquePaths.has(key)) {
+      uniquePaths.set(key, trimmed)
+    }
+  }
+
+  return [...uniquePaths.values()]
 }
 
 function formatDraftValue(value: number | null): string {
@@ -118,31 +138,6 @@ function buildUiByShotId(shots: EstimatingSessionShot[]): Record<string, ShotUiS
   return Object.fromEntries(shots.map((shot) => [shot.id, { status: 'idle', message: '' }]))
 }
 
-function buildVideoItems(shots: EstimatingSessionShot[]): VideoItem[] {
-  const size = defaultVideoTileSizeForNew()
-
-  return shots.map((shot, index) => {
-    const row = Math.floor(index / ROW_CAP)
-    const column = index % ROW_CAP
-    const x = START_X + column * (size.width + GAP)
-    const y = START_Y + row * (size.height + 120)
-
-    return {
-      type: 'video',
-      id: `estimating-video-${shot.id}`,
-      srcUrl: localPathToMediaUrl(shot.media.path || ''),
-      fileName: shot.media.path ? shot.media.path.split(/[/\\]/).filter(Boolean).at(-1) || shot.shotCode : shot.shotCode,
-      sourceFilePath: shot.media.path || undefined,
-      x,
-      y,
-      width: size.width,
-      height: size.height,
-      aspectApplied: true,
-      uiColor: VIDEO_UI_COLOR,
-    }
-  })
-}
-
 function labelForStatus(language: 'en' | 'ru', status: ShotSyncStatus): string {
   if (status === 'saving') {
     return language === 'ru' ? 'сохр.' : 'saving'
@@ -178,6 +173,13 @@ export const useEstimatingIntegrationStore = create<EstimatingIntegrationState>(
     set({ loading: true, context })
     const snapshot = await fetchEstimatingSessionSnapshot(context)
     const readyShots = snapshot.shots.filter((shot) => shot.media.status === 'ready' && !!shot.media.path)
+    const folderPaths = collectUniquePaths(
+      snapshot.shots.flatMap((shot) => [
+        shot.media.expectedDirectory,
+        shot.media.path ? parentDirectoryFromPath(shot.media.path) : null,
+      ]),
+    )
+    const mediaPaths = collectUniquePaths(readyShots.map((shot) => shot.media.path))
     const writableTasks = buildWritableTasks(snapshot, context)
     const { shotsById, shotsBySourceKey } = buildShotMaps(readyShots)
     const draftsByShotId = buildDraftsByShotId(readyShots, writableTasks)
@@ -187,8 +189,7 @@ export const useEstimatingIntegrationStore = create<EstimatingIntegrationState>(
       (snapshot.resumeShotId && shotsById[snapshot.resumeShotId] && snapshot.resumeShotId) ||
       readyShots[0]?.id ||
       ''
-    const items = buildVideoItems(readyShots)
-    const selectedItemId = preferredShotId ? `estimating-video-${preferredShotId}` : null
+    const preferredMediaPath = preferredShotId ? shotsById[preferredShotId]?.media.path ?? null : mediaPaths[0] ?? null
 
     set({
       active: true,
@@ -206,7 +207,7 @@ export const useEstimatingIntegrationStore = create<EstimatingIntegrationState>(
       void saveEstimatingActiveShot(context, preferredShotId).catch(() => {})
     }
 
-    return { items, selectedItemId }
+    return { folderPaths, mediaPaths, preferredMediaPath }
   },
 
   setDraftValue: (shotId, taskKey, value) =>
