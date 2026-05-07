@@ -53,6 +53,7 @@ import {
 } from '../utils/backdrops'
 import type { CanvasItem, ImageItem, NoteFontFamily, NoteItem, VideoItem } from '../types'
 import { useUiStore } from '../store/uiStore'
+import { useEstimatingIntegrationStore } from '../integrations/estimating/store'
 import logoGreenFx from '../assets/logo-greenfx.png'
 
 // ── File helpers ──────────────────────────────────────────────────────────────
@@ -226,6 +227,9 @@ export const Canvas: React.FC = () => {
   const theme = useUiStore((s) => s.theme)
   const alwaysOnTop = useUiStore((s) => s.alwaysOnTop)
   const setAlwaysOnTop = useUiStore((s) => s.setAlwaysOnTop)
+  const estimatingIntegrationActive = useEstimatingIntegrationStore((s) => s.active)
+  const estimatingLanguage = useEstimatingIntegrationStore((s) => s.context?.language ?? 'en')
+  const tileDeletionLocked = estimatingIntegrationActive
 
   const containerRef    = useRef<HTMLDivElement>(null)
   const lastMouseScreen = useRef({ x: 0, y: 0 })
@@ -347,6 +351,7 @@ export const Canvas: React.FC = () => {
   }, [setInternalClipboard])
 
   const cutCanvasSelection = useCallback(() => {
+    if (tileDeletionLocked) return false
     const state = useCanvasStore.getState()
     const ids = state.selectedIds
     if (!ids.length) return false
@@ -358,7 +363,7 @@ export const Canvas: React.FC = () => {
     removeItems(ids)
     markCanvasCommandContext()
     return true
-  }, [markCanvasCommandContext, removeItems, setInternalClipboard])
+  }, [markCanvasCommandContext, removeItems, setInternalClipboard, tileDeletionLocked])
 
   const createTextNoteAtScreenPoint = useCallback(
     (screenX: number, screenY: number, text: string) => {
@@ -936,6 +941,7 @@ export const Canvas: React.FC = () => {
       const state = useCanvasStore.getState()
 
       if (detail.command === 'delete') {
+        if (tileDeletionLocked) return
         if (state.selectedIds.length) state.removeItems(state.selectedIds)
         return
       }
@@ -947,6 +953,7 @@ export const Canvas: React.FC = () => {
           }
           return
         }
+        if (tileDeletionLocked) return
         cutCanvasSelection()
         return
       }
@@ -1002,6 +1009,7 @@ export const Canvas: React.FC = () => {
     runEditableDocumentCommand,
     runUndoCommand,
     shouldPreferTextCommands,
+    tileDeletionLocked,
   ])
 
   // ── Marquee: window listeners while dragging ─────────────────────────────
@@ -1238,6 +1246,7 @@ export const Canvas: React.FC = () => {
       }
 
       if ((e.code === 'Delete' || e.code === 'Backspace') && !isTypingTarget(e)) {
+        if (tileDeletionLocked) return
         const ids = useCanvasStore.getState().selectedIds
         if (ids.length) removeItems(ids)
         return
@@ -1282,6 +1291,7 @@ export const Canvas: React.FC = () => {
 
       if ((e.ctrlKey || e.metaKey) && e.code === 'KeyX' && !isTypingTarget(e)) {
         e.preventDefault()
+        if (tileDeletionLocked) return
         cutCanvasSelection()
         return
       }
@@ -1531,6 +1541,7 @@ export const Canvas: React.FC = () => {
     openSourcePathModal,
     runRedoCommand,
     runUndoCommand,
+    tileDeletionLocked,
     theme,
   ])
 
@@ -2113,18 +2124,26 @@ export const Canvas: React.FC = () => {
             {/* --- SELECTION ACTIONS --- */}
             {(ctxMenu.kind === 'video' || ctxMenu.kind === 'image' || ctxMenu.kind === 'note') && ctxMenu.itemId && (
               <>
-                <button
-                  type="button"
-                  className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
-                  onClick={() => {
-                    const state = useCanvasStore.getState()
-                    const ids = state.selectedIds.length ? state.selectedIds : [ctxMenu.itemId!]
-                    removeItems(ids)
-                    setCtxMenu(null)
-                  }}
-                >
-                  Delete
-                </button>
+                {tileDeletionLocked ? (
+                  <div className="px-2 py-1.5 text-xs text-amber-300/90 select-none">
+                    {estimatingLanguage === 'ru'
+                      ? 'Удаление плиток отключено в режиме связи с Estimation Tool.'
+                      : 'Tile deletion is disabled while launched from Estimation Tool.'}
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
+                    onClick={() => {
+                      const state = useCanvasStore.getState()
+                      const ids = state.selectedIds.length ? state.selectedIds : [ctxMenu.itemId!]
+                      removeItems(ids)
+                      setCtxMenu(null)
+                    }}
+                  >
+                    Delete
+                  </button>
+                )}
                 <button
                   type="button"
                   className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"

@@ -17,6 +17,7 @@ import {
   EstimatingVideoFields,
 } from '../integrations/estimating/EstimatingVideoFields'
 import { useEstimatingIntegrationStore } from '../integrations/estimating/store'
+import type { EstimatingSessionShot } from '../integrations/estimating/types'
 
 interface VideoTileProps {
   tile: VideoItem
@@ -91,6 +92,37 @@ function mixTowardWhite(hex: string, amount01: number): string {
   return `#${[nr, ng, nb].map((x) => x.toString(16).padStart(2, '0')).join('')}`
 }
 
+function buildEstimatingBriefTooltip(
+  shot: Pick<EstimatingSessionShot, 'shotCode' | 'sceneName' | 'brief' | 'greenComment' | 'clientComment'>,
+  language: 'en' | 'ru',
+): string {
+  const sections: string[] = []
+  const title = String(shot.shotCode || shot.sceneName || '').trim()
+  const brief = String(shot.brief || '').trim()
+  const greenComment = String(shot.greenComment || '').trim()
+  const clientComment = String(shot.clientComment || '').trim()
+
+  if (title) {
+    sections.push(title)
+  }
+
+  if (brief) {
+    sections.push(`${language === 'ru' ? 'ТЗ' : 'Brief'}:\n${brief}`)
+  }
+
+  if (greenComment) {
+    sections.push(`${language === 'ru' ? 'Комментарий GreenFX' : 'GreenFX Comment'}:\n${greenComment}`)
+  }
+
+  if (clientComment) {
+    sections.push(
+      `${language === 'ru' ? 'Комментарий режиссера / продюсера' : 'Director / Producer Comment'}:\n${clientComment}`,
+    )
+  }
+
+  return sections.join('\n\n')
+}
+
 export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHidden, isFarZoomMode }: VideoTileProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const trackRef = useRef<HTMLDivElement>(null)
@@ -123,6 +155,7 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
     (state) => !!state.activeSourceIds[tile.id],
   )
   const estimatingIntegrationActive = useEstimatingIntegrationStore((state) => state.active)
+  const estimatingLanguage = useEstimatingIntegrationStore((state) => state.context?.language ?? 'en')
   const selectEstimatingShotBySourcePath = useEstimatingIntegrationStore(
     (state) => state.selectShotBySourcePath,
   )
@@ -131,10 +164,21 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
     if (!state.active || !sourcePathForIntegration) return ''
     return state.shotsBySourceKey[normalizeSourceKey(sourcePathForIntegration)]?.id || ''
   })
+  const integrationShot = useEstimatingIntegrationStore((state) =>
+    integrationShotId ? state.shotsById[integrationShotId] ?? null : null,
+  )
   const estimatingPanelHeight =
     estimatingIntegrationActive && integrationShotId ? ESTIMATING_VIDEO_PANEL_HEIGHT : 0
   const showNavigationPreview = !!isFarZoomMode
   const shouldAttachVideoSource = isViewportSourceActive && !isHidden && !showNavigationPreview
+  const briefTooltipText = useMemo(
+    () =>
+      integrationShot
+        ? buildEstimatingBriefTooltip(integrationShot, estimatingLanguage)
+        : '',
+    [estimatingLanguage, integrationShot],
+  )
+  const briefIndicatorLabel = estimatingLanguage === 'ru' ? 'ТЗ' : 'Brief'
   const srcCandidates = useMemo(() => {
     const out: string[] = []
     const pushUnique = (v: string | undefined) => {
@@ -829,6 +873,7 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
           borderColor: rootBorder,
           boxShadow: rootShadow,
         }}
+        title={briefTooltipText || undefined}
         onMouseDown={handleSelect}
         onClick={handleClickSelection}
       >
@@ -840,9 +885,28 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
             borderBottom: `1px solid ${hexToRgba(uiColor, 0.26)}`,
           }}
         >
-          <span className="text-[11px] truncate leading-none select-none" style={{ color: hexToRgba(uiColorSoft, 0.96) }}>
-            {tile.fileName}
-          </span>
+          <div className="flex min-w-0 items-center gap-2">
+            <span
+              className="text-[11px] truncate leading-none select-none"
+              style={{ color: hexToRgba(uiColorSoft, 0.96) }}
+              title={briefTooltipText || tile.fileName}
+            >
+              {tile.fileName}
+            </span>
+            {briefTooltipText ? (
+              <span
+                className="shrink-0 rounded-full border px-1.5 py-[2px] text-[9px] font-semibold uppercase tracking-[0.14em]"
+                style={{
+                  borderColor: hexToRgba(uiColorSoft, 0.28),
+                  background: hexToRgba(uiColor, 0.16),
+                  color: hexToRgba(uiColorSoft, 0.92),
+                }}
+                title={briefTooltipText}
+              >
+                {briefIndicatorLabel}
+              </span>
+            ) : null}
+          </div>
         </div>
 
         <div

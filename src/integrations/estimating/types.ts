@@ -22,6 +22,9 @@ export interface EstimatingSessionShot {
   shotCode: string
   tcIn: string
   tcOut: string
+  brief: string
+  greenComment: string
+  clientComment: string
   currentTotal: number
   media: EstimatingShotMedia
   tasks: EstimatingShotTask[]
