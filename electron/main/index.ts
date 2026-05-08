@@ -130,13 +130,25 @@ process.on('uncaughtException', (error) => {
 })
 
 function findPreviewVPathFromArgv(argv: string[]): string | null {
-  const found = argv.find((a) => typeof a === 'string' && a.toLowerCase().endsWith(PROJECT_EXT))
-  if (!found) return null
-  try {
-    return decodeURIComponent(found)
-  } catch {
-    return found
+  for (const entry of argv) {
+    if (typeof entry !== 'string') continue
+    const trimmed = entry.trim()
+    if (!trimmed || trimmed.startsWith('--')) continue
+
+    let decoded = trimmed
+    try {
+      decoded = decodeURIComponent(trimmed)
+    } catch {
+      decoded = trimmed
+    }
+
+    const normalized = decoded.trim().replace(/^"+|"+$/g, '')
+    if (!normalized || normalized.startsWith('--')) continue
+    if (!normalized.toLowerCase().endsWith(PROJECT_EXT)) continue
+    return normalized
   }
+
+  return null
 }
 
 function findArgValue(argv: string[], name: string): string {
