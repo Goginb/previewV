@@ -615,6 +615,11 @@ const App: React.FC = () => {
     let cancelled = false
 
     const bootstrapEstimatingIntegration = async () => {
+      // Guardrails for this linked flow live in:
+      // src/integrations/estimating/INTEGRATION_GUARDRAILS.md
+      //
+      // Important: this bootstrap must stay Estimating-specific and must not
+      // change the behavior of a normal standalone PreviewV launch.
       const context =
         await window.electronAPI?.integrationAPI?.getEstimatingLaunchContext?.().catch(() => null)
       if (!context || cancelled) {
@@ -650,6 +655,8 @@ const App: React.FC = () => {
             if (linkedProject) {
               loadedLinkedProject = true
               loadProjectState(linkedProject.project, linkedProject.path)
+              // Reopen performance matters here: linked sidecars should reuse
+              // already-saved source/proxy state and only hydrate when needed.
               if (needsProjectVideoHydration(linkedProject.project.items)) {
                 startProjectVideoHydration(linkedProject.project)
               } else {
@@ -700,6 +707,9 @@ const App: React.FC = () => {
         )
 
         if (missingImportPaths.length > 0) {
+          // Estimating imports are intentionally not the same as generic
+          // "Add folder": first-time linked media is grouped by brief and
+          // wrapped into backdrop/note structure.
           await importEstimatingGroupedMediaToCanvas(
             missingImportPaths,
             getCanvasCenterWorldAnchor(),

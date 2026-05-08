@@ -24,6 +24,10 @@ function getFileLabel(path: string): string {
 }
 
 export function needsProjectVideoHydration(items: CanvasItem[]): boolean {
+  // This helper is intentionally conservative for linked Estimating projects:
+  // skip expensive reopen hydration only when saved source/proxy state already
+  // looks valid. If this returns false incorrectly, linked PreviewV may reopen
+  // fast but lose playable video sources.
   return items.some((item) => {
     if (item.type !== 'video') {
       return false

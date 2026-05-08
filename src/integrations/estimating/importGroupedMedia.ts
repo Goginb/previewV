@@ -12,6 +12,15 @@ import { getEstimatingVideoMinimumWidth, getEstimatingVideoPanelHeight } from '.
 import { useEstimatingIntegrationStore } from './store'
 import type { EstimatingSessionShot } from './types'
 
+/**
+ * Estimating-linked import rules:
+ * - used only for missing media arriving from Estimating Tool
+ * - preserves normal PreviewV "Add folder" behavior elsewhere
+ * - first import groups by brief, creates backdrops, and adds note tiles
+ * - later reopen must restore saved linked canvas instead of rebuilding it
+ *
+ * See also: INTEGRATION_GUARDRAILS.md in this folder.
+ */
 const TILE_GAP = 16
 const GROUP_GAP = 72
 const GROUP_NOTE_GAP = 24
