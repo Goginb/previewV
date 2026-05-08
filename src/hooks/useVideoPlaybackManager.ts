@@ -18,7 +18,7 @@ const MAX_PLAYING = 12
  * Remaining tiles catch up on the next ticks.
  */
 const PLAY_STARTS_PER_TICK = 3
-const VIEWPORT_SETTLE_MS = 220
+const VIEWPORT_SETTLE_MS = 140
 
 function isVideoItem(item: any): item is VideoItem {
   return item && item.type === 'video'
@@ -121,18 +121,6 @@ function setsEqual(a: Set<string>, b: Set<string>): boolean {
   if (a.size !== b.size) return false
   for (const v of a) if (!b.has(v)) return false
   return true
-}
-
-function pauseTrackedVideos(ids: Iterable<string>): void {
-  for (const id of ids) {
-    const video = videoRegistry.get(id)
-    if (!video) continue
-    try {
-      video.pause()
-    } catch {
-      // ignore
-    }
-  }
 }
 
 export function useVideoPlaybackManager(containerRef: React.RefObject<HTMLElement | null>) {
@@ -270,9 +258,6 @@ export function useVideoPlaybackManager(containerRef: React.RefObject<HTMLElemen
       prevViewport = state.viewport
       if (viewportChanged) {
         viewportBusyUntilRef.current = Date.now() + VIEWPORT_SETTLE_MS
-        useVideoSourceActivationStore.getState().clearActiveSourceIds()
-        pauseTrackedVideos(playingRef.current)
-        playingRef.current = new Set()
         scheduleTick('deferred')
         return
       }

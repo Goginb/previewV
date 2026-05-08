@@ -13,8 +13,9 @@ import { computeAttachedItemIds } from '../utils/backdrops'
 import { localPathToMediaUrl, mediaUrlToLocalPath } from '../utils/projectSerializer'
 import { useVideoSourceActivationStore } from '../store/videoSourceActivationStore'
 import {
-  ESTIMATING_VIDEO_PANEL_HEIGHT,
   EstimatingVideoFields,
+  getEstimatingVideoMinimumWidth,
+  getEstimatingVideoPanelHeight,
 } from '../integrations/estimating/EstimatingVideoFields'
 import { useEstimatingIntegrationStore } from '../integrations/estimating/store'
 import type { EstimatingSessionShot } from '../integrations/estimating/types'
@@ -167,8 +168,19 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
   const integrationShot = useEstimatingIntegrationStore((state) =>
     integrationShotId ? state.shotsById[integrationShotId] ?? null : null,
   )
+  const estimatingWritableTaskCount = useEstimatingIntegrationStore((state) => state.writableTasks.length)
+  const estimatingMinimumWidth =
+    estimatingIntegrationActive && integrationShotId
+      ? getEstimatingVideoMinimumWidth(estimatingWritableTaskCount)
+      : 200
   const estimatingPanelHeight =
-    estimatingIntegrationActive && integrationShotId ? ESTIMATING_VIDEO_PANEL_HEIGHT : 0
+    estimatingIntegrationActive && integrationShotId
+      ? getEstimatingVideoPanelHeight(
+          estimatingWritableTaskCount,
+          Math.max(tile.width, estimatingMinimumWidth),
+        )
+      : 0
+  const requiredTileMinHeight = TITLE_H + 80 + CONTROLS_H + estimatingPanelHeight
   const showNavigationPreview = !!isFarZoomMode
   const shouldAttachVideoSource = isViewportSourceActive && !isHidden && !showNavigationPreview
   const briefTooltipText = useMemo(
@@ -725,13 +737,48 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
     setPaused(true)
   }, [shouldAttachVideoSource])
 
+  useEffect(() => {
+    if (!estimatingIntegrationActive || !integrationShotId) {
+      return
+    }
+
+    const widthNeedsGrow = tile.width < estimatingMinimumWidth
+    const heightNeedsGrow = tile.height < requiredTileMinHeight
+
+    if (!widthNeedsGrow && !heightNeedsGrow) {
+      return
+    }
+
+    updateItemsBatch(
+      [
+        {
+          id: tile.id,
+          updates: {
+            ...(widthNeedsGrow ? { width: estimatingMinimumWidth } : {}),
+            ...(heightNeedsGrow ? { height: requiredTileMinHeight } : {}),
+          },
+        },
+      ],
+      { recordHistory: false },
+    )
+  }, [
+    estimatingIntegrationActive,
+    estimatingMinimumWidth,
+    integrationShotId,
+    requiredTileMinHeight,
+    tile.height,
+    tile.id,
+    tile.width,
+    updateItemsBatch,
+  ])
+
   return (
     <Rnd
       position={{ x: tile.x, y: tile.y }}
       size={{ width: tile.width, height: tile.height }}
       scale={scale}
-      minWidth={200}
-      minHeight={TITLE_H + 80 + CONTROLS_H + estimatingPanelHeight}
+      minWidth={estimatingMinimumWidth}
+      minHeight={requiredTileMinHeight}
       cancel=".video-no-drag, .video-controls, button, [role='slider']"
       onDragStart={() => {
         window.dispatchEvent(new CustomEvent('canvas-history-action'))
@@ -949,7 +996,11 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
         </div>
 
         {integrationShotId && sourcePathForIntegration ? (
-          <EstimatingVideoFields shotId={integrationShotId} sourcePath={sourcePathForIntegration} />
+          <EstimatingVideoFields
+            shotId={integrationShotId}
+            sourcePath={sourcePathForIntegration}
+            tileWidth={Math.max(tile.width, estimatingMinimumWidth)}
+          />
         ) : null}
 
         {showNavigationPreview && (

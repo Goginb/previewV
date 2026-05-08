@@ -8,6 +8,7 @@ import {
 interface EstimatingVideoFieldsProps {
   shotId: string
   sourcePath: string
+  tileWidth: number
 }
 
 function getPlaceholderValue(
@@ -21,11 +22,52 @@ function getPlaceholderValue(
   return Number(sourceValue.toFixed(4)).toString()
 }
 
-export const ESTIMATING_VIDEO_PANEL_HEIGHT = 92
+const PANEL_MIN_WIDTH_ONE_COLUMN = 220
+const PANEL_MIN_WIDTH_TWO_COLUMNS = 300
+const PANEL_MIN_WIDTH_THREE_COLUMNS = 380
+const PANEL_MIN_WIDTH_FOUR_COLUMNS = 480
+const PANEL_HEADER_HEIGHT = 14
+const PANEL_HEADER_GAP = 6
+const PANEL_VERTICAL_PADDING = 8
+const PANEL_ROW_HEIGHT = 44
+const PANEL_ROW_GAP = 6
+
+export function getEstimatingVideoPanelColumnCount(taskCount: number, tileWidth: number): number {
+  if (taskCount <= 1) return 1
+  if (tileWidth >= PANEL_MIN_WIDTH_FOUR_COLUMNS && taskCount >= 4) return 4
+  if (tileWidth >= PANEL_MIN_WIDTH_THREE_COLUMNS && taskCount >= 3) return 3
+  if (tileWidth >= PANEL_MIN_WIDTH_TWO_COLUMNS && taskCount >= 2) return 2
+  return 1
+}
+
+export function getEstimatingVideoMinimumWidth(taskCount: number): number {
+  if (taskCount <= 1) return PANEL_MIN_WIDTH_ONE_COLUMN
+  if (taskCount <= 4) return PANEL_MIN_WIDTH_TWO_COLUMNS
+  if (taskCount <= 8) return PANEL_MIN_WIDTH_THREE_COLUMNS
+  return PANEL_MIN_WIDTH_FOUR_COLUMNS
+}
+
+export function getEstimatingVideoPanelHeight(taskCount: number, tileWidth: number): number {
+  if (taskCount <= 0) {
+    return 0
+  }
+
+  const columns = getEstimatingVideoPanelColumnCount(taskCount, tileWidth)
+  const rows = Math.ceil(taskCount / columns)
+
+  return (
+    PANEL_VERTICAL_PADDING * 2 +
+    PANEL_HEADER_HEIGHT +
+    PANEL_HEADER_GAP +
+    rows * PANEL_ROW_HEIGHT +
+    Math.max(0, rows - 1) * PANEL_ROW_GAP
+  )
+}
 
 export const EstimatingVideoFields: React.FC<EstimatingVideoFieldsProps> = ({
   shotId,
   sourcePath,
+  tileWidth,
 }) => {
   const shot = useEstimatingIntegrationStore((state) => state.shotsById[shotId] ?? null)
   const writableTasks = useEstimatingIntegrationStore((state) => state.writableTasks)
@@ -43,16 +85,20 @@ export const EstimatingVideoFields: React.FC<EstimatingVideoFieldsProps> = ({
   }
 
   const statusLabel = getEstimatingStatusLabel(language, ui.status)
+  const columnCount = getEstimatingVideoPanelColumnCount(writableTasks.length, tileWidth)
+  const panelHeight = getEstimatingVideoPanelHeight(writableTasks.length, tileWidth)
 
   return (
     <div
-      className="video-no-drag absolute left-0 right-0 z-[25] border-t px-2 py-2"
+      className="video-no-drag absolute left-0 right-0 z-[25] border-t px-2"
       style={{
         bottom: 34,
-        height: ESTIMATING_VIDEO_PANEL_HEIGHT,
+        height: panelHeight,
         background:
           'linear-gradient(180deg, rgba(7, 10, 18, 0.94), rgba(15, 23, 42, 0.98))',
         borderColor: 'rgba(20, 184, 166, 0.28)',
+        paddingTop: PANEL_VERTICAL_PADDING,
+        paddingBottom: PANEL_VERTICAL_PADDING,
       }}
       onMouseDown={(event) => {
         event.stopPropagation()
@@ -60,14 +106,22 @@ export const EstimatingVideoFields: React.FC<EstimatingVideoFieldsProps> = ({
       }}
       onDoubleClick={(event) => event.stopPropagation()}
     >
-      <div className="mb-1 flex items-center justify-between gap-2 text-[10px] uppercase tracking-[0.16em]">
+      <div
+        className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-[0.16em]"
+        style={{ minHeight: PANEL_HEADER_HEIGHT, marginBottom: PANEL_HEADER_GAP }}
+      >
         <span className="truncate text-teal-200/90">
           {shot.shotCode || shot.sceneName || shotId}
         </span>
         <span className="shrink-0 text-teal-100/70">{statusLabel}</span>
       </div>
 
-      <div className="grid max-h-[58px] grid-cols-3 gap-1 overflow-y-auto pr-1">
+      <div
+        className="grid gap-1.5"
+        style={{
+          gridTemplateColumns: `repeat(${columnCount}, minmax(0, 1fr))`,
+        }}
+      >
         {writableTasks.map((task) => {
           const liveTask = shot.tasks.find((entry) => entry.key === task.key)
           const value = drafts[task.key] ?? ''
@@ -80,15 +134,16 @@ export const EstimatingVideoFields: React.FC<EstimatingVideoFieldsProps> = ({
               style={{
                 borderColor: 'rgba(45, 212, 191, 0.18)',
                 background: 'rgba(15, 23, 42, 0.74)',
+                minHeight: PANEL_ROW_HEIGHT,
               }}
             >
-              <span className="truncate text-[9px] font-semibold uppercase tracking-[0.12em] text-slate-300">
+              <span className="truncate text-[8px] font-semibold uppercase tracking-[0.12em] text-slate-300">
                 {task.label}
               </span>
               <div className="flex items-center gap-1">
                 <button
                   type="button"
-                  className="shrink-0 rounded border px-1.5 py-1 text-[11px] font-semibold text-teal-100 transition hover:bg-teal-400/10"
+                  className="shrink-0 rounded border px-1.5 py-[5px] text-[10px] font-semibold text-teal-100 transition hover:bg-teal-400/10"
                   style={{
                     borderColor: 'rgba(45, 212, 191, 0.22)',
                     background: 'rgba(2, 6, 23, 0.84)',
@@ -109,7 +164,7 @@ export const EstimatingVideoFields: React.FC<EstimatingVideoFieldsProps> = ({
                   -
                 </button>
                 <input
-                  className="min-w-0 flex-1 rounded border px-1.5 py-1 text-[11px] text-slate-50 outline-none"
+                  className="min-w-0 flex-1 rounded border px-1.5 py-[5px] text-[10px] text-slate-50 outline-none"
                   style={{
                     borderColor: 'rgba(45, 212, 191, 0.22)',
                     background: 'rgba(2, 6, 23, 0.84)',
@@ -153,7 +208,7 @@ export const EstimatingVideoFields: React.FC<EstimatingVideoFieldsProps> = ({
                 />
                 <button
                   type="button"
-                  className="shrink-0 rounded border px-1.5 py-1 text-[11px] font-semibold text-teal-100 transition hover:bg-teal-400/10"
+                  className="shrink-0 rounded border px-1.5 py-[5px] text-[10px] font-semibold text-teal-100 transition hover:bg-teal-400/10"
                   style={{
                     borderColor: 'rgba(45, 212, 191, 0.22)',
                     background: 'rgba(2, 6, 23, 0.84)',
