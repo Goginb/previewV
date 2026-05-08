@@ -60,6 +60,10 @@ const DEFAULT_FRAME_DURATION = 1 / 24
 const MIN_FRAME_DURATION = 1 / 120
 const MAX_FRAME_DURATION = 1 / 8
 const CLICK_SUPPRESS_AFTER_DRAG_MS = 180
+const VIDEO_TILE_DEBUG =
+  import.meta.env.DEV &&
+  typeof window !== 'undefined' &&
+  Boolean((window as any).__PREVIEWVVideoTileDebug)
 
 function normalizeSourceKey(value: string): string {
   return value.replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase()
@@ -182,6 +186,8 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
       : 0
   const requiredTileMinHeight = TITLE_H + 80 + CONTROLS_H + estimatingPanelHeight
   const showNavigationPreview = !!isFarZoomMode
+  const showEstimatingPanel =
+    !showNavigationPreview && !!integrationShotId && !!sourcePathForIntegration
   const shouldAttachVideoSource = isViewportSourceActive && !isHidden && !showNavigationPreview
   const briefTooltipText = useMemo(
     () =>
@@ -345,6 +351,7 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
   }, [tile.id, syncFromVideo])
 
   useEffect(() => {
+    if (!VIDEO_TILE_DEBUG) return
     const v = videoRef.current
     if (!v) return
     const logState = (eventName: string) => {
@@ -995,7 +1002,7 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
           />
         </div>
 
-        {integrationShotId && sourcePathForIntegration ? (
+        {showEstimatingPanel ? (
           <EstimatingVideoFields
             shotId={integrationShotId}
             sourcePath={sourcePathForIntegration}

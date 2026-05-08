@@ -10,7 +10,10 @@ import { ProjectLoadingOverlay } from './components/ProjectLoadingOverlay'
 import { useCanvasStore } from './store/canvasStore'
 import { useUiStore } from './store/uiStore'
 import { flushImageAnnotations } from './utils/flushImageAnnotations'
-import { hydrateProjectVideoSources } from './utils/hydrateProjectVideoSources'
+import {
+  hydrateProjectVideoSources,
+  needsProjectVideoHydration,
+} from './utils/hydrateProjectVideoSources'
 import { createEmptyProject } from './utils/emptyProject'
 import { importMediaPathsToCanvas } from './utils/importMediaPaths'
 import { collectExistingSourcePaths, normalizePathKey } from './utils/sourcePaths'
@@ -24,6 +27,7 @@ import { setVideoPlaybackSuspended } from './utils/videoGlobalPlayback'
 import type { ElectronProjectAPI, EstimatingLaunchContext } from './electron-api'
 import type { DeserializedProject } from './types/project'
 import { useEstimatingIntegrationStore } from './integrations/estimating/store'
+import { importEstimatingGroupedMediaToCanvas } from './integrations/estimating/importGroupedMedia'
 
 type ProjectAPI = ElectronProjectAPI
 const LINKED_PROJECT_AUTOSAVE_DELAY_MS = 320
@@ -646,7 +650,11 @@ const App: React.FC = () => {
             if (linkedProject) {
               loadedLinkedProject = true
               loadProjectState(linkedProject.project, linkedProject.path)
-              startProjectVideoHydration(linkedProject.project)
+              if (needsProjectVideoHydration(linkedProject.project.items)) {
+                startProjectVideoHydration(linkedProject.project)
+              } else {
+                cancelProjectVideoHydration()
+              }
             }
           } catch (error) {
             if (!isMissingProjectPathError(error)) {
@@ -660,11 +668,16 @@ const App: React.FC = () => {
           loadProjectState(createEmptyProject(), linkedProjectPath || null)
         }
 
-        const folderMediaRows = await Promise.all(
-          result.folderPaths.map((folderPath) =>
-            projectAPI.enumerateFolderMedia(folderPath).catch(() => []),
-          ),
-        )
+        const shouldEnumerateProjectFolders =
+          !loadedLinkedProject || useCanvasStore.getState().items.length === 0
+
+        const folderMediaRows = shouldEnumerateProjectFolders
+          ? await Promise.all(
+              result.folderPaths.map((folderPath) =>
+                projectAPI.enumerateFolderMedia(folderPath).catch(() => []),
+              ),
+            )
+          : []
         if (cancelled) {
           return
         }
@@ -687,7 +700,10 @@ const App: React.FC = () => {
         )
 
         if (missingImportPaths.length > 0) {
-          await importMediaPathsToCanvas(missingImportPaths, getCanvasCenterWorldAnchor())
+          await importEstimatingGroupedMediaToCanvas(
+            missingImportPaths,
+            getCanvasCenterWorldAnchor(),
+          )
         }
         if (cancelled) {
           return

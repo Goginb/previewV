@@ -23,6 +23,46 @@ function getFileLabel(path: string): string {
   return parts[parts.length - 1] ?? path
 }
 
+export function needsProjectVideoHydration(items: CanvasItem[]): boolean {
+  return items.some((item) => {
+    if (item.type !== 'video') {
+      return false
+    }
+
+    const srcPathFromSrc = mediaUrlToLocalPath(item.srcUrl)
+    const sourcePath = item.sourceFilePath || srcPathFromSrc
+
+    if (!sourcePath || !srcPathFromSrc) {
+      return true
+    }
+
+    const normalizedSource = normalizePathKey(sourcePath)
+    const normalizedSrc = normalizePathKey(srcPathFromSrc)
+    const proxyPath = item.proxyFilePath?.trim()
+    const proxyForSourcePath = item.proxyForSourcePath?.trim()
+    const hasMatchingProxy =
+      !!proxyPath &&
+      !!proxyForSourcePath &&
+      normalizePathKey(proxyForSourcePath) === normalizedSource &&
+      normalizePathKey(proxyPath) === normalizedSrc
+
+    const ext = getFileExt(sourcePath)
+    if (HYDRATE_ALWAYS_RESOLVE_EXT.has(ext)) {
+      return !hasMatchingProxy
+    }
+
+    if (normalizedSrc === normalizedSource) {
+      return false
+    }
+
+    if (hasMatchingProxy) {
+      return false
+    }
+
+    return true
+  })
+}
+
 async function mapPool<T>(
   arr: T[],
   concurrency: number,
