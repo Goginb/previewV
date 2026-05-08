@@ -33,7 +33,7 @@ export interface ElectronProjectAPI {
   readClipboardText: () => string
   writeClipboardText: (text: string) => void
   revealFileInFolder: (path: string) => Promise<boolean>
-  /** Opens `Prores_proxy_temp` next to the project, or on the Desktop if the project is unsaved. */
+  /** Opens the saved project's `.video-proxy-cache`, or the Desktop proxy folder if the project is unsaved. */
   openProxiesFolder: (projectPath: string | null) => Promise<boolean>
   openProjectDialog: () => Promise<{ path: string; project: DeserializedProject } | null>
   openProjectByPath: (path: string) => Promise<{ path: string; project: DeserializedProject } | null>

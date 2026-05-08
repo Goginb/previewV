@@ -399,8 +399,10 @@ async function ensurePreviewCacheDir(): Promise<void> {
   await fs.mkdir(PREVIEW_CACHE_DIR, { recursive: true })
 }
 
-async function ensureVideoProxyCacheDir(): Promise<void> {
-  await fs.mkdir(getVideoProxyCacheDir(), { recursive: true })
+async function ensureVideoProxyCacheDir(projectPath?: string | null): Promise<string> {
+  const dir = projectPath ? projectVideoSnapshotDir(projectPath) : getVideoProxyCacheDir()
+  await fs.mkdir(dir, { recursive: true })
+  return dir
 }
 
 async function ensureFfmpegRuntimeCacheDir(): Promise<void> {
@@ -412,12 +414,19 @@ function previewCacheFilePath(filePath: string): string {
   return join(PREVIEW_CACHE_DIR, `${hash}.png`)
 }
 
-function videoProxyCacheFilePath(filePath: string): string {
+function buildVideoProxyCacheKey(filePath: string, projectPath?: string | null): string {
+  const sourceKey = normalizePathKey(filePath)
+  const projectKey = projectPath ? normalizePathKey(projectPath) : ''
+  return projectKey ? `${projectKey}::${sourceKey}` : sourceKey
+}
+
+function videoProxyCacheFilePath(filePath: string, projectPath?: string | null): string {
   const hash = createHash('sha1')
     .update(`v3:${normalizePathKey(filePath)}`)
     .digest('hex')
     .slice(0, 16)
-  return join(getVideoProxyCacheDir(), `${hash}.mp4`)
+  const dir = projectPath ? projectVideoSnapshotDir(projectPath) : getVideoProxyCacheDir()
+  return join(dir, `${hash}.mp4`)
 }
 
 function projectVideoSnapshotProxyPath(projectPath: string, sourceFilePath: string): string {
@@ -436,6 +445,49 @@ function getDesktopProresProxyDir(): string {
 
 function getProjectProresProxyDir(projectPath: string): string {
   return join(dirname(projectPath), PRORES_PROXY_DIR_NAME)
+}
+
+function getProjectPersistentVideoProxyDirs(projectPath: string): string[] {
+  return [projectVideoSnapshotDir(projectPath), getProjectProresProxyDir(projectPath), getDesktopProresProxyDir()]
+}
+
+function dedupeNormalizedPaths(values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const value of values) {
+    if (typeof value !== 'string' || !value.trim()) continue
+    const normalized = normalize(value.trim())
+    const key = normalizePathKey(normalized)
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(normalized)
+  }
+  return out
+}
+
+async function stageProjectScopedProxyIfAvailable(
+  targetProxyPath: string,
+  sourceMtimeMs: number,
+  candidatePaths: Array<string | null | undefined>,
+): Promise<string | null> {
+  const candidates = dedupeNormalizedPaths([targetProxyPath, ...candidatePaths])
+  for (const candidatePath of candidates) {
+    try {
+      const proxyStat = await fs.stat(candidatePath)
+      if (!proxyStat.isFile()) continue
+      if (proxyStat.mtimeMs < sourceMtimeMs) continue
+      if (normalizePathKey(candidatePath) === normalizePathKey(targetProxyPath)) {
+        return candidatePath
+      }
+      await fs.mkdir(dirname(targetProxyPath), { recursive: true })
+      await fs.copyFile(candidatePath, targetProxyPath)
+      await fs.utimes(targetProxyPath, proxyStat.atime, proxyStat.mtime)
+      return targetProxyPath
+    } catch {
+      // Keep scanning other candidates.
+    }
+  }
+  return null
 }
 
 /** Sanitize source file stem for a proxy filename (keep letters including Cyrillic; strip Windows-invalid chars). */
@@ -877,7 +929,7 @@ async function resolveVideoSourceFromPath(
 
   if (isProres) {
     const proxyDirs = preferredProjectPath
-      ? [getProjectProresProxyDir(preferredProjectPath), getDesktopProresProxyDir()]
+      ? getProjectPersistentVideoProxyDirs(preferredProjectPath)
       : [getDesktopProresProxyDir()]
     const proxyFileName = persistentProxyFileNameForSource(normalizedPath)
     const proxyPath = join(proxyDirs[0], proxyFileName)
@@ -890,12 +942,17 @@ async function resolveVideoSourceFromPath(
       try {
         const existingStat = await fs.stat(existingProxyPath)
         if (existingStat.isFile()) {
-          await appendVideoDebugLog(`using saved prores proxy "${existingProxyPath}"`)
+          const stagedProxyPath =
+            preferredProjectPath && normalizePathKey(existingProxyPath) !== normalizePathKey(proxyPath)
+              ? await stageProjectScopedProxyIfAvailable(proxyPath, stat.mtimeMs, [existingProxyPath])
+              : null
+          const usableProxyPath = stagedProxyPath || existingProxyPath
+          await appendVideoDebugLog(`using saved prores proxy "${usableProxyPath}"`)
           return {
-            srcUrl: localPathToMediaUrl(existingProxyPath),
+            srcUrl: localPathToMediaUrl(usableProxyPath),
             sourceFilePath: normalizedPath,
             transcoded: true,
-            proxyFilePath: existingProxyPath,
+            proxyFilePath: usableProxyPath,
             proxyForSourcePath: normalizedPath,
           }
         }
@@ -906,12 +963,17 @@ async function resolveVideoSourceFromPath(
 
     const discoveredProxyPath = await resolveExistingPersistentProxy()
     if (discoveredProxyPath) {
-      await appendVideoDebugLog(`using discovered prores proxy "${discoveredProxyPath}"`)
+      const stagedProxyPath =
+        preferredProjectPath && normalizePathKey(discoveredProxyPath) !== normalizePathKey(proxyPath)
+          ? await stageProjectScopedProxyIfAvailable(proxyPath, stat.mtimeMs, [discoveredProxyPath])
+          : null
+      const usableProxyPath = stagedProxyPath || discoveredProxyPath
+      await appendVideoDebugLog(`using discovered prores proxy "${usableProxyPath}"`)
       return {
-        srcUrl: localPathToMediaUrl(discoveredProxyPath),
+        srcUrl: localPathToMediaUrl(usableProxyPath),
         sourceFilePath: normalizedPath,
         transcoded: true,
-        proxyFilePath: discoveredProxyPath,
+        proxyFilePath: usableProxyPath,
         proxyForSourcePath: normalizedPath,
       }
     }
@@ -968,7 +1030,7 @@ async function resolveVideoSourceFromPath(
 
   if (isMovMjpeg) {
     const proxyDirs = preferredProjectPath
-      ? [getProjectProresProxyDir(preferredProjectPath), getDesktopProresProxyDir()]
+      ? getProjectPersistentVideoProxyDirs(preferredProjectPath)
       : [getDesktopProresProxyDir()]
     const proxyFileName = persistentProxyFileNameForSource(normalizedPath)
     const proxyPath = join(proxyDirs[0], proxyFileName)
@@ -981,12 +1043,17 @@ async function resolveVideoSourceFromPath(
       try {
         const existingStat = await fs.stat(existingProxyPath)
         if (existingStat.isFile()) {
-          await appendVideoDebugLog(`using saved mjpeg playback proxy "${existingProxyPath}"`)
+          const stagedProxyPath =
+            preferredProjectPath && normalizePathKey(existingProxyPath) !== normalizePathKey(proxyPath)
+              ? await stageProjectScopedProxyIfAvailable(proxyPath, stat.mtimeMs, [existingProxyPath])
+              : null
+          const usableProxyPath = stagedProxyPath || existingProxyPath
+          await appendVideoDebugLog(`using saved mjpeg playback proxy "${usableProxyPath}"`)
           return {
-            srcUrl: localPathToMediaUrl(existingProxyPath),
+            srcUrl: localPathToMediaUrl(usableProxyPath),
             sourceFilePath: normalizedPath,
             transcoded: true,
-            proxyFilePath: existingProxyPath,
+            proxyFilePath: usableProxyPath,
             proxyForSourcePath: normalizedPath,
           }
         }
@@ -997,12 +1064,17 @@ async function resolveVideoSourceFromPath(
 
     const discoveredPlayback = await resolveExistingPlaybackProxy()
     if (discoveredPlayback) {
-      await appendVideoDebugLog(`using discovered mjpeg playback proxy "${discoveredPlayback}"`)
+      const stagedProxyPath =
+        preferredProjectPath && normalizePathKey(discoveredPlayback) !== normalizePathKey(proxyPath)
+          ? await stageProjectScopedProxyIfAvailable(proxyPath, stat.mtimeMs, [discoveredPlayback])
+          : null
+      const usableProxyPath = stagedProxyPath || discoveredPlayback
+      await appendVideoDebugLog(`using discovered mjpeg playback proxy "${usableProxyPath}"`)
       return {
-        srcUrl: localPathToMediaUrl(discoveredPlayback),
+        srcUrl: localPathToMediaUrl(usableProxyPath),
         sourceFilePath: normalizedPath,
         transcoded: true,
-        proxyFilePath: discoveredPlayback,
+        proxyFilePath: usableProxyPath,
         proxyForSourcePath: normalizedPath,
       }
     }
@@ -1069,8 +1141,8 @@ async function resolveVideoSourceFromPath(
     }
   }
 
-  const cacheKey = normalizePathKey(normalizedPath)
-  const proxyPath = videoProxyCacheFilePath(normalizedPath)
+  const cacheKey = buildVideoProxyCacheKey(normalizedPath, preferredProjectPath)
+  const proxyPath = videoProxyCacheFilePath(normalizedPath, preferredProjectPath)
   const cached = videoProxyCache.get(cacheKey)
   if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
     try {
@@ -1080,13 +1152,37 @@ async function resolveVideoSourceFromPath(
         srcUrl: localPathToMediaUrl(cached.proxyPath),
         sourceFilePath: normalizedPath,
         transcoded: true,
+        proxyFilePath: cached.proxyPath,
+        proxyForSourcePath: normalizedPath,
       }
     } catch {
       videoProxyCache.delete(cacheKey)
     }
   }
 
-  await ensureVideoProxyCacheDir()
+  if (preferredProjectPath) {
+    const stagedProxyPath = await stageProjectScopedProxyIfAvailable(proxyPath, stat.mtimeMs, [
+      existingProxyPath,
+      videoProxyCacheFilePath(normalizedPath),
+    ])
+    if (stagedProxyPath) {
+      videoProxyCache.set(cacheKey, {
+        mtimeMs: stat.mtimeMs,
+        size: stat.size,
+        proxyPath: stagedProxyPath,
+      })
+      await appendVideoDebugLog(`using project runtime proxy "${stagedProxyPath}"`)
+      return {
+        srcUrl: localPathToMediaUrl(stagedProxyPath),
+        sourceFilePath: normalizedPath,
+        transcoded: true,
+        proxyFilePath: stagedProxyPath,
+        proxyForSourcePath: normalizedPath,
+      }
+    }
+  }
+
+  await ensureVideoProxyCacheDir(preferredProjectPath)
   try {
     const proxyStat = await fs.stat(proxyPath)
     if (proxyStat.isFile() && proxyStat.mtimeMs >= stat.mtimeMs) {
@@ -1100,6 +1196,8 @@ async function resolveVideoSourceFromPath(
         srcUrl: localPathToMediaUrl(proxyPath),
         sourceFilePath: normalizedPath,
         transcoded: true,
+        proxyFilePath: proxyPath,
+        proxyForSourcePath: normalizedPath,
       }
     }
   } catch {
@@ -1118,6 +1216,8 @@ async function resolveVideoSourceFromPath(
       srcUrl: localPathToMediaUrl(proxyPath),
       sourceFilePath: normalizedPath,
       transcoded: true,
+      proxyFilePath: proxyPath,
+      proxyForSourcePath: normalizedPath,
     }
   } catch (error) {
     await appendVideoDebugLog(
@@ -1145,7 +1245,7 @@ async function inspectVideoSourcePath(
 
   const projectPath = options?.projectPath ?? null
   const proxyDirs = projectPath
-    ? [getProjectProresProxyDir(projectPath), getDesktopProresProxyDir()]
+    ? getProjectPersistentVideoProxyDirs(projectPath)
     : [getDesktopProresProxyDir()]
 
   const isProres = await detectProResCodec(normalizedPath).catch(() => false)
@@ -1513,18 +1613,48 @@ async function writeProjectToDisk(projectPath: string, project: ProjectFile) {
 }
 
 async function persistProjectVideoSnapshot(projectPath: string, items: CanvasItem[]): Promise<void> {
-  void projectPath
-  void items
-  // Video preview disk cache is intentionally disabled.
+  const targetDir = await ensureVideoProxyCacheDir(projectPath)
+  const proxiesToStage = new Map<string, string>()
+  for (const item of items) {
+    if (item.type !== 'video') continue
+    const sourcePath = item.sourceFilePath?.trim()
+    const srcPath = mediaUrlToLocalPath(item.srcUrl)
+    const proxyPath =
+      item.proxyFilePath?.trim() ||
+      (srcPath && sourcePath && normalizePathKey(srcPath) !== normalizePathKey(sourcePath) ? srcPath : '')
+    if (!proxyPath) continue
+    proxiesToStage.set(normalizePathKey(proxyPath), proxyPath)
+  }
+  await Promise.all(
+    Array.from(proxiesToStage.values()).map(async (proxyPath) => {
+      const targetProxyPath = join(targetDir, basename(proxyPath))
+      await stageProjectScopedProxyIfAvailable(targetProxyPath, 0, [proxyPath])
+    }),
+  )
 }
 
 async function cloneProjectVideoSnapshotIfNeeded(
   sourceProjectPath: string | null | undefined,
   targetProjectPath: string,
 ): Promise<void> {
-  void sourceProjectPath
-  void targetProjectPath
-  // Video preview disk cache is intentionally disabled.
+  if (!sourceProjectPath || !sourceProjectPath.trim()) return
+  const sourceProject = normalize(sourceProjectPath.trim())
+  const targetProject = normalize(targetProjectPath)
+  if (normalizePathKey(sourceProject) === normalizePathKey(targetProject)) return
+  const sourceDir = projectVideoSnapshotDir(sourceProject)
+  const targetDir = projectVideoSnapshotDir(targetProject)
+  if (normalizePathKey(sourceDir) === normalizePathKey(targetDir)) return
+  try {
+    await fs.access(sourceDir)
+  } catch {
+    return
+  }
+  await fs.mkdir(targetDir, { recursive: true })
+  await fs.cp(sourceDir, targetDir, {
+    recursive: true,
+    force: false,
+    errorOnExist: false,
+  })
 }
 
 let activeWindow: BrowserWindow | null = null
@@ -1886,7 +2016,7 @@ app.whenReady().then(() => {
       typeof payload?.projectPath === 'string' && payload.projectPath.trim().length > 0
         ? normalize(payload.projectPath.trim())
         : null
-    const dir = projectPath ? getProjectProresProxyDir(projectPath) : getDesktopProresProxyDir()
+    const dir = projectPath ? projectVideoSnapshotDir(projectPath) : getDesktopProresProxyDir()
     try {
       await fs.mkdir(dir, { recursive: true })
       const err = await shell.openPath(dir)
@@ -1990,7 +2120,7 @@ app.whenReady().then(() => {
             : 'This video needs a lightweight proxy (ProRes or MJPEG in MOV) or it may play as a black frame.',
         detail: unsavedProject
           ? 'Generate lightweight proxies now? The project is not saved yet, so proxies will be stored on the Desktop in Prores_proxy_temp.'
-          : 'Generate lightweight proxies now? They are saved next to the project in Prores_proxy_temp.',
+          : 'Generate lightweight proxies now? They are saved next to the project in a dedicated .video-proxy-cache folder.',
       })
       return response === 0
     },
