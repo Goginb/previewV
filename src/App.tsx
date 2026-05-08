@@ -21,11 +21,12 @@ import {
   updateProjectOpenProgress,
 } from './utils/warmupCanvasMedia'
 import { setVideoPlaybackSuspended } from './utils/videoGlobalPlayback'
-import type { ElectronProjectAPI } from './electron-api'
+import type { ElectronProjectAPI, EstimatingLaunchContext } from './electron-api'
 import type { DeserializedProject } from './types/project'
 import { useEstimatingIntegrationStore } from './integrations/estimating/store'
 
 type ProjectAPI = ElectronProjectAPI
+const LINKED_PROJECT_AUTOSAVE_DELAY_MS = 320
 
 function fileLabelFromStore(): string {
   const { currentProjectPath } = useCanvasStore.getState()
@@ -37,6 +38,20 @@ function fileLabelFromStore(): string {
 function fileLabelFromPath(path: string): string {
   const seg = path.split(/[/\\]/).filter(Boolean)
   return seg[seg.length - 1] ?? path
+}
+
+function linkedProjectPathFromContext(context: EstimatingLaunchContext | null): string {
+  return context?.linkedProjectPath?.trim() || ''
+}
+
+function isMissingProjectPathError(error: unknown): boolean {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : String(error ?? '')
+  return /ENOENT|no such file|cannot find/i.test(message)
 }
 
 function getCanvasCenterWorldAnchor(): { x: number; y: number } {
@@ -139,6 +154,11 @@ const App: React.FC = () => {
     resolve: (value: boolean) => void
   }>(null)
   const projectVideoHydrationRunRef = useRef(0)
+  const estimatingLaunchContextRef = useRef<EstimatingLaunchContext | null>(null)
+  const linkedProjectAutosaveEnabledRef = useRef(false)
+  const linkedProjectAutosaveTimerRef = useRef<number | null>(null)
+  const linkedProjectSaveInFlightRef = useRef<Promise<boolean> | null>(null)
+  const scheduleLinkedProjectAutosaveRef = useRef<() => void>(() => {})
 
   const isDailiesModalOpen = useUiStore((s) => s.isDailiesModalOpen)
   const isPrmModalOpen = useUiStore((s) => s.isPrmModalOpen)
@@ -221,6 +241,105 @@ const App: React.FC = () => {
     [completeProjectOpenProgress, loadProjectState, startProjectVideoHydration, waitForUiPaint],
   )
 
+  const saveLinkedProjectSnapshot = useCallback(
+    async (options?: { force?: boolean; alertOnError?: boolean }) => {
+      const projectAPI = window.electronAPI?.projectAPI
+      const linkedProjectPath = linkedProjectPathFromContext(estimatingLaunchContextRef.current)
+
+      if (!projectAPI || !linkedProjectPath) {
+        return true
+      }
+
+      if (linkedProjectAutosaveTimerRef.current !== null && options?.force) {
+        window.clearTimeout(linkedProjectAutosaveTimerRef.current)
+        linkedProjectAutosaveTimerRef.current = null
+      }
+
+      if (linkedProjectSaveInFlightRef.current) {
+        const inFlightResult = await linkedProjectSaveInFlightRef.current.catch(() => false)
+        if (!inFlightResult) {
+          return false
+        }
+        if (options?.force || useCanvasStore.getState().isDirty) {
+          return saveLinkedProjectSnapshot(options)
+        }
+        return true
+      }
+
+      if (!options?.force && !useCanvasStore.getState().isDirty) {
+        return true
+      }
+
+      const savePromise = (async () => {
+        flushImageAnnotations()
+        const snapshotState = useCanvasStore.getState()
+        const snapshotItems = snapshotState.items
+        const projectData = snapshotState.getProjectDataForSave()
+        const res = await projectAPI.saveProject({
+          projectData,
+          path: linkedProjectPath,
+        })
+
+        if (!res) {
+          return false
+        }
+
+        const latestState = useCanvasStore.getState()
+        const itemsUnchanged = latestState.items === snapshotItems
+
+        if (itemsUnchanged || options?.force) {
+          useCanvasStore.setState((state) => ({
+            currentProjectPath: res.path,
+            projectMeta: res.project.meta,
+            isDirty: state.items === snapshotItems ? false : state.isDirty,
+          }))
+        } else {
+          useCanvasStore.setState({
+            currentProjectPath: res.path,
+            projectMeta: res.project.meta,
+          })
+          scheduleLinkedProjectAutosaveRef.current()
+        }
+
+        return true
+      })()
+        .catch((error: any) => {
+          if (options?.alertOnError) {
+            alert(error?.message ?? String(error))
+          }
+          return false
+        })
+        .finally(() => {
+          linkedProjectSaveInFlightRef.current = null
+        })
+
+      linkedProjectSaveInFlightRef.current = savePromise
+      return savePromise
+    },
+    [],
+  )
+
+  const scheduleLinkedProjectAutosave = useCallback(() => {
+    if (!linkedProjectAutosaveEnabledRef.current) {
+      return
+    }
+
+    if (!linkedProjectPathFromContext(estimatingLaunchContextRef.current)) {
+      return
+    }
+
+    if (linkedProjectAutosaveTimerRef.current !== null) {
+      window.clearTimeout(linkedProjectAutosaveTimerRef.current)
+    }
+
+    linkedProjectAutosaveTimerRef.current = window.setTimeout(() => {
+      linkedProjectAutosaveTimerRef.current = null
+      void saveLinkedProjectSnapshot()
+    }, LINKED_PROJECT_AUTOSAVE_DELAY_MS)
+  }, [saveLinkedProjectSnapshot])
+
+  scheduleLinkedProjectAutosaveRef.current = scheduleLinkedProjectAutosave
+
   useEffect(() => {
     const onHelp = () => setHelpOpen(true)
     window.addEventListener('app-show-help', onHelp)
@@ -291,6 +410,46 @@ const App: React.FC = () => {
     })
     return unsub
   }, [])
+
+  useEffect(() => {
+    let prevDirty = useCanvasStore.getState().isDirty
+    const unsub = useCanvasStore.subscribe((state) => {
+      if (state.isDirty && !prevDirty) {
+        scheduleLinkedProjectAutosave()
+      }
+      prevDirty = state.isDirty
+    })
+
+    return () => {
+      unsub()
+      if (linkedProjectAutosaveTimerRef.current !== null) {
+        window.clearTimeout(linkedProjectAutosaveTimerRef.current)
+        linkedProjectAutosaveTimerRef.current = null
+      }
+    }
+  }, [scheduleLinkedProjectAutosave])
+
+  useEffect(() => {
+    window.__previewvLinkedAutosave = async () => {
+      try {
+        const integration = useEstimatingIntegrationStore.getState()
+        if (integration.active) {
+          await integration.flushPendingShotSync()
+        }
+        return saveLinkedProjectSnapshot({
+          force: true,
+          alertOnError: true,
+        })
+      } catch (error: any) {
+        alert(error?.message ?? String(error))
+        return false
+      }
+    }
+
+    return () => {
+      window.__previewvLinkedAutosave = undefined
+    }
+  }, [saveLinkedProjectSnapshot])
 
   useEffect(() => {
     const handler = async (e: Event) => {
@@ -458,7 +617,11 @@ const App: React.FC = () => {
         return
       }
 
+      estimatingLaunchContextRef.current = context
+      linkedProjectAutosaveEnabledRef.current = false
+
       const projectAPI = window.electronAPI?.projectAPI
+      const linkedProjectPath = linkedProjectPathFromContext(context)
 
       try {
         const result =
@@ -472,7 +635,30 @@ const App: React.FC = () => {
         }
 
         setVideoPlaybackSuspended(true)
-        loadProjectState(createEmptyProject(), null)
+        let loadedLinkedProject = false
+
+        if (linkedProjectPath && projectAPI?.openProjectByPath) {
+          try {
+            const linkedProject = await projectAPI.openProjectByPath(linkedProjectPath)
+            if (cancelled) {
+              return
+            }
+            if (linkedProject) {
+              loadedLinkedProject = true
+              loadProjectState(linkedProject.project, linkedProject.path)
+              startProjectVideoHydration(linkedProject.project)
+            }
+          } catch (error) {
+            if (!isMissingProjectPathError(error)) {
+              throw error
+            }
+          }
+        }
+
+        if (!loadedLinkedProject) {
+          cancelProjectVideoHydration()
+          loadProjectState(createEmptyProject(), linkedProjectPath || null)
+        }
 
         const folderMediaRows = await Promise.all(
           result.folderPaths.map((folderPath) =>
@@ -495,20 +681,27 @@ const App: React.FC = () => {
           )
         }
 
-        await importMediaPathsToCanvas(importPaths, getCanvasCenterWorldAnchor())
+        const existingSourcePaths = collectExistingSourcePaths(useCanvasStore.getState().items)
+        const missingImportPaths = importPaths.filter(
+          (path) => !existingSourcePaths.has(normalizePathKey(path)),
+        )
+
+        if (missingImportPaths.length > 0) {
+          await importMediaPathsToCanvas(missingImportPaths, getCanvasCenterWorldAnchor())
+        }
         if (cancelled) {
           return
         }
 
-        loadProjectState(getProjectDataForSave(), null)
+        const shouldFrameImportedMedia = !loadedLinkedProject
 
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            if (cancelled) return
-            const root = document.getElementById('previewv-canvas-root')
-            const rect = root?.getBoundingClientRect()
-            if (!rect) return
+        if (shouldFrameImportedMedia) {
+          await waitForUiPaint(96)
 
+          const root = document.getElementById('previewv-canvas-root')
+          const rect = root?.getBoundingClientRect()
+
+          if (rect) {
             const preferredItemId = findImportedVideoItemId(result.preferredMediaPath)
 
             if (preferredItemId) {
@@ -519,12 +712,29 @@ const App: React.FC = () => {
                 rect.height,
                 48,
               )
-              return
+            } else {
+              useCanvasStore.getState().frameAllItemsInViewport(rect.width, rect.height)
             }
+          }
+        }
 
-            useCanvasStore.getState().frameAllItemsInViewport(rect.width, rect.height)
-          })
-        })
+        if (linkedProjectPath) {
+          const shouldSaveLinkedProject = !loadedLinkedProject || missingImportPaths.length > 0
+          if (shouldSaveLinkedProject) {
+            await waitForUiPaint(96)
+            const saved = await saveLinkedProjectSnapshot({
+              force: true,
+              alertOnError: true,
+            })
+            if (!saved) {
+              throw new Error('Failed to initialize linked PreviewV project.')
+            }
+          }
+        } else if (!loadedLinkedProject) {
+          loadProjectState(getProjectDataForSave(), null)
+        }
+
+        linkedProjectAutosaveEnabledRef.current = true
       } catch (error: any) {
         alert(error?.message ?? String(error))
       }
@@ -534,8 +744,16 @@ const App: React.FC = () => {
 
     return () => {
       cancelled = true
+      linkedProjectAutosaveEnabledRef.current = false
     }
-  }, [getProjectDataForSave, loadProjectState])
+  }, [
+    cancelProjectVideoHydration,
+    getProjectDataForSave,
+    loadProjectState,
+    saveLinkedProjectSnapshot,
+    startProjectVideoHydration,
+    waitForUiPaint,
+  ])
 
   useEffect(() => {
     const flushEstimatingDrafts = () => {
@@ -543,7 +761,7 @@ const App: React.FC = () => {
       if (!integration.active) {
         return
       }
-      void integration.saveDirtyShots()
+      void integration.flushPendingShotSync()
     }
 
     const handleVisibilityChange = () => {

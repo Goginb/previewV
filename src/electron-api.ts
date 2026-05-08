@@ -19,6 +19,7 @@ export interface EstimatingLaunchContext {
   sessionId: string
   selectedShotId: string
   saveDirectory: string
+  linkedProjectPath: string
   writableTaskKeys: string[]
   language: 'en' | 'ru'
 }

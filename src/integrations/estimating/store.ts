@@ -55,6 +55,7 @@ interface EstimatingIntegrationState {
   ) => void
   saveShot: (shotId: string) => Promise<void>
   saveDirtyShots: () => Promise<void>
+  flushPendingShotSync: () => Promise<void>
   selectShotBySourcePath: (sourcePath: string) => Promise<void>
 }
 
@@ -209,6 +210,44 @@ function collectDirtyShotIds(state: Pick<EstimatingIntegrationState, 'draftsBySh
         !!state.draftsByShotId[shotId] && (ui.status === 'dirty' || ui.status === 'error'),
     )
     .map(([shotId]) => shotId)
+}
+
+function collectPendingShotIds(
+  state: Pick<EstimatingIntegrationState, 'draftsByShotId' | 'uiByShotId'>,
+): string[] {
+  const pending = new Set<string>(collectDirtyShotIds(state))
+
+  for (const shotId of pendingShotSaveTimeouts.keys()) {
+    pending.add(shotId)
+  }
+
+  for (const shotId of inFlightShotSaves) {
+    pending.add(shotId)
+  }
+
+  for (const [shotId, ui] of Object.entries(state.uiByShotId)) {
+    if (ui.status === 'saving' && state.draftsByShotId[shotId]) {
+      pending.add(shotId)
+    }
+  }
+
+  return [...pending]
+}
+
+async function waitForShotSyncIdle(timeoutMs = 4000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+
+  while (Date.now() < deadline) {
+    if (pendingShotSaveTimeouts.size === 0 && inFlightShotSaves.size === 0) {
+      return
+    }
+
+    await new Promise<void>((resolve) => {
+      window.setTimeout(resolve, 40)
+    })
+  }
+
+  throw new Error('Timed out while waiting for estimating shot sync to finish.')
 }
 
 function labelForStatus(language: 'en' | 'ru', status: ShotSyncStatus): string {
@@ -454,6 +493,29 @@ export const useEstimatingIntegrationStore = create<EstimatingIntegrationState>(
     })
 
     await Promise.all(dirtyShotIds.map((shotId) => get().saveShot(shotId)))
+  },
+
+  flushPendingShotSync: async () => {
+    const kickPendingSaves = async () => {
+      const pendingShotIds = collectPendingShotIds(get())
+
+      pendingShotIds.forEach((shotId) => {
+        clearQueuedShotSave(shotId)
+      })
+
+      if (pendingShotIds.length > 0) {
+        await Promise.all(pendingShotIds.map((shotId) => get().saveShot(shotId)))
+      }
+    }
+
+    await kickPendingSaves()
+    await waitForShotSyncIdle()
+
+    const remainingDirtyShotIds = collectDirtyShotIds(get())
+    if (remainingDirtyShotIds.length > 0) {
+      await Promise.all(remainingDirtyShotIds.map((shotId) => get().saveShot(shotId)))
+      await waitForShotSyncIdle()
+    }
   },
 
   selectShotBySourcePath: async (sourcePath) => {

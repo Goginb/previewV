@@ -9,6 +9,7 @@ interface PreviewVProjectState {
 interface Window {
   __previewvProjectState?: PreviewVProjectState
   __previewvPendingProjectPath?: string | undefined
+  __previewvLinkedAutosave?: (() => Promise<boolean>) | undefined
   electronAPI?: {
     platform: string
     projectAPI: import('./electron-api').ElectronProjectAPI

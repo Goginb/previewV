@@ -37,6 +37,7 @@ interface EstimatingLaunchContext {
   sessionId: string
   selectedShotId: string
   saveDirectory: string
+  linkedProjectPath: string
   writableTaskKeys: string[]
   language: 'en' | 'ru'
 }
@@ -180,6 +181,7 @@ function parseEstimatingLaunchContextFromArgv(argv: string[]): EstimatingLaunchC
     sessionId,
     selectedShotId: findArgValue(argv, 'estimating-selected-shot-id').trim(),
     saveDirectory: findArgValue(argv, 'estimating-save-directory').trim(),
+    linkedProjectPath: findArgValue(argv, 'estimating-linked-project-path').trim(),
     writableTaskKeys,
     language,
   }
@@ -1549,6 +1551,20 @@ function setupWindowCloseGuard(win: BrowserWindow): void {
   win.on('close', async (e) => {
     if (allowWindowClose.get(win)) return
     e.preventDefault()
+    if (launchEstimatingContext?.linkedProjectPath) {
+      try {
+        const autosaveCompleted = await win.webContents.executeJavaScript(
+          `window.__previewvLinkedAutosave ? window.__previewvLinkedAutosave() : true`,
+        )
+        if (autosaveCompleted !== false) {
+          allowWindowClose.set(win, true)
+          win.close()
+        }
+      } catch {
+        // Keep the window open if linked autosave could not complete.
+      }
+      return
+    }
     let state: { dirty?: boolean; path?: string | null } = {}
     try {
       state = await win.webContents.executeJavaScript(
