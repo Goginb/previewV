@@ -17,18 +17,27 @@ export function beginProjectOpenProgress(line: string): number {
   return sessionId
 }
 
-export function updateProjectOpenProgress(sessionId: number, pct: number, line: string): void {
+export function updateProjectOpenProgress(
+  sessionId: number,
+  pct: number,
+  line: string,
+  title?: string,
+): void {
   if (sessionId !== projectOpenSessionId) return
   const store = usePreloadStore.getState()
   store.setOpen(true)
-  store.setProgress(pct, line)
+  store.setProgress(pct, line, title)
 }
 
-export function finishProjectOpenProgress(sessionId: number, line = 'Project loaded'): void {
+export function finishProjectOpenProgress(
+  sessionId: number,
+  line = 'Project loaded',
+  title?: string,
+): void {
   if (sessionId !== projectOpenSessionId) return
   const store = usePreloadStore.getState()
   store.setOpen(true)
-  store.setProgress(100, line)
+  store.setProgress(100, line, title)
   window.setTimeout(() => {
     if (sessionId !== projectOpenSessionId) return
     closePreloadUi()

@@ -631,11 +631,38 @@ const App: React.FC = () => {
 
       const projectAPI = window.electronAPI?.projectAPI
       const linkedProjectPath = linkedProjectPathFromContext(context)
+      const progressTitle =
+        context.language === 'ru' ? 'Открываем linked PreviewV' : 'Opening linked PreviewV'
+      const progressLine = {
+        preparing:
+          context.language === 'ru' ? 'Готовим linked-проект...' : 'Preparing linked project...',
+        readingSession:
+          context.language === 'ru' ? 'Читаем estimating session...' : 'Reading estimating session...',
+        openingLinked:
+          context.language === 'ru' ? 'Открываем сохранённый layout...' : 'Opening saved layout...',
+        preparingCanvas:
+          context.language === 'ru' ? 'Подготавливаем linked canvas...' : 'Preparing linked canvas...',
+        scanningFolders:
+          context.language === 'ru' ? 'Сканируем папки проекта...' : 'Scanning project folders...',
+        groupingBriefs:
+          context.language === 'ru' ? 'Группируем медиа по ТЗ...' : 'Grouping media by brief...',
+        framing:
+          context.language === 'ru' ? 'Готовим раскладку...' : 'Framing linked board...',
+        saving:
+          context.language === 'ru' ? 'Сохраняем linked layout...' : 'Saving linked layout...',
+        hydrating:
+          context.language === 'ru' ? 'Восстанавливаем video previews...' : 'Restoring video previews...',
+        ready:
+          context.language === 'ru' ? 'PreviewV готов.' : 'PreviewV is ready.',
+      }
+      const progressSessionId = beginProjectOpenProgress(progressLine.preparing)
+      updateProjectOpenProgress(progressSessionId, 10, progressLine.readingSession, progressTitle)
 
       try {
         const result =
           await useEstimatingIntegrationStore.getState().initializeFromLaunchContext(context)
         if (cancelled) {
+          cancelProjectOpenProgress(progressSessionId)
           return
         }
 
@@ -645,20 +672,24 @@ const App: React.FC = () => {
 
         setVideoPlaybackSuspended(true)
         let loadedLinkedProject = false
+        let pendingHydrationProject: DeserializedProject | null = null
 
         if (linkedProjectPath && projectAPI?.openProjectByPath) {
           try {
+            updateProjectOpenProgress(progressSessionId, 22, progressLine.openingLinked, progressTitle)
             const linkedProject = await projectAPI.openProjectByPath(linkedProjectPath)
             if (cancelled) {
+              cancelProjectOpenProgress(progressSessionId)
               return
             }
             if (linkedProject) {
               loadedLinkedProject = true
+              updateProjectOpenProgress(progressSessionId, 34, progressLine.preparingCanvas, progressTitle)
               loadProjectState(linkedProject.project, linkedProject.path)
               // Reopen performance matters here: linked sidecars should reuse
               // already-saved source/proxy state and only hydrate when needed.
               if (needsProjectVideoHydration(linkedProject.project.items)) {
-                startProjectVideoHydration(linkedProject.project)
+                pendingHydrationProject = linkedProject.project
               } else {
                 cancelProjectVideoHydration()
               }
@@ -672,12 +703,14 @@ const App: React.FC = () => {
 
         if (!loadedLinkedProject) {
           cancelProjectVideoHydration()
+          updateProjectOpenProgress(progressSessionId, 34, progressLine.preparingCanvas, progressTitle)
           loadProjectState(createEmptyProject(), linkedProjectPath || null)
         }
 
         const shouldEnumerateProjectFolders =
           !loadedLinkedProject || useCanvasStore.getState().items.length === 0
 
+        updateProjectOpenProgress(progressSessionId, 44, progressLine.scanningFolders, progressTitle)
         const folderMediaRows = shouldEnumerateProjectFolders
           ? await Promise.all(
               result.folderPaths.map((folderPath) =>
@@ -686,6 +719,7 @@ const App: React.FC = () => {
             )
           : []
         if (cancelled) {
+          cancelProjectOpenProgress(progressSessionId)
           return
         }
 
@@ -707,21 +741,30 @@ const App: React.FC = () => {
         )
 
         if (missingImportPaths.length > 0) {
+          updateProjectOpenProgress(progressSessionId, 56, progressLine.groupingBriefs, progressTitle)
           // Estimating imports are intentionally not the same as generic
           // "Add folder": first-time linked media is grouped by brief and
           // wrapped into backdrop/note structure.
           await importEstimatingGroupedMediaToCanvas(
             missingImportPaths,
             getCanvasCenterWorldAnchor(),
+            {
+              startPct: 60,
+              endPct: 84,
+              onProgress: (pct, line) =>
+                updateProjectOpenProgress(progressSessionId, pct, line, progressTitle),
+            },
           )
         }
         if (cancelled) {
+          cancelProjectOpenProgress(progressSessionId)
           return
         }
 
         const shouldFrameImportedMedia = !loadedLinkedProject
 
         if (shouldFrameImportedMedia) {
+          updateProjectOpenProgress(progressSessionId, 88, progressLine.framing, progressTitle)
           await waitForUiPaint(96)
 
           const root = document.getElementById('previewv-canvas-root')
@@ -747,6 +790,7 @@ const App: React.FC = () => {
         if (linkedProjectPath) {
           const shouldSaveLinkedProject = !loadedLinkedProject || missingImportPaths.length > 0
           if (shouldSaveLinkedProject) {
+            updateProjectOpenProgress(progressSessionId, 94, progressLine.saving, progressTitle)
             await waitForUiPaint(96)
             const saved = await saveLinkedProjectSnapshot({
               force: true,
@@ -761,7 +805,14 @@ const App: React.FC = () => {
         }
 
         linkedProjectAutosaveEnabledRef.current = true
+        if (pendingHydrationProject) {
+          updateProjectOpenProgress(progressSessionId, 96, progressLine.hydrating, progressTitle)
+          startProjectVideoHydration(pendingHydrationProject)
+        } else {
+          finishProjectOpenProgress(progressSessionId, progressLine.ready, progressTitle)
+        }
       } catch (error: any) {
+        cancelProjectOpenProgress(progressSessionId)
         alert(error?.message ?? String(error))
       }
     }

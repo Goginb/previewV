@@ -47,6 +47,7 @@ interface EstimatingIntegrationState {
   ) => Promise<EstimatingVideoBootstrapResult>
   setDraftValue: (shotId: string, taskKey: string, value: string) => void
   queueSaveShot: (shotId: string, options?: { immediate?: boolean }) => void
+  acceptOriginalValue: (shotId: string, taskKey: string) => Promise<void>
   adjustDraftValue: (
     shotId: string,
     taskKey: string,
@@ -359,6 +360,46 @@ export const useEstimatingIntegrationStore = create<EstimatingIntegrationState>(
     }, ESTIMATING_SHOT_AUTOSAVE_DELAY_MS)
 
     pendingShotSaveTimeouts.set(shotId, timeoutId)
+  },
+
+  acceptOriginalValue: async (shotId, taskKey) => {
+    const state = get()
+    const shot = state.shotsById[shotId]
+    if (!shot) {
+      return
+    }
+
+    const task = shot.tasks.find((entry) => entry.key === taskKey)
+    if (!task || task.originalValue === null || task.originalValue === undefined) {
+      return
+    }
+
+    const nextValue = formatDraftValue(task.originalValue)
+    const currentDraftValue = state.draftsByShotId[shotId]?.[taskKey] ?? ''
+    const currentLiveValue = formatDraftValue(task.currentValue)
+    if (currentDraftValue === nextValue && currentLiveValue === nextValue) {
+      return
+    }
+
+    clearQueuedShotSave(shotId)
+    set((current) => ({
+      draftsByShotId: {
+        ...current.draftsByShotId,
+        [shotId]: {
+          ...(current.draftsByShotId[shotId] ?? {}),
+          [taskKey]: nextValue,
+        },
+      },
+      uiByShotId: {
+        ...current.uiByShotId,
+        [shotId]: {
+          status: 'dirty',
+          message: '',
+        },
+      },
+    }))
+
+    await get().saveShot(shotId)
   },
 
   adjustDraftValue: (shotId, taskKey, direction, modifiers) =>

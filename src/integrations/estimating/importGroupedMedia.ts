@@ -49,6 +49,12 @@ interface GroupDefinition {
   color: string
 }
 
+interface EstimatingImportProgressOptions {
+  startPct?: number
+  endPct?: number
+  onProgress?: (pct: number, line: string) => void
+}
+
 type ImportedTile =
   | {
       kind: 'video'
@@ -307,6 +313,7 @@ async function importEntryTile(entry: ImportEntry, index: number): Promise<Impor
 export async function importEstimatingGroupedMediaToCanvas(
   rawPaths: string[],
   worldAnchor: { x: number; y: number },
+  progress?: EstimatingImportProgressOptions,
 ): Promise<void> {
   const store = useEstimatingIntegrationStore.getState()
   const language = store.context?.language ?? 'en'
@@ -338,8 +345,31 @@ export async function importEstimatingGroupedMediaToCanvas(
     return
   }
 
+  const progressStart = progress?.startPct ?? 0
+  const progressEnd = progress?.endPct ?? 100
+  const progressSpan = Math.max(0, progressEnd - progressStart)
+  const progressTotalUnits = Math.max(1, entries.length + 2)
+  const importStartLine =
+    language === 'ru'
+      ? `Подгружаем превью: ${entries.length}`
+      : `Loading previews: ${entries.length}`
+  progress?.onProgress?.(progressStart, importStartLine)
+  let completedImportUnits = 0
+  const reportImportProgress = (line: string) => {
+    const pct = progressStart + (Math.min(completedImportUnits, progressTotalUnits) / progressTotalUnits) * progressSpan
+    progress?.onProgress?.(pct, line)
+  }
+
   const importedTiles = await mapPool(entries, IMAGE_IMPORT_CONCURRENCY, (entry, index) =>
-    importEntryTile(entry, index),
+    importEntryTile(entry, index).then((tile) => {
+      completedImportUnits += 1
+      const line =
+        language === 'ru'
+          ? `Подгружено превью ${completedImportUnits}/${entries.length}`
+          : `Loaded previews ${completedImportUnits}/${entries.length}`
+      reportImportProgress(line)
+      return tile
+    }),
   )
   const tileByPathKey = new Map<string, ImportedTile>()
   for (const tile of importedTiles) {
@@ -521,13 +551,32 @@ export async function importEstimatingGroupedMediaToCanvas(
   if (selectionIds.length > 0) {
     setSelection(selectionIds)
   }
+  completedImportUnits += 1
+  reportImportProgress(language === 'ru' ? 'Раскладываем плитки...' : 'Placing tiles...')
 
   if (videoResolveQueue.length === 0) {
+    progress?.onProgress?.(
+      progressEnd,
+      language === 'ru' ? 'Превью готовы.' : 'Previews are ready.',
+    )
     return
   }
 
-  void mapPool(videoResolveQueue, VIDEO_RESOLVE_CONCURRENCY, async (entry) => {
+  let resolvedVideoCount = 0
+  await mapPool(videoResolveQueue, VIDEO_RESOLVE_CONCURRENCY, async (entry) => {
     const resolved = await resolveVideoSrcUrl(entry.originalPath, currentProjectPath)
+    resolvedVideoCount += 1
+    const resolvePct =
+      progressStart +
+      ((completedImportUnits + resolvedVideoCount / Math.max(1, videoResolveQueue.length)) /
+        Math.max(1, progressTotalUnits)) *
+        progressSpan
+    progress?.onProgress?.(
+      resolvePct,
+      language === 'ru'
+        ? `Готовим video preview ${resolvedVideoCount}/${videoResolveQueue.length}`
+        : `Preparing video preview ${resolvedVideoCount}/${videoResolveQueue.length}`,
+    )
     if (!resolved.srcUrl || resolved.srcUrl === entry.currentSrcUrl) {
       return null
     }
@@ -544,9 +593,12 @@ export async function importEstimatingGroupedMediaToCanvas(
     const batch = updates.filter(
       (update): update is { id: string; updates: { srcUrl: string } } => !!update,
     )
-    if (batch.length === 0) {
-      return
+    if (batch.length > 0) {
+      updateItemsBatch(batch, { recordHistory: false, markDirty: false })
     }
-    updateItemsBatch(batch, { recordHistory: false, markDirty: false })
+    progress?.onProgress?.(
+      progressEnd,
+      language === 'ru' ? 'Превью готовы.' : 'Previews are ready.',
+    )
   })
 }

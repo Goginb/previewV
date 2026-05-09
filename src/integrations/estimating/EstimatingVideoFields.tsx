@@ -22,6 +22,13 @@ function getPlaceholderValue(
   return Number(sourceValue.toFixed(4)).toString()
 }
 
+function formatCompactTaskValue(value: number | null | undefined): string {
+  if (value === null || value === undefined) {
+    return ''
+  }
+  return Number(value.toFixed(4)).toString()
+}
+
 const PANEL_MIN_WIDTH_ONE_COLUMN = 220
 const PANEL_MIN_WIDTH_TWO_COLUMNS = 300
 const PANEL_MIN_WIDTH_THREE_COLUMNS = 380
@@ -79,6 +86,7 @@ export const EstimatingVideoFields: React.FC<EstimatingVideoFieldsProps> = ({
   const adjustDraftValue = useEstimatingIntegrationStore((state) => state.adjustDraftValue)
   const saveShot = useEstimatingIntegrationStore((state) => state.saveShot)
   const selectShotBySourcePath = useEstimatingIntegrationStore((state) => state.selectShotBySourcePath)
+  const acceptOriginalValue = useEstimatingIntegrationStore((state) => state.acceptOriginalValue)
 
   if (!shot || writableTasks.length === 0) {
     return null
@@ -126,6 +134,11 @@ export const EstimatingVideoFields: React.FC<EstimatingVideoFieldsProps> = ({
           const liveTask = shot.tasks.find((entry) => entry.key === task.key)
           const value = drafts[task.key] ?? ''
           const placeholder = getPlaceholderValue(liveTask?.currentValue, liveTask?.originalValue)
+          const originalValueLabel = formatCompactTaskValue(liveTask?.originalValue)
+          const originalValueAcceptedTitle =
+            language === 'ru'
+              ? `Двойной клик: принять значение из source сметы (${originalValueLabel})`
+              : `Double-click to accept source estimate value (${originalValueLabel})`
 
           return (
             <label
@@ -137,9 +150,30 @@ export const EstimatingVideoFields: React.FC<EstimatingVideoFieldsProps> = ({
                 minHeight: PANEL_ROW_HEIGHT,
               }}
             >
-              <span className="truncate text-[8px] font-semibold uppercase tracking-[0.12em] text-slate-300">
-                {task.label}
-              </span>
+              <div className="flex items-center justify-between gap-1">
+                <span className="truncate text-[8px] font-semibold uppercase tracking-[0.12em] text-slate-300">
+                  {task.label}
+                </span>
+                {originalValueLabel ? (
+                  <span
+                    className="shrink-0 rounded border px-1 py-[2px] text-[7px] font-semibold uppercase tracking-[0.12em] text-amber-100"
+                    style={{
+                      borderColor: 'rgba(251, 191, 36, 0.26)',
+                      background: 'rgba(120, 53, 15, 0.34)',
+                    }}
+                    title={originalValueAcceptedTitle}
+                    onMouseDown={(event) => event.stopPropagation()}
+                    onDoubleClick={(event) => {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      void selectShotBySourcePath(sourcePath)
+                      void acceptOriginalValue(shotId, task.key)
+                    }}
+                  >
+                    {(language === 'ru' ? 'исх' : 'src') + ' ' + originalValueLabel}
+                  </span>
+                ) : null}
+              </div>
               <div className="flex items-center gap-1">
                 <button
                   type="button"
@@ -171,6 +205,7 @@ export const EstimatingVideoFields: React.FC<EstimatingVideoFieldsProps> = ({
                   }}
                   value={value}
                   placeholder={placeholder}
+                  title={originalValueLabel ? originalValueAcceptedTitle : undefined}
                   inputMode="decimal"
                   onChange={(event) => {
                     setDraftValue(shotId, task.key, event.target.value)
@@ -181,6 +216,16 @@ export const EstimatingVideoFields: React.FC<EstimatingVideoFieldsProps> = ({
                   }}
                   onBlur={() => {
                     void saveShot(shotId)
+                  }}
+                  onDoubleClick={(event) => {
+                    if (!originalValueLabel) {
+                      event.stopPropagation()
+                      return
+                    }
+                    event.preventDefault()
+                    event.stopPropagation()
+                    void selectShotBySourcePath(sourcePath)
+                    void acceptOriginalValue(shotId, task.key)
                   }}
                   onKeyDown={(event) => {
                     const isMinusKey = event.code === 'Minus' || event.code === 'NumpadSubtract'
