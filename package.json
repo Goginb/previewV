@@ -1,6 +1,6 @@
 {
   "name": "previewv",
-  "version": "0.2.52",
+  "version": "0.2.53",
   "description": "Infinite canvas video reference board",
   "type": "module",
   "main": "out/main/index.js",
@@ -17,7 +17,8 @@
     "build:win:portable": "npm run ensure:ffmpeg && npm run build && electron-builder --win portable && npm run sync:version-marker",
     "build:win:zip": "npm run ensure:ffmpeg && npm run build && electron-builder --win zip && npm run sync:version-marker",
     "build:win:all": "npm run ensure:ffmpeg && npm run build && electron-builder --win nsis --win portable --win zip && npm run sync:version-marker",
-    "build:dist": "npm run build:win:all"
+    "build:dist": "npm run build:win:all",
+    "release:github": "npm run ensure:ffmpeg && npm run build && electron-builder --win nsis --win portable --win zip --publish always && npm run sync:version-marker"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
@@ -102,6 +103,14 @@
     },
     "portable": {
       "artifactName": "${productName} Portable ${version}.${ext}"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Goginb",
+        "repo": "previewV",
+        "releaseType": "release"
+      }
+    ]
   }
 }

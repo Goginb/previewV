@@ -6,6 +6,7 @@ import { isRasterFilePath, isVideoFilePath } from '../../utils/mediaFileExtensio
 import { getNoteCreationMetricsForText } from '../../utils/noteCreation'
 import { localPathToMediaUrl } from '../../utils/projectSerializer'
 import { normalizePathKey } from '../../utils/sourcePaths'
+import { DEFAULT_MEDIA_ROW_CAP } from '../../utils/mediaLayout'
 import { defaultVideoTileSizeForNew } from '../../utils/tileSizing'
 import { backdropHeaderHeight } from '../../utils/backdrops'
 import { getEstimatingVideoMinimumWidth, getEstimatingVideoPanelHeight } from './EstimatingVideoFields'
@@ -24,7 +25,7 @@ import type { EstimatingSessionShot } from './types'
 const TILE_GAP = 16
 const GROUP_GAP = 72
 const GROUP_NOTE_GAP = 24
-const GROUP_ROW_CAP = 5
+const GROUP_ROW_CAP = DEFAULT_MEDIA_ROW_CAP
 const IMAGE_IMPORT_CONCURRENCY = 6
 const VIDEO_RESOLVE_CONCURRENCY = 3
 const BACKDROP_PAD = 28

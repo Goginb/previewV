@@ -6,12 +6,13 @@ import { defaultVideoTileSizeForNew, maxVideoTileOuterSize } from './tileSizing'
 import { setVideoPlaybackSuspended } from './videoGlobalPlayback'
 import { requestVideoWarmupEarly } from './warmupCanvasMedia'
 import { shouldGenerateProxiesForImport } from './proresImportPrompt'
+import { DEFAULT_MEDIA_ROW_CAP } from './mediaLayout'
 import type { ImageItem, VideoItem } from '../types'
 
 /** Above this count, enable global “Stop all” so the machine is not flooded with decoders. */
 const AUTO_SUSPEND_PLAYBACK_FILE_COUNT = 20
 
-const ROW_CAP = 20
+const ROW_CAP = DEFAULT_MEDIA_ROW_CAP
 const SECTION_GAP = 48
 const GAP = 16
 const APPEND_ROW_GAP = 40

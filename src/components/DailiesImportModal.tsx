@@ -1,9 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { useUiStore } from '../store/uiStore'
 import { useCanvasStore } from '../store/canvasStore'
-import { defaultVideoTileSizeForNew } from '../utils/tileSizing'
-import { shouldGenerateProxiesForImport } from '../utils/proresImportPrompt'
-import type { CanvasItem } from '../types'
+import { importMediaPathsToCanvas } from '../utils/importMediaPaths'
 
 export const DailiesImportModal: React.FC = () => {
   const {
@@ -81,87 +79,11 @@ export const DailiesImportModal: React.FC = () => {
         return
       }
 
-      const state = useCanvasStore.getState()
-      const { viewport } = state
-      const videoPaths = paths.filter((p) => /\.(mp4|webm|mov|mkv|avi|m4v|ogv)$/i.test(p))
-      const generateProxy = await shouldGenerateProxiesForImport(videoPaths, state.currentProjectPath)
-      
-      // Place new items below existing content, or at screen center if canvas is empty
-      const ROW_GAP = 40
-      let startX: number
-      let startY: number
+      const { viewport } = useCanvasStore.getState()
+      const centerWorldX = (-viewport.x + window.innerWidth / 2) / viewport.scale
+      const centerWorldY = (-viewport.y + window.innerHeight / 2) / viewport.scale
 
-      if (state.items.length > 0) {
-        let minX = Infinity
-        let maxY = -Infinity
-        for (const it of state.items) {
-          minX = Math.min(minX, it.x)
-          maxY = Math.max(maxY, it.y + it.height)
-        }
-        startX = minX
-        startY = maxY + ROW_GAP
-      } else {
-        const cx = (-viewport.x + window.innerWidth / 2) / viewport.scale
-        const cy = (-viewport.y + window.innerHeight / 2) / viewport.scale
-        startX = cx
-        startY = cy
-      }
-
-      const newItems: CanvasItem[] = []
-      let i = 0
-
-      for (const p of paths) {
-        const isVid = /\.(mp4|webm|mov|mkv|avi|m4v|ogv)$/i.test(p)
-        const fileName = p.split(/[/\\]/).pop() || 'Media'
-        if (isVid) {
-          const resolved = await api.resolveVideoSource(p, {
-            projectPath: state.currentProjectPath,
-            generateProxy,
-          })
-          const dim = defaultVideoTileSizeForNew()
-          const dw = dim.width
-          const dh = dim.height
-          newItems.push({
-            type: 'video',
-            id: `tile-${Date.now()}-${i}`,
-            srcUrl: resolved.srcUrl,
-            fileName,
-            sourceFilePath: resolved.sourceFilePath,
-            ...(resolved.proxyFilePath ? { proxyFilePath: resolved.proxyFilePath } : {}),
-            ...(resolved.proxyForSourcePath ? { proxyForSourcePath: resolved.proxyForSourcePath } : {}),
-            x: startX + i * (dw + 40),
-            y: startY,
-            width: dw,
-            height: dh,
-          })
-        } else {
-          try {
-            const resolved = await api.resolveImageSource(p)
-            newItems.push({
-              type: 'image',
-              id: `img-${Date.now()}-${i}`,
-              srcUrl: resolved.srcUrl,
-              storage: resolved.storage,
-              sourceVideoId: '',
-              fileName,
-              sourceFilePath: resolved.sourceFilePath,
-              projectAssetPath: resolved.projectAssetPath,
-              naturalWidth: resolved.naturalWidth,
-              naturalHeight: resolved.naturalHeight,
-              x: startX + i * (resolved.width + 40),
-              y: startY,
-              width: resolved.width,
-              height: resolved.height,
-            })
-          } catch (err) {
-            console.error('Failed to resolve image:', p, err)
-          }
-        }
-        i++
-      }
-
-      state.addItems(newItems)
-      state.setSelection(newItems.map((it) => it.id))
+      await importMediaPathsToCanvas(paths, { x: centerWorldX, y: centerWorldY })
       setDailiesModalOpen(false)
     } catch (err: any) {
       alert(err?.message || String(err))

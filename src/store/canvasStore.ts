@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { CanvasItem, ItemUpdate } from '../types'
 import type { DeserializedProject, ProjectMeta, ViewportState } from '../types/project'
 import { computeAttachedItemIds } from '../utils/backdrops'
+import { DEFAULT_MEDIA_ROW_CAP } from '../utils/mediaLayout'
 import { requestMediaWarmup } from '../utils/warmupCanvasMedia'
 import { useUiStore } from './uiStore'
 
@@ -17,7 +18,7 @@ export const MIN_SCALE = 0.001
 export const MAX_SCALE = 4
 const MAX_HISTORY = 200
 const ROW_GAP = 16
-const LAYOUT_ROW_CAP = 20
+const LAYOUT_ROW_CAP = DEFAULT_MEDIA_ROW_CAP
 const LAYOUT_SECTION_GAP = 48
 
 interface BatchUpdateOptions {
