@@ -12,6 +12,7 @@ import type { VideoItem } from '../types'
 import { computeAttachedItemIds } from '../utils/backdrops'
 import { localPathToMediaUrl, mediaUrlToLocalPath } from '../utils/projectSerializer'
 import { useVideoSourceActivationStore } from '../store/videoSourceActivationStore'
+import { useUiStore } from '../store/uiStore'
 import {
   EstimatingVideoFields,
   getEstimatingVideoMinimumWidth,
@@ -128,6 +129,15 @@ function buildEstimatingBriefTooltip(
   return sections.join('\n\n')
 }
 
+function resolveProxyPreviewSourcePath(tile: VideoItem): string {
+  const proxyPath = tile.proxyFilePath?.trim() || ''
+  if (proxyPath && (!tile.proxyForSourcePath || tile.proxyForSourcePath === tile.sourceFilePath)) {
+    return proxyPath
+  }
+
+  return tile.sourceFilePath?.trim() || mediaUrlToLocalPath(tile.srcUrl) || proxyPath
+}
+
 export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHidden, isFarZoomMode }: VideoTileProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const trackRef = useRef<HTMLDivElement>(null)
@@ -146,12 +156,20 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
   const [activeSrcUrl, setActiveSrcUrl] = useState(tile.srcUrl)
   const activeSrcUrlRef = useRef(tile.srcUrl)
   const failedSrcUrlsRef = useRef<Set<string>>(new Set())
+  const [proxyPreview, setProxyPreview] = useState<null | {
+    sourcePath: string
+    srcUrl: string
+    width: number
+    height: number
+  }>(null)
+  const [proxyPreviewError, setProxyPreviewError] = useState(false)
 
   const updateItem = useCanvasStore((s) => s.updateItem)
   const updateItemsBatch = useCanvasStore((s) => s.updateItemsBatch)
   const selectOne = useCanvasStore((s) => s.selectOne)
   const toggleSelect = useCanvasStore((s) => s.toggleSelect)
   const selectedIds = useCanvasStore((s) => s.selectedIds)
+  const useImageProxyMode = useUiStore((state) => state.useImageProxyMode)
   const suppressClickUntilRef = useRef(0)
   const dragOriginsRef = useRef<Map<string, { x: number; y: number }> | null>(null)
   const dragPeerElementsRef = useRef<HTMLElement[]>([])
@@ -186,9 +204,22 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
       : 0
   const requiredTileMinHeight = TITLE_H + 80 + CONTROLS_H + estimatingPanelHeight
   const showNavigationPreview = !!isFarZoomMode
+  const shouldUseProxyPictureMode = useImageProxyMode || showNavigationPreview
   const showEstimatingPanel =
     !showNavigationPreview && !!integrationShotId && !!sourcePathForIntegration
-  const shouldAttachVideoSource = isViewportSourceActive && !isHidden && !showNavigationPreview
+  const previewImageSourcePath = useMemo(
+    () => resolveProxyPreviewSourcePath(tile),
+    [tile],
+  )
+  const shouldResolveProxyPreview =
+    shouldUseProxyPictureMode && isViewportSourceActive && !isHidden && !!previewImageSourcePath
+  const shouldAttachVideoSource = isViewportSourceActive && !isHidden && !shouldUseProxyPictureMode
+  const proxyFooterLabel = showNavigationPreview ? 'Navigation preview' : 'Proxy picture mode'
+  const proxyPlaceholderLabel = proxyPreviewError
+    ? 'Proxy picture unavailable'
+    : showNavigationPreview
+      ? 'Preparing navigation preview...'
+      : 'Loading proxy picture...'
   const briefTooltipText = useMemo(
     () =>
       integrationShot
@@ -266,6 +297,59 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
   useEffect(() => {
     failedSrcUrlsRef.current.clear()
   }, [tile.id, tile.sourceFilePath, tile.srcUrl])
+
+  useEffect(() => {
+    setProxyPreview(null)
+    setProxyPreviewError(false)
+  }, [previewImageSourcePath])
+
+  useEffect(() => {
+    if (!shouldResolveProxyPreview) return
+    if (!previewImageSourcePath) return
+    if (proxyPreview?.sourcePath === previewImageSourcePath) return
+
+    const projectAPI = window.electronAPI?.projectAPI
+    if (!projectAPI?.resolveVideoStillPreview) return
+
+    let cancelled = false
+    void projectAPI
+      .resolveVideoStillPreview(previewImageSourcePath)
+      .then((resolved) => {
+        if (cancelled) return
+        setProxyPreview({
+          sourcePath: previewImageSourcePath,
+          srcUrl: resolved.srcUrl,
+          width: resolved.width,
+          height: resolved.height,
+        })
+        setProxyPreviewError(false)
+
+        if (tile.aspectApplied || !resolved.width || !resolved.height) return
+        const next = videoTileSizeFromVideo(resolved.width, resolved.height)
+        if (Math.abs(tile.width - next.width) > 2 || Math.abs(tile.height - next.height) > 2) {
+          updateItem(tile.id, { width: next.width, height: next.height, aspectApplied: true })
+        } else {
+          updateItem(tile.id, { aspectApplied: true })
+        }
+      })
+      .catch(() => {
+        if (cancelled) return
+        setProxyPreviewError(true)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    previewImageSourcePath,
+    proxyPreview?.sourcePath,
+    shouldResolveProxyPreview,
+    tile.aspectApplied,
+    tile.height,
+    tile.id,
+    tile.width,
+    updateItem,
+  ])
 
   useEffect(() => {
     const v = videoRef.current
@@ -970,7 +1054,15 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
             bottom: CONTROLS_H + estimatingPanelHeight,
           }}
         >
-          {showNavigationPreview && (
+          {shouldUseProxyPictureMode && proxyPreview?.srcUrl ? (
+            <img
+              src={proxyPreview.srcUrl}
+              alt={tile.fileName}
+              className="absolute inset-0 h-full w-full object-contain select-none"
+              draggable={false}
+            />
+          ) : null}
+          {shouldUseProxyPictureMode && !proxyPreview?.srcUrl && (
             <div
               className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-3 text-center select-none"
               style={{ background: previewBackground }}
@@ -983,9 +1075,12 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
                   color: hexToRgba(uiColorSoft, 0.96),
                 }}
               >
-                VID
+                {showNavigationPreview ? 'NAV' : 'PIC'}
               </div>
               <div className="max-w-full truncate text-[11px] font-medium" style={{ color: hexToRgba(uiColorSoft, 0.92) }}>
+                {proxyPlaceholderLabel}
+              </div>
+              <div className="max-w-full truncate text-[10px]" style={{ color: hexToRgba(uiColorSoft, 0.68) }}>
                 {tile.fileName}
               </div>
             </div>
@@ -994,7 +1089,7 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
             ref={videoRef}
             src={shouldAttachVideoSource ? activeSrcUrl : undefined}
             className="absolute inset-0 w-full h-full object-contain"
-            style={{ display: showNavigationPreview ? 'none' : undefined }}
+            style={{ display: shouldUseProxyPictureMode ? 'none' : undefined }}
             loop
             muted
             playsInline
@@ -1010,7 +1105,7 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
           />
         ) : null}
 
-        {showNavigationPreview && (
+        {shouldUseProxyPictureMode && (
           <div
             className="absolute left-0 right-0 bottom-0 z-30 flex items-center justify-between px-3 text-[10px] select-none"
             style={{
@@ -1020,7 +1115,7 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
               color: hexToRgba(uiColorSoft, 0.88),
             }}
           >
-            <span className="truncate">Navigation preview</span>
+            <span className="truncate">{proxyFooterLabel}</span>
             <span className="shrink-0 tabular-nums">{Math.round(tile.width)}x{Math.round(tile.height)}</span>
           </div>
         )}
@@ -1028,7 +1123,7 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
         <div
           className="video-controls absolute left-0 right-0 bottom-0 z-30 flex items-center gap-1.5 px-2 pointer-events-auto"
           style={{
-            display: showNavigationPreview ? 'none' : undefined,
+            display: shouldUseProxyPictureMode ? 'none' : undefined,
             height: CONTROLS_H,
             background: controlsBackground,
             borderTop: `1px solid ${hexToRgba(uiColor, 0.30)}`,

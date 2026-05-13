@@ -7,6 +7,7 @@ import { isManualPlaybackAllowedInSuspended } from '../utils/videoSuspendedManua
 import { resolveFarZoomMode } from '../utils/navigationMode'
 import type { VideoItem } from '../types'
 import { useVideoSourceActivationStore } from '../store/videoSourceActivationStore'
+import { useUiStore } from '../store/uiStore'
 
 const UPDATE_MS = 600
 /** Extra margin so tiles near the edge still count as visible (less “dead” previews). */
@@ -144,17 +145,15 @@ export function useVideoPlaybackManager(containerRef: React.RefObject<HTMLElemen
       const state = useCanvasStore.getState()
       const farZoomMode = resolveFarZoomMode(farZoomModeRef.current, state.viewport.scale)
       farZoomModeRef.current = farZoomMode
-      const visibleCandidates = farZoomMode
-        ? []
-        : computeVisibleVideoCandidates({
-            containerWidth: w,
-            containerHeight: h,
-            viewportX: state.viewport.x,
-            viewportY: state.viewport.y,
-            scale: state.viewport.scale,
-            selectedIds: state.selectedIds,
-            items: state.items,
-          })
+      const visibleCandidates = computeVisibleVideoCandidates({
+        containerWidth: w,
+        containerHeight: h,
+        viewportX: state.viewport.x,
+        viewportY: state.viewport.y,
+        scale: state.viewport.scale,
+        selectedIds: state.selectedIds,
+        items: state.items,
+      })
       useVideoSourceActivationStore
         .getState()
         .setActiveSourceIds(visibleCandidates.map((candidate) => candidate.id))
@@ -172,7 +171,11 @@ export function useVideoPlaybackManager(containerRef: React.RefObject<HTMLElemen
         return
       }
 
-      const desiredIds = computeDesiredPlayback(visibleCandidates)
+      const imageProxyMode = useUiStore.getState().useImageProxyMode
+      const desiredIds =
+        farZoomMode || imageProxyMode
+          ? []
+          : computeDesiredPlayback(visibleCandidates)
 
       const desiredSet = new Set(desiredIds)
       const currentPlaying = playingRef.current
@@ -248,6 +251,7 @@ export function useVideoPlaybackManager(containerRef: React.RefObject<HTMLElemen
     let prevItems = useCanvasStore.getState().items
     let prevSelectedIds = useCanvasStore.getState().selectedIds
     let prevViewport = useCanvasStore.getState().viewport
+    let prevImageProxyMode = useUiStore.getState().useImageProxyMode
     const unsub = useCanvasStore.subscribe((state) => {
       const itemsChanged = state.items !== prevItems
       const selectionChanged = state.selectedIds !== prevSelectedIds
@@ -265,10 +269,18 @@ export function useVideoPlaybackManager(containerRef: React.RefObject<HTMLElemen
         scheduleTick('immediate')
       }
     })
+    const unsubUi = useUiStore.subscribe((state) => {
+      if (state.useImageProxyMode === prevImageProxyMode) {
+        return
+      }
+      prevImageProxyMode = state.useImageProxyMode
+      scheduleTick('immediate')
+    })
 
     return () => {
       window.clearInterval(interval)
       unsub()
+      unsubUi()
       if (deferredTickTimer) window.clearTimeout(deferredTickTimer)
       if (rafScheduled) cancelAnimationFrame(rafScheduled)
       useVideoSourceActivationStore.getState().clearActiveSourceIds()

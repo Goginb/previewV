@@ -25,6 +25,7 @@ export const ProjectTitleBar: React.FC = () => {
   const path = useCanvasStore((s) => s.currentProjectPath)
   const isDirty = useCanvasStore((s) => s.isDirty)
   const alwaysOnTop = useUiStore((s) => s.alwaysOnTop)
+  const useImageProxyMode = useUiStore((s) => s.useImageProxyMode)
   const estimatingIntegrationActive = useEstimatingIntegrationStore((s) => s.active)
   const name = fileNameFromPath(path)
   const isGeneratingProxyRef = React.useRef(false)
@@ -187,16 +188,45 @@ export const ProjectTitleBar: React.FC = () => {
         >
            ⟲ Restart All
         </button>
-        <button
-          type="button"
-          className="ml-2 px-3 py-1 rounded bg-fuchsia-500/20 hover:bg-fuchsia-500/40 text-fuchsia-300 text-xs font-semibold uppercase tracking-wider border border-fuchsia-500/40 pointer-events-auto transition-colors"
-          onClick={() => {
-            void handleGenerateProxy()
-          }}
-          title="Generate lightweight proxies for selected video tiles (or all videos if nothing selected)"
-        >
-          Generate Proxy
-        </button>
+        {estimatingIntegrationActive ? (
+          <>
+            <button
+              type="button"
+              className="ml-2 px-3 py-1 rounded text-xs font-semibold uppercase tracking-wider border pointer-events-auto transition-all"
+              style={
+                useImageProxyMode
+                  ? {
+                      background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.34), rgba(34, 197, 94, 0.24))',
+                      borderColor: 'rgba(134, 239, 172, 0.64)',
+                      color: '#dcfce7',
+                      boxShadow: '0 0 0 1px rgba(110, 231, 183, 0.12), 0 0 22px rgba(16, 185, 129, 0.24)',
+                    }
+                  : {
+                      background: 'linear-gradient(135deg, rgba(34, 197, 94, 0.12), rgba(56, 189, 248, 0.16))',
+                      borderColor: 'rgba(125, 211, 252, 0.42)',
+                      color: '#d1fae5',
+                    }
+              }
+              onClick={() => {
+                const state = useUiStore.getState()
+                state.setUseImageProxyMode(!state.useImageProxyMode)
+              }}
+              title="Swap live videos for lightweight proxy pictures so pan/zoom stays fast"
+            >
+              {useImageProxyMode ? 'Proxy Pictures ON' : 'Proxy Pictures'}
+            </button>
+            <button
+               type="button"
+               className="ml-2 px-3 py-1 rounded bg-fuchsia-500/20 hover:bg-fuchsia-500/40 text-fuchsia-300 text-xs font-semibold uppercase tracking-wider border border-fuchsia-500/40 pointer-events-auto transition-colors"
+               onClick={() => {
+                 void handleGenerateProxy()
+              }}
+              title="Generate lightweight proxies for selected video tiles (or all videos if nothing selected)"
+            >
+              Generate Proxy
+            </button>
+          </>
+        ) : null}
       </div>
     </div>
   )

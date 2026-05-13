@@ -9,6 +9,7 @@ interface UiState {
   showBackgroundGrid: boolean
   gridSizeX: number
   gridSizeY: number
+  useImageProxyMode: boolean
   
   dailiesYear: string
   dailiesProject: string
@@ -26,6 +27,7 @@ interface UiState {
   setTheme: (theme: AppTheme) => void
   setShowBackgroundGrid: (show: boolean) => void
   setGridSize: (x: number, y: number) => void
+  setUseImageProxyMode: (value: boolean) => void
   
   setDailiesYear: (year: string) => void
   setDailiesProject: (project: string) => void
@@ -47,7 +49,7 @@ function clampGrid(v: number): number {
   return Math.max(8, Math.min(256, Math.round(v)))
 }
 
-function readPrefs(): Partial<Pick<UiState, 'theme' | 'showBackgroundGrid' | 'gridSizeX' | 'gridSizeY' | 'dailiesYear' | 'dailiesProject' | 'dailiesScene' | 'dailiesPriorities' | 'prmYear' | 'prmProject' | 'prmScene' | 'prmPriorities'>> {
+function readPrefs(): Partial<Pick<UiState, 'theme' | 'showBackgroundGrid' | 'gridSizeX' | 'gridSizeY' | 'useImageProxyMode' | 'dailiesYear' | 'dailiesProject' | 'dailiesScene' | 'dailiesPriorities' | 'prmYear' | 'prmProject' | 'prmScene' | 'prmPriorities'>> {
   try {
     const raw = localStorage.getItem(UI_PREFS_KEY)
     if (!raw) return {}
@@ -56,6 +58,7 @@ function readPrefs(): Partial<Pick<UiState, 'theme' | 'showBackgroundGrid' | 'gr
       showBackgroundGrid?: boolean
       gridSizeX?: number
       gridSizeY?: number
+      useImageProxyMode?: boolean
       dailiesYear?: string
       dailiesProject?: string
       dailiesScene?: string
@@ -70,6 +73,7 @@ function readPrefs(): Partial<Pick<UiState, 'theme' | 'showBackgroundGrid' | 'gr
       showBackgroundGrid: parsed.showBackgroundGrid ?? false,
       gridSizeX: clampGrid(parsed.gridSizeX ?? 32),
       gridSizeY: clampGrid(parsed.gridSizeY ?? 32),
+      useImageProxyMode: parsed.useImageProxyMode ?? false,
       dailiesYear: parsed.dailiesYear ?? new Date().getFullYear().toString(),
       dailiesProject: parsed.dailiesProject ?? 'Volchok',
       dailiesScene: parsed.dailiesScene ?? 'JMP',
@@ -84,7 +88,7 @@ function readPrefs(): Partial<Pick<UiState, 'theme' | 'showBackgroundGrid' | 'gr
   }
 }
 
-function savePrefs(state: Pick<UiState, 'theme' | 'showBackgroundGrid' | 'gridSizeX' | 'gridSizeY' | 'dailiesYear' | 'dailiesProject' | 'dailiesScene' | 'dailiesPriorities' | 'prmYear' | 'prmProject' | 'prmScene' | 'prmPriorities'>): void {
+function savePrefs(state: Pick<UiState, 'theme' | 'showBackgroundGrid' | 'gridSizeX' | 'gridSizeY' | 'useImageProxyMode' | 'dailiesYear' | 'dailiesProject' | 'dailiesScene' | 'dailiesPriorities' | 'prmYear' | 'prmProject' | 'prmScene' | 'prmPriorities'>): void {
   try {
     localStorage.setItem(UI_PREFS_KEY, JSON.stringify(state))
   } catch {
@@ -100,6 +104,7 @@ export const useUiStore = create<UiState>((set) => ({
   showBackgroundGrid: boot.showBackgroundGrid ?? false,
   gridSizeX: boot.gridSizeX ?? 32,
   gridSizeY: boot.gridSizeY ?? 32,
+  useImageProxyMode: boot.useImageProxyMode ?? false,
   dailiesYear: boot.dailiesYear ?? new Date().getFullYear().toString(),
   dailiesProject: boot.dailiesProject ?? 'Volchok',
   dailiesScene: boot.dailiesScene ?? 'JMP',
@@ -132,6 +137,12 @@ export const useUiStore = create<UiState>((set) => ({
       const next = { ...state, gridSizeX, gridSizeY }
       savePrefs(next)
       return { gridSizeX, gridSizeY }
+    }),
+  setUseImageProxyMode: (useImageProxyMode) =>
+    set((state) => {
+      const next = { ...state, useImageProxyMode }
+      savePrefs(next)
+      return { useImageProxyMode }
     }),
   
   setDailiesYear: (dailiesYear) => set((s) => { savePrefs({ ...s, dailiesYear }); return { dailiesYear } }),

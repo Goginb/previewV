@@ -33,6 +33,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       options?: { projectPath?: string | null; existingProxyPath?: string | null; generateProxy?: boolean },
     ) =>
       ipcRenderer.invoke('resolve-video-source', { path, ...(options ?? {}) }),
+    resolveVideoStillPreview: (path: string) =>
+      ipcRenderer.invoke('resolve-video-still-preview', { path }),
     generateVideoProxies: (payload: { paths: string[]; projectPath?: string | null }) =>
       ipcRenderer.invoke('generate-video-proxies', payload),
     inspectVideoSources: (payload: { paths: string[]; projectPath?: string | null }) =>

@@ -20,6 +20,7 @@ export interface EstimatingLaunchContext {
   selectedShotId: string
   saveDirectory: string
   linkedProjectPath: string
+  launchVariant?: 'auto-layout' | 'without-auto-layout'
   writableTaskKeys: string[]
   language: 'en' | 'ru'
 }
@@ -53,6 +54,7 @@ export interface ElectronProjectAPI {
     path: string,
     options?: { projectPath?: string | null; existingProxyPath?: string | null; generateProxy?: boolean },
   ) => Promise<ResolvedVideoImport>
+  resolveVideoStillPreview: (path: string) => Promise<ResolvedVideoStillPreview>
   generateVideoProxies: (payload: {
     paths: string[]
     projectPath?: string | null
@@ -105,4 +107,12 @@ export interface ResolvedVideoImport {
   transcoded: boolean
   proxyFilePath?: string
   proxyForSourcePath?: string
+}
+
+export interface ResolvedVideoStillPreview {
+  srcUrl: string
+  width: number
+  height: number
+  previewPath: string
+  sourceFilePath: string
 }

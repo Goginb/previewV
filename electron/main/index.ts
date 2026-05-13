@@ -210,6 +210,12 @@ function mimeFromMediaExt(filePath: string): string {
     '.avi': 'video/x-msvideo',
     '.m4v': 'video/x-m4v',
     '.ogv': 'video/ogg',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.webp': 'image/webp',
+    '.gif': 'image/gif',
+    '.bmp': 'image/bmp',
   }
   return map[ext] ?? 'application/octet-stream'
 }
@@ -305,6 +311,7 @@ protocol.registerSchemesAsPrivileged([
 const RECENTS_FILE = 'recent-projects.json'
 const PROJECT_ASSET_DIR_SUFFIX = '.assets'
 const PREVIEW_CACHE_DIR = join(tmpdir(), 'previewv-raster-cache')
+const VIDEO_STILL_CACHE_DIR = join(tmpdir(), 'previewv-video-still-cache')
 const PREVIEW_IMAGE_EXT = new Set(['.tif', '.tiff', '.dpx', '.exr'])
 const DIRECT_IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'])
 // Keep runtime proxying for containers that frequently fail in Chromium,
@@ -312,13 +319,24 @@ const DIRECT_IMAGE_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bm
 // explicitly handled by the ProRes branch above.
 const VIDEO_PROXY_EXT = new Set(['.mkv', '.avi', '.m4v'])
 const PRORES_PROXY_DIR_NAME = 'Prores_proxy_temp'
+const VIDEO_STILL_RENDER_CONCURRENCY = 2
 const rasterPreviewCache = new Map<
   string,
   { mtimeMs: number; size: number; previewPath: string; width: number; height: number }
 >()
+const videoStillPreviewCache = new Map<
+  string,
+  { mtimeMs: number; size: number; previewPath: string; width: number; height: number }
+>()
+const videoStillPreviewInflight = new Map<
+  string,
+  Promise<{ previewPath: string; width: number; height: number; sourceFilePath: string }>
+>()
 const videoProxyCache = new Map<string, { mtimeMs: number; size: number; proxyPath: string }>()
 const proresProbeCache = new Map<string, { mtimeMs: number; size: number; isProres: boolean }>()
 const videoCodecProbeCache = new Map<string, { mtimeMs: number; size: number; codec: string | null }>()
+let activeVideoStillRenderJobs = 0
+const pendingVideoStillRenderJobs: Array<() => void> = []
 
 /** Recursive folder import: same extensions as the canvas (video + raster). */
 const FOLDER_VIDEO_EXT = new Set(['.mp4', '.webm', '.mov', '.mkv', '.avi', '.m4v', '.ogv'])
@@ -399,6 +417,10 @@ async function ensurePreviewCacheDir(): Promise<void> {
   await fs.mkdir(PREVIEW_CACHE_DIR, { recursive: true })
 }
 
+async function ensureVideoStillCacheDir(): Promise<void> {
+  await fs.mkdir(VIDEO_STILL_CACHE_DIR, { recursive: true })
+}
+
 async function ensureVideoProxyCacheDir(projectPath?: string | null): Promise<string> {
   const dir = projectPath ? projectVideoSnapshotDir(projectPath) : getVideoProxyCacheDir()
   await fs.mkdir(dir, { recursive: true })
@@ -412,6 +434,11 @@ async function ensureFfmpegRuntimeCacheDir(): Promise<void> {
 function previewCacheFilePath(filePath: string): string {
   const hash = createHash('sha1').update(normalizePathKey(filePath)).digest('hex').slice(0, 16)
   return join(PREVIEW_CACHE_DIR, `${hash}.png`)
+}
+
+function videoStillCacheFilePath(filePath: string): string {
+  const hash = createHash('sha1').update(`still:${normalizePathKey(filePath)}`).digest('hex').slice(0, 16)
+  return join(VIDEO_STILL_CACHE_DIR, `${hash}.jpg`)
 }
 
 function buildVideoProxyCacheKey(filePath: string, projectPath?: string | null): string {
@@ -449,6 +476,30 @@ function getProjectProresProxyDir(projectPath: string): string {
 
 function getProjectPersistentVideoProxyDirs(projectPath: string): string[] {
   return [projectVideoSnapshotDir(projectPath), getProjectProresProxyDir(projectPath), getDesktopProresProxyDir()]
+}
+
+function runWithVideoStillRenderSlot<T>(job: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const run = () => {
+      activeVideoStillRenderJobs += 1
+      void job()
+        .then(resolve, reject)
+        .finally(() => {
+          activeVideoStillRenderJobs = Math.max(0, activeVideoStillRenderJobs - 1)
+          const next = pendingVideoStillRenderJobs.shift()
+          if (next) {
+            next()
+          }
+        })
+    }
+
+    if (activeVideoStillRenderJobs < VIDEO_STILL_RENDER_CONCURRENCY) {
+      run()
+      return
+    }
+
+    pendingVideoStillRenderJobs.push(run)
+  })
 }
 
 function dedupeNormalizedPaths(values: Array<string | null | undefined>): string[] {
@@ -685,6 +736,60 @@ async function renderViaFfmpegPreview(filePath: string, outputPath: string): Pro
       }
       finish(() => reject(new Error(`ffmpeg preview timeout for "${basename(filePath)}"`)))
     }, 45_000)
+    p.stderr?.on('data', (d: Buffer) => {
+      err += d.toString()
+    })
+    p.on('error', (error) => finish(() => reject(error)))
+    p.on('close', (code) => {
+      if (settled) return
+      finish(() => {
+        if (code === 0) resolve()
+        else reject(new Error(err.trim() || `ffmpeg exited with code ${code}`))
+      })
+    })
+  })
+
+  return loadNativeImageSize(outputPath)
+}
+
+async function renderVideoStillPreview(filePath: string, outputPath: string): Promise<{ width: number; height: number }> {
+  const ff = await getFfmpegPath()
+
+  await new Promise<void>((resolve, reject) => {
+    const p = spawn(
+      ff,
+      [
+        '-y',
+        '-ss',
+        '0.20',
+        '-i',
+        filePath,
+        '-frames:v',
+        '1',
+        '-vf',
+        'scale=640:-2:force_original_aspect_ratio=decrease',
+        '-q:v',
+        '5',
+        outputPath,
+      ],
+      { windowsHide: true },
+    )
+    let err = ''
+    let settled = false
+    const finish = (fn: () => void) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeoutId)
+      fn()
+    }
+    const timeoutId = setTimeout(() => {
+      try {
+        p.kill()
+      } catch {
+        // ignore
+      }
+      finish(() => reject(new Error(`ffmpeg still preview timeout for "${basename(filePath)}"`)))
+    }, 60_000)
     p.stderr?.on('data', (d: Buffer) => {
       err += d.toString()
     })
@@ -1321,6 +1426,90 @@ async function ensureSpecialImagePreview(filePath: string): Promise<{
     width: rendered.width,
     height: rendered.height,
   }
+}
+
+async function ensureVideoStillPreview(filePath: string): Promise<{
+  previewPath: string
+  width: number
+  height: number
+  sourceFilePath: string
+}> {
+  const normalizedPath = await resolveExistingVideoPath(filePath)
+  const stat = await fs.stat(normalizedPath)
+  if (!stat.isFile()) {
+    throw new Error('Not a file')
+  }
+
+  const cacheKey = normalizePathKey(normalizedPath)
+  const cached = videoStillPreviewCache.get(cacheKey)
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    try {
+      await fs.access(cached.previewPath)
+      return {
+        previewPath: cached.previewPath,
+        width: cached.width,
+        height: cached.height,
+        sourceFilePath: normalizedPath,
+      }
+    } catch {
+      videoStillPreviewCache.delete(cacheKey)
+    }
+  }
+
+  const existing = videoStillPreviewInflight.get(cacheKey)
+  if (existing) {
+    return existing
+  }
+
+  const renderPromise = runWithVideoStillRenderSlot(async () => {
+    await ensureVideoStillCacheDir()
+    const previewPath = videoStillCacheFilePath(normalizedPath)
+
+    try {
+      const previewStat = await fs.stat(previewPath)
+      if (previewStat.isFile() && previewStat.mtimeMs >= stat.mtimeMs) {
+        const size = await loadNativeImageSize(previewPath)
+        videoStillPreviewCache.set(cacheKey, {
+          mtimeMs: stat.mtimeMs,
+          size: stat.size,
+          previewPath,
+          width: size.width,
+          height: size.height,
+        })
+        return {
+          previewPath,
+          width: size.width,
+          height: size.height,
+          sourceFilePath: normalizedPath,
+        }
+      }
+    } catch {
+      // still preview is missing or stale, regenerate it below.
+    }
+
+    const rendered = await renderVideoStillPreview(normalizedPath, previewPath)
+    await fs.utimes(previewPath, stat.atime, stat.mtime).catch(() => {})
+
+    videoStillPreviewCache.set(cacheKey, {
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+      previewPath,
+      width: rendered.width,
+      height: rendered.height,
+    })
+
+    return {
+      previewPath,
+      width: rendered.width,
+      height: rendered.height,
+      sourceFilePath: normalizedPath,
+    }
+  }).finally(() => {
+    videoStillPreviewInflight.delete(cacheKey)
+  })
+
+  videoStillPreviewInflight.set(cacheKey, renderPromise)
+  return renderPromise
 }
 
 async function resolveImageSourceFromPath(filePath: string) {
@@ -2081,6 +2270,27 @@ app.whenReady().then(() => {
         `resolve-video-source failed for "${String(filePath)}": ${error instanceof Error ? error.message : String(error)}`,
       )
       throw error
+    }
+  })
+
+  ipcMain.handle('resolve-video-still-preview', async (_e, payload: unknown) => {
+    const filePath =
+      typeof payload === 'string'
+        ? payload
+        : isRecord(payload) && typeof payload.path === 'string'
+          ? payload.path
+          : ''
+    if (!filePath.trim()) {
+      throw new Error('Invalid path')
+    }
+
+    const preview = await ensureVideoStillPreview(filePath)
+    return {
+      srcUrl: localPathToMediaUrl(preview.previewPath),
+      width: preview.width,
+      height: preview.height,
+      previewPath: preview.previewPath,
+      sourceFilePath: preview.sourceFilePath,
     }
   })
 
