@@ -31,8 +31,12 @@ jobs:
       - name: Run tests
         run: npm test
 
-      - name: Build Windows installer
-        run: npm run build:win
+      - name: Build Windows installer and portable
+        run: |
+          npm run ensure:ffmpeg
+          npm run build
+          npx electron-builder --win nsis --win portable
+          npm run sync:version-marker
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -42,6 +46,7 @@ jobs:
           path: |
             release/PreviewV Setup*.exe
             release/PreviewV Setup*.blockmap
+            release/PreviewV Portable*.exe
             release/latest.yml
           if-no-files-found: error
 
@@ -52,4 +57,5 @@ jobs:
           files: |
             release/PreviewV Setup*.exe
             release/PreviewV Setup*.blockmap
+            release/PreviewV Portable*.exe
             release/latest.yml
