@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   windowAPI: {
     getRuntimeInfo: () => ipcRenderer.invoke('app:get-runtime-info'),
     getAlwaysOnTop: () => ipcRenderer.invoke('window:get-always-on-top'),
+    getFullscreen: () => ipcRenderer.invoke('window:get-fullscreen'),
+    setFullscreen: (enabled: boolean) => ipcRenderer.invoke('window:set-fullscreen', enabled),
   },
   projectAPI: {
     readClipboardText: () => clipboard.readText(),
@@ -90,6 +92,14 @@ ipcRenderer.on('app:request-unsaved-close', (_event, payload: { fileLabel?: stri
 ipcRenderer.on('window:always-on-top-changed', (_event, payload: { value: boolean }) => {
   window.dispatchEvent(
     new CustomEvent('previewv-always-on-top', {
+      detail: payload,
+    }),
+  )
+})
+
+ipcRenderer.on('window:fullscreen-changed', (_event, payload: { value: boolean }) => {
+  window.dispatchEvent(
+    new CustomEvent('previewv-fullscreen-changed', {
       detail: payload,
     }),
   )

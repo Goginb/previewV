@@ -5,6 +5,7 @@ export type AppTheme = 'default' | 'light' | 'pink' | 'camouflage' | 'greenFx'
 
 interface UiState {
   alwaysOnTop: boolean
+  isCanvasFullscreen: boolean
   theme: AppTheme
   showBackgroundGrid: boolean
   gridSizeX: number
@@ -23,6 +24,7 @@ interface UiState {
   isPrmModalOpen: boolean
 
   setAlwaysOnTop: (v: boolean) => void
+  setCanvasFullscreen: (v: boolean) => void
   setTheme: (theme: AppTheme) => void
   setShowBackgroundGrid: (show: boolean) => void
   setGridSize: (x: number, y: number) => void
@@ -96,6 +98,7 @@ const boot = readPrefs()
 
 export const useUiStore = create<UiState>((set) => ({
   alwaysOnTop: false,
+  isCanvasFullscreen: false,
   theme: boot.theme ?? 'default',
   showBackgroundGrid: boot.showBackgroundGrid ?? false,
   gridSizeX: boot.gridSizeX ?? 32,
@@ -113,6 +116,7 @@ export const useUiStore = create<UiState>((set) => ({
   isPrmModalOpen: false,
   
   setAlwaysOnTop: (v) => set({ alwaysOnTop: v }),
+  setCanvasFullscreen: (v) => set({ isCanvasFullscreen: v }),
   setTheme: (theme) =>
     set((state) => {
       const next = { ...state, theme }

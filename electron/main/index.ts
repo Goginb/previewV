@@ -1461,6 +1461,9 @@ let activeWindow: BrowserWindow | null = null
 /** Mirrors BrowserWindow always-on-top; used for menu checkbox + IPC (avoids relying on platform-specific getters). */
 let alwaysOnTopEnabled = false
 
+/** Mirrors BrowserWindow fullscreen; used for F11 canvas-only mode + IPC. */
+let canvasFullscreenEnabled = false
+
 function revealWindow(win: BrowserWindow): void {
   if (win.isMinimized()) {
     win.restore()
@@ -1483,6 +1486,12 @@ function applyAlwaysOnTop(win: BrowserWindow, enabled: boolean): void {
   }
   win.webContents.send('window:always-on-top-changed', { value: enabled })
   void refreshApplicationMenu()
+}
+
+function applyCanvasFullscreen(win: BrowserWindow, enabled: boolean): void {
+  canvasFullscreenEnabled = enabled
+  win.setFullScreen(enabled)
+  win.webContents.send('window:fullscreen-changed', { value: enabled })
 }
 
 /** When true, skip unsaved prompt on BrowserWindow.close() */
@@ -1684,6 +1693,7 @@ async function refreshApplicationMenu() {
 
 function createWindow(): void {
   alwaysOnTopEnabled = false
+  canvasFullscreenEnabled = false
   const showImmediately = !app.isPackaged
 
   const mainWindow = new BrowserWindow({
@@ -1719,17 +1729,36 @@ function createWindow(): void {
   setupWindowCloseGuard(mainWindow)
   refreshApplicationMenu().catch(() => {})
 
-  // Ctrl+Shift+A (Cmd+Shift+A on macOS): toggle always-on-top; handled in main so it works over canvas/video.
-  // Ignores auto-repeat. Physical KeyA for layout-stable binding.
+  // Global hotkeys handled in main so they work over canvas/video.
+  // Ignores auto-repeat. Physical key codes for layout-stable bindings.
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return
     if (input.isAutoRepeat) return
+
+    if (input.code === 'F11') {
+      event.preventDefault()
+      applyCanvasFullscreen(mainWindow, !canvasFullscreenEnabled)
+      return
+    }
+
     if (!input.shift) return
     if (!(input.control || input.meta)) return
     if (input.alt) return
     if (input.code !== 'KeyA') return
     event.preventDefault()
     applyAlwaysOnTop(mainWindow, !alwaysOnTopEnabled)
+  })
+
+  mainWindow.on('enter-full-screen', () => {
+    if (canvasFullscreenEnabled) return
+    canvasFullscreenEnabled = true
+    mainWindow.webContents.send('window:fullscreen-changed', { value: true })
+  })
+
+  mainWindow.on('leave-full-screen', () => {
+    if (!canvasFullscreenEnabled) return
+    canvasFullscreenEnabled = false
+    mainWindow.webContents.send('window:fullscreen-changed', { value: false })
   })
 
   mainWindow.webContents.once('did-finish-load', () => {
@@ -1765,6 +1794,13 @@ app.whenReady().then(() => {
   void syncInstalledVersionMarker()
 
   ipcMain.handle('window:get-always-on-top', () => alwaysOnTopEnabled)
+
+  ipcMain.handle('window:get-fullscreen', () => canvasFullscreenEnabled)
+
+  ipcMain.handle('window:set-fullscreen', (_e, enabled: unknown) => {
+    if (!activeWindow) return
+    applyCanvasFullscreen(activeWindow, Boolean(enabled))
+  })
 
   ipcMain.handle('app:get-runtime-info', async () => {
     const versionMarkerPath = await syncInstalledVersionMarker()

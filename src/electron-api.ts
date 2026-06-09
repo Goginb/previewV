@@ -5,6 +5,8 @@ import type { DeserializedProject } from './types/project'
 export interface ElectronWindowAPI {
   getRuntimeInfo: () => Promise<AppRuntimeInfo>
   getAlwaysOnTop: () => Promise<boolean>
+  getFullscreen: () => Promise<boolean>
+  setFullscreen: (enabled: boolean) => Promise<void>
 }
 
 export interface AppRuntimeInfo {

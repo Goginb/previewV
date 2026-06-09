@@ -92,6 +92,7 @@ const App: React.FC = () => {
   const getProjectDataForSave = useCanvasStore((s) => s.getProjectDataForSave)
   const syncSavedProjectState = useCanvasStore((s) => s.syncSavedProjectState)
   const theme = useUiStore((s) => s.theme)
+  const isCanvasFullscreen = useUiStore((s) => s.isCanvasFullscreen)
 
   const waitForUiPaint = useCallback((maxDelayMs = 48) => {
     return new Promise<void>((resolve) => {
@@ -209,13 +210,20 @@ const App: React.FC = () => {
     const wa = window.electronAPI?.windowAPI
     if (!wa) return
     void wa.getAlwaysOnTop().then((v) => useUiStore.getState().setAlwaysOnTop(v))
-    const onChange = (e: Event) => {
+    void wa.getFullscreen?.().then((v) => useUiStore.getState().setCanvasFullscreen(v))
+    const onAlwaysOnTopChange = (e: Event) => {
       const d = (e as CustomEvent).detail as { value: boolean }
       useUiStore.getState().setAlwaysOnTop(d.value)
     }
-    window.addEventListener('previewv-always-on-top', onChange)
+    const onFullscreenChange = (e: Event) => {
+      const d = (e as CustomEvent).detail as { value: boolean }
+      useUiStore.getState().setCanvasFullscreen(d.value)
+    }
+    window.addEventListener('previewv-always-on-top', onAlwaysOnTopChange)
+    window.addEventListener('previewv-fullscreen-changed', onFullscreenChange)
     return () => {
-      window.removeEventListener('previewv-always-on-top', onChange)
+      window.removeEventListener('previewv-always-on-top', onAlwaysOnTopChange)
+      window.removeEventListener('previewv-fullscreen-changed', onFullscreenChange)
     }
   }, [])
 
@@ -512,11 +520,17 @@ const App: React.FC = () => {
           </div>
         </div>
       )}
-      <ProjectTitleBar />
-      <div className="absolute inset-x-0 bottom-0 top-11 min-h-0">
+      {!isCanvasFullscreen && <ProjectTitleBar />}
+      <div
+        className={
+          isCanvasFullscreen
+            ? 'absolute inset-0 min-h-0'
+            : 'absolute inset-x-0 bottom-0 top-11 min-h-0'
+        }
+      >
         <Canvas />
       </div>
-      <ViewportHud />
+      {!isCanvasFullscreen && <ViewportHud />}
     </div>
   )
 }
