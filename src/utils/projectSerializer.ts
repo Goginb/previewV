@@ -111,16 +111,31 @@ export function localPathToMediaUrl(localPath: string): string {
   return `media:///${encoded}`
 }
 
-export function mediaUrlToLocalPath(mediaUrl: string): string {
-  if (!mediaUrl.startsWith('media:///')) return ''
-  const rest = mediaUrl.slice('media:///'.length)
+function decodeMediaUrlPathSegment(rest: string): string {
   let decoded = rest
   try {
     decoded = decodeURIComponent(rest)
   } catch {
     decoded = rest
   }
-  return decoded.replace(/\//g, '\\')
+  // Unix absolute paths are stored without a leading slash (same scheme as Windows drive paths).
+  if (!/^[a-zA-Z]:/.test(decoded) && !decoded.startsWith('/')) {
+    decoded = `/${decoded}`
+  }
+  return decoded
+}
+
+export function mediaUrlToLocalPath(mediaUrl: string): string {
+  let rest = ''
+  if (mediaUrl.startsWith('media:///')) rest = mediaUrl.slice('media:///'.length)
+  else if (mediaUrl.startsWith('media://')) rest = mediaUrl.slice('media://'.length)
+  else return ''
+
+  const decoded = decodeMediaUrlPathSegment(rest)
+  if (typeof process !== 'undefined' && process.platform === 'win32') {
+    return decoded.replace(/\//g, '\\')
+  }
+  return decoded
 }
 
 export function isDataUrl(value: string): boolean {

@@ -1,0 +1,110 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build Windows installer and portable
+        run: |
+          npm run ensure:ffmpeg
+          npm run build
+          npx electron-builder --win nsis --win portable
+          npm run sync:version-marker
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          retention-days: 7
+          path: |
+            release/PreviewV Setup*.exe
+            release/PreviewV Setup*.blockmap
+            release/PreviewV Portable*.exe
+            release/latest.yml
+          if-no-files-found: error
+
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build macOS dmg and zip
+        run: |
+          npm run ensure:ffmpeg
+          npm run build
+          npx electron-builder --mac dmg zip
+          npm run sync:version-marker
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-macos
+          retention-days: 7
+          path: |
+            release/*.dmg
+            release/*.zip
+          if-no-files-found: error
+
+  publish:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-windows
+          path: dist/windows
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-macos
+          path: dist/macos
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/windows/*
+            dist/macos/*

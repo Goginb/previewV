@@ -32,6 +32,9 @@ import { scanPrmFolder, getPrmYears, getPrmProjects, getPrmScenes } from './prmS
 
 const PROJECT_EXT = '.previewv'
 
+const FFMPEG_BIN_NAME = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'
+const SPAWN_OPTS = process.platform === 'win32' ? ({ windowsHide: true } as const) : {}
+
 const PROJECT_OPEN_CHANNEL = 'app-open-project-by-path'
 const VERSION_MARKER_FILE = 'version'
 const LEGACY_VERSION_MARKER_PREFIX = 'PreviewV version '
@@ -149,10 +152,10 @@ function mimeFromMediaExt(filePath: string): string {
  * return 206 + Content-Range; without that, video.currentTime seeks fail or snap back.
  */
 async function serveMediaProtocolRequest(request: Request): Promise<Response> {
-  const rest = request.url.startsWith('media:///')
-    ? request.url.slice('media:///'.length)
-    : request.url.slice('media://'.length)
-  const filePath = normalize(decodeURIComponent(rest))
+  const filePath = normalize(mediaUrlToLocalPath(request.url))
+  if (!filePath) {
+    return new Response(null, { status: 404, statusText: 'Not Found' })
+  }
 
   try {
     await fs.access(filePath)
@@ -207,6 +210,19 @@ async function serveMediaProtocolRequest(request: Request): Promise<Response> {
 }
 
 let pendingOpenPath: string | null = findPreviewVPathFromArgv(process.argv)
+
+if (process.platform === 'darwin') {
+  app.on('open-file', (event, filePath) => {
+    event.preventDefault()
+    if (!filePath.toLowerCase().endsWith(PROJECT_EXT)) return
+    if (app.isReady()) {
+      sendOpenProjectToRenderer(filePath)
+      if (activeWindow) revealWindow(activeWindow)
+    } else {
+      pendingOpenPath = filePath
+    }
+  })
+}
 
 app.commandLine.appendSwitch('no-sandbox')
 // Keep default Chromium video pipeline on Windows.
@@ -430,8 +446,8 @@ async function findPersistentProxyInDirs(
 }
 
 function isLegacyTempProxyPath(filePath: string): boolean {
-  const n = normalize(filePath).toLowerCase()
-  return n.includes(`${normalize('\\previewv-video-proxy-cache\\').toLowerCase()}`)
+  const n = normalizePathKey(filePath)
+  return n.includes('previewv-video-proxy-cache/')
 }
 
 async function resolveExistingVideoPath(filePath: string): Promise<string> {
@@ -483,7 +499,7 @@ async function getFfmpegPath(): Promise<string> {
 
   const canExecuteFfmpeg = async (bin: string): Promise<boolean> => {
     return await new Promise<boolean>((resolve) => {
-      const p = spawn(bin, ['-version'], { windowsHide: true })
+      const p = spawn(bin, ['-version'], SPAWN_OPTS)
       const timer = setTimeout(() => {
         try {
           p.kill()
@@ -503,7 +519,7 @@ async function getFfmpegPath(): Promise<string> {
     })
   }
 
-  const candidates: string[] = [join(process.resourcesPath, 'ffmpeg', 'ffmpeg.exe')]
+  const candidates: string[] = [join(process.resourcesPath, 'ffmpeg', FFMPEG_BIN_NAME)]
   if (ffmpegStatic) candidates.push(ffmpegStatic)
 
   let ff: string | null = null
@@ -520,14 +536,17 @@ async function getFfmpegPath(): Promise<string> {
   }
 
   // Some endpoints block execution from Program Files/resources paths.
-  // Mirror bundled binary to %TEMP% and run from there as a robust fallback.
+  // Mirror bundled binary to userData and run from there as a robust fallback.
   if (!ff) {
-    const bundled = join(process.resourcesPath, 'ffmpeg', 'ffmpeg.exe')
+    const bundled = join(process.resourcesPath, 'ffmpeg', FFMPEG_BIN_NAME)
     try {
       await fs.access(bundled)
       await ensureFfmpegRuntimeCacheDir()
-      const runtimeFfmpeg = join(getFfmpegRuntimeCacheDir(), 'ffmpeg.exe')
+      const runtimeFfmpeg = join(getFfmpegRuntimeCacheDir(), FFMPEG_BIN_NAME)
       await fs.copyFile(bundled, runtimeFfmpeg)
+      if (process.platform !== 'win32') {
+        await fs.chmod(runtimeFfmpeg, 0o755)
+      }
       if (await canExecuteFfmpeg(runtimeFfmpeg)) {
         ff = runtimeFfmpeg
       }
@@ -545,7 +564,7 @@ async function renderViaFfmpegPreview(filePath: string, outputPath: string): Pro
   const ff = await getFfmpegPath()
 
   await new Promise<void>((resolve, reject) => {
-    const p = spawn(ff, ['-y', '-i', filePath, '-frames:v', '1', outputPath], { windowsHide: true })
+    const p = spawn(ff, ['-y', '-i', filePath, '-frames:v', '1', outputPath], SPAWN_OPTS)
     let err = ''
     let settled = false
     const finish = (fn: () => void) => {
@@ -605,7 +624,7 @@ async function transcodeVideoProxy(filePath: string, outputPath: string): Promis
         '-an',
         outputPath,
       ],
-      { windowsHide: true },
+      SPAWN_OPTS,
     )
     let err = ''
     let settled = false
@@ -648,7 +667,7 @@ async function detectProResCodec(filePath: string): Promise<boolean> {
 
   const ff = await getFfmpegPath()
   const probeResult = await new Promise<boolean>((resolve) => {
-    const p = spawn(ff, ['-hide_banner', '-i', normalizedPath], { windowsHide: true })
+    const p = spawn(ff, ['-hide_banner', '-i', normalizedPath], SPAWN_OPTS)
     let stderr = ''
     const timeoutId = setTimeout(() => {
       try {
@@ -690,7 +709,7 @@ async function detectPrimaryVideoCodec(filePath: string): Promise<string | null>
 
   const ff = await getFfmpegPath()
   const codec = await new Promise<string | null>((resolve) => {
-    const p = spawn(ff, ['-hide_banner', '-i', normalizedPath], { windowsHide: true })
+    const p = spawn(ff, ['-hide_banner', '-i', normalizedPath], SPAWN_OPTS)
     let stderr = ''
     const timeoutId = setTimeout(() => {
       try {
@@ -748,7 +767,7 @@ async function transcodeProresPersistentProxy(filePath: string, outputPath: stri
         '-an',
         outputPath,
       ],
-      { windowsHide: true },
+      SPAWN_OPTS,
     )
     let err = ''
     let settled = false

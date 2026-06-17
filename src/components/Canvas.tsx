@@ -16,6 +16,7 @@ import { imageExportRegistry } from '../utils/imageExportRegistry'
 import { flushImageAnnotations } from '../utils/flushImageAnnotations'
 import { importImageFile, isRasterImportFile } from '../utils/imageImport'
 import { isTypingTarget } from '../utils/keyboard'
+import { mediaUrlToLocalPath } from '../utils/projectSerializer'
 import {
   getNoteCreationMetrics,
   getNoteCreationMetricsForText,
@@ -82,14 +83,8 @@ function fileToUrl(file: File): string {
 }
 
 function mediaUrlToFilePath(url: string): string | null {
-  if (!url.startsWith('media:///') && !url.startsWith('media://')) return null
-  const rest = url.startsWith('media:///') ? url.slice('media:///'.length) : url.slice('media://'.length)
-  if (!rest) return null
-  try {
-    return decodeURIComponent(rest).replace(/\//g, '\\')
-  } catch {
-    return rest.replace(/\//g, '\\')
-  }
+  const localPath = mediaUrlToLocalPath(url)
+  return localPath || null
 }
 
 async function resolveDroppedVideoUrl(

@@ -1,15 +1,38 @@
 import { createGunzip } from 'node:zlib'
 import { createWriteStream } from 'node:fs'
-import { access, mkdir, rename, rm } from 'node:fs/promises'
+import { access, chmod, mkdir, rename, rm } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import os from 'node:os'
 import https from 'node:https'
 import { pipeline } from 'node:stream/promises'
 
 const projectRoot = resolve(fileURLToPath(new URL('..', import.meta.url)))
-const targetPath = resolve(projectRoot, 'node_modules', 'ffmpeg-static', 'ffmpeg.exe')
 const releaseTag = 'b6.1.1'
-const downloadUrl = `https://github.com/eugeneware/ffmpeg-static/releases/download/${releaseTag}/ffmpeg-win32-x64.gz`
+
+const PLATFORM_SPECS = {
+  'win32-x64': {
+    fileName: 'ffmpeg.exe',
+    downloadName: 'ffmpeg-win32-x64.gz',
+  },
+  'darwin-x64': {
+    fileName: 'ffmpeg',
+    downloadName: 'ffmpeg-darwin-x64.gz',
+  },
+  'darwin-arm64': {
+    fileName: 'ffmpeg',
+    downloadName: 'ffmpeg-darwin-arm64.gz',
+  },
+}
+
+const spec = PLATFORM_SPECS[`${os.platform()}-${os.arch()}`]
+if (!spec) {
+  console.log(`[ensure-ffmpeg] skipped: unsupported platform ${os.platform()}-${os.arch()}`)
+  process.exit(0)
+}
+
+const targetPath = resolve(projectRoot, 'node_modules', 'ffmpeg-static', spec.fileName)
+const downloadUrl = `https://github.com/eugeneware/ffmpeg-static/releases/download/${releaseTag}/${spec.downloadName}`
 
 async function exists(path) {
   try {
@@ -35,7 +58,7 @@ function streamFromUrl(url) {
 
 async function main() {
   if (await exists(targetPath)) {
-    console.log('[ensure-ffmpeg] ffmpeg.exe already exists')
+    console.log(`[ensure-ffmpeg] ${spec.fileName} already exists`)
     return
   }
 
@@ -47,7 +70,10 @@ async function main() {
     await pipeline(source, createGunzip(), createWriteStream(tmpPath))
     await rm(targetPath, { force: true })
     await rename(tmpPath, targetPath)
-    console.log('[ensure-ffmpeg] downloaded ffmpeg.exe')
+    if (spec.fileName === 'ffmpeg') {
+      await chmod(targetPath, 0o755)
+    }
+    console.log(`[ensure-ffmpeg] downloaded ${spec.fileName}`)
   } catch (error) {
     await rm(tmpPath, { force: true }).catch(() => {})
     throw error

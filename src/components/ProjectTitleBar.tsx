@@ -24,6 +24,7 @@ export const ProjectTitleBar: React.FC = () => {
   const path = useCanvasStore((s) => s.currentProjectPath)
   const isDirty = useCanvasStore((s) => s.isDirty)
   const alwaysOnTop = useUiStore((s) => s.alwaysOnTop)
+  const showStudioImport = window.electronAPI?.platform === 'win32'
   const name = fileNameFromPath(path)
   const isGeneratingProxyRef = React.useRef(false)
 
@@ -150,20 +151,24 @@ export const ProjectTitleBar: React.FC = () => {
             </span>
           )}
         </div>
-        <button
-           type="button"
-           className="ml-4 px-3 py-1 rounded bg-indigo-500/20 hover:bg-indigo-500/40 text-indigo-300 text-xs font-semibold uppercase tracking-wider border border-indigo-500/40 pointer-events-auto transition-colors"
-           onClick={() => useUiStore.getState().setDailiesModalOpen(true)}
-        >
-           Import Dailies
-        </button>
-        <button
-           type="button"
-           className="ml-2 px-3 py-1 rounded bg-teal-500/20 hover:bg-teal-500/40 text-teal-300 text-xs font-semibold uppercase tracking-wider border border-teal-500/40 pointer-events-auto transition-colors"
-           onClick={() => useUiStore.getState().setPrmModalOpen(true)}
-        >
-           Import PRM
-        </button>
+        {showStudioImport && (
+          <>
+            <button
+              type="button"
+              className="ml-4 px-3 py-1 rounded bg-indigo-500/20 hover:bg-indigo-500/40 text-indigo-300 text-xs font-semibold uppercase tracking-wider border border-indigo-500/40 pointer-events-auto transition-colors"
+              onClick={() => useUiStore.getState().setDailiesModalOpen(true)}
+            >
+              Import Dailies
+            </button>
+            <button
+              type="button"
+              className="ml-2 px-3 py-1 rounded bg-teal-500/20 hover:bg-teal-500/40 text-teal-300 text-xs font-semibold uppercase tracking-wider border border-teal-500/40 pointer-events-auto transition-colors"
+              onClick={() => useUiStore.getState().setPrmModalOpen(true)}
+            >
+              Import PRM
+            </button>
+          </>
+        )}
         <button
            type="button"
            className="ml-2 px-3 py-1 rounded bg-amber-500/20 hover:bg-amber-500/40 text-amber-300 text-xs font-semibold uppercase tracking-wider border border-amber-500/40 pointer-events-auto transition-colors"

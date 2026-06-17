@@ -1,4 +1,4 @@
-name: Build Windows
+name: Build macOS
 
 on:
   workflow_dispatch:
@@ -10,8 +10,8 @@ permissions:
   contents: write
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
+  build-macos:
+    runs-on: macos-latest
 
     steps:
       - name: Checkout
@@ -29,21 +29,19 @@ jobs:
       - name: Run tests
         run: npm test
 
-      - name: Build Windows installer and portable
+      - name: Build macOS dmg and zip
         run: |
           npm run ensure:ffmpeg
           npm run build
-          npx electron-builder --win nsis --win portable
+          npx electron-builder --mac dmg zip
           npm run sync:version-marker
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: previewv-windows-${{ github.ref_name || github.sha }}
+          name: previewv-macos-${{ github.ref_name || github.sha }}
           retention-days: 30
           path: |
-            release/PreviewV Setup*.exe
-            release/PreviewV Setup*.blockmap
-            release/PreviewV Portable*.exe
-            release/latest.yml
+            release/*.dmg
+            release/*.zip
           if-no-files-found: error
