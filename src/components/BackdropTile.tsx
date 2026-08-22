@@ -24,6 +24,13 @@ import {
   computeAttachedItemIds,
   findBackdropAtPoint,
 } from '../utils/backdrops'
+import { videoRegistry } from '../utils/videoRegistry'
+import {
+  getVideoPlaybackSuspended,
+  setVideoPlaybackSuspended,
+  subscribeVideoPlaybackSuspended,
+} from '../utils/videoGlobalPlayback'
+import { generateCanvasVideoProxies } from '../utils/generateCanvasVideoProxies'
 
 const COLLAPSED_STRIP_H = 48
 const DEFAULT_W = 360
@@ -203,6 +210,7 @@ function areBackdropTilePropsEqual(a: BackdropTileProps, b: BackdropTileProps): 
     A.collapsed === B.collapsed &&
     A.expandedHeight === B.expandedHeight &&
     A.displayMode === B.displayMode &&
+    A.locked === B.locked &&
     attachedIdsEqual(A.attachedVideoIds, B.attachedVideoIds) &&
     a.scale === b.scale &&
     a.isSelected === b.isSelected &&
@@ -227,13 +235,28 @@ export const BackdropTile = memo(function BackdropTile({
   const gridAlignTiles = useCanvasStore((s) => s.gridAlignTiles)
   const layoutMediaRow = useCanvasStore((s) => s.layoutMediaRow)
   const frameAllItemsInViewport = useCanvasStore((s) => s.frameAllItemsInViewport)
+  const resetViewport = useCanvasStore((s) => s.resetViewport)
   const selectOne = useCanvasStore((s) => s.selectOne)
   const toggleSelect = useCanvasStore((s) => s.toggleSelect)
   const selectedIds = useCanvasStore((s) => s.selectedIds)
+  const canvasLocked = useCanvasStore((s) => s.canvasLocked)
+  const setCanvasLocked = useCanvasStore((s) => s.setCanvasLocked)
+  const setItemsLocked = useCanvasStore((s) => s.setItemsLocked)
   const clipboardCount = useCanvasStore((s) => s.clipboard.length)
   const pasteClipboard = useCanvasStore((s) => s.pasteClipboard)
   const alwaysOnTop = useUiStore((s) => s.alwaysOnTop)
   const setAlwaysOnTop = useUiStore((s) => s.setAlwaysOnTop)
+  const showStudioImport = window.electronAPI?.platform === 'win32'
+  const interactionLocked = canvasLocked || !!backdrop.locked
+
+  const selectionLockState = useMemo<'none' | 'locked' | 'unlocked' | 'mixed'>(() => {
+    const selected = items.filter((item) => selectedIds.includes(item.id))
+    if (selected.length === 0) return 'none'
+    const lockedCount = selected.filter((item) => item.locked).length
+    if (lockedCount === 0) return 'unlocked'
+    if (lockedCount === selected.length) return 'locked'
+    return 'mixed'
+  }, [items, selectedIds])
 
   const backdrops = useMemo(() => items.filter((item): item is BackdropItem => item.type === 'backdrop'), [items])
   const selectionColorTargetIds = useMemo(
@@ -249,25 +272,39 @@ export const BackdropTile = memo(function BackdropTile({
     [items, selectionColorTargetIds],
   )
   const applySelectionColor = useCallback((color: string) => {
-    const updates = buildColorUpdatesForIds(items, selectionColorTargetIds, color)
+    if (canvasLocked) return
+    const ids = selectionColorTargetIds.filter((id) =>
+      items.some((item) => item.id === id && !item.locked),
+    )
+    const updates = buildColorUpdatesForIds(items, ids, color)
     if (!updates.length) return
     updateItemsBatch(updates, { recordHistory: true })
-  }, [items, selectionColorTargetIds, updateItemsBatch])
+  }, [canvasLocked, items, selectionColorTargetIds, updateItemsBatch])
   const previewSelectionColor = useCallback((color: string) => {
-    const updates = buildColorUpdatesForIds(items, selectionColorTargetIds, color)
+    if (canvasLocked) return
+    const ids = selectionColorTargetIds.filter((id) =>
+      items.some((item) => item.id === id && !item.locked),
+    )
+    const updates = buildColorUpdatesForIds(items, ids, color)
     if (!updates.length) return
     updateItemsBatch(updates)
-  }, [items, selectionColorTargetIds, updateItemsBatch])
+  }, [canvasLocked, items, selectionColorTargetIds, updateItemsBatch])
 
   const [ctxMenu, setCtxMenu] = useState<null | { x: number; y: number }>(null)
   const { menuRef: backdropMenuRef, menuPosition: backdropMenuPosition } = useClampedMenuPosition(
     ctxMenu ? { x: ctxMenu.x, y: ctxMenu.y } : null,
   )
   const [editingLabel, setEditingLabel] = useState(false)
+  const [playbackSuspended, setPlaybackSuspendedState] = useState(getVideoPlaybackSuspended)
   const labelInputRef = useRef<HTMLInputElement>(null)
   const bgRootRef = useRef<HTMLDivElement>(null)
   const headerRootRef = useRef<HTMLDivElement>(null)
   const suppressClickUntilRef = useRef(0)
+  useEffect(() => {
+    return subscribeVideoPlaybackSuspended(() => {
+      setPlaybackSuspendedState(getVideoPlaybackSuspended())
+    })
+  }, [])
   useEffect(() => {
     if (isHidden) return
     if (!ctxMenu) return
@@ -320,6 +357,10 @@ export const BackdropTile = memo(function BackdropTile({
   }, [editingLabel, isHidden])
 
   useEffect(() => {
+    if (interactionLocked) setEditingLabel(false)
+  }, [interactionLocked])
+
+  useEffect(() => {
     if (isHidden) return
     if (!editingLabel) return
     const onDown = (e: MouseEvent) => {
@@ -334,7 +375,9 @@ export const BackdropTile = memo(function BackdropTile({
 
   const runCommonMenuNewNote = useCallback(() => {
     if (!ctxMenu) return
-    const { x: vx, y: vy, scale: vpScale } = useCanvasStore.getState().viewport
+    const state = useCanvasStore.getState()
+    if (state.canvasLocked) return
+    const { x: vx, y: vy, scale: vpScale } = state.viewport
     const noteMetrics = getNoteCreationMetrics(vpScale)
     const note: NoteItem = {
       type: 'note',
@@ -356,7 +399,9 @@ export const BackdropTile = memo(function BackdropTile({
 
   const runCommonMenuAddBackdrop = useCallback(() => {
     if (!ctxMenu) return
-    const { x: vx, y: vy, scale: vpScale } = useCanvasStore.getState().viewport
+    const state = useCanvasStore.getState()
+    if (state.canvasLocked) return
+    const { x: vx, y: vy, scale: vpScale } = state.viewport
     const worldX = (ctxMenu.x - vx) / vpScale
     const worldY = (ctxMenu.y - vy) / vpScale
     const nextBackdrop = createBackdropItem({
@@ -373,7 +418,9 @@ export const BackdropTile = memo(function BackdropTile({
 
   const runCommonMenuPaste = useCallback(() => {
     if (!ctxMenu) return
-    const { x: vx, y: vy, scale: vpScale } = useCanvasStore.getState().viewport
+    const state = useCanvasStore.getState()
+    if (state.canvasLocked) return
+    const { x: vx, y: vy, scale: vpScale } = state.viewport
     pasteClipboard((ctxMenu.x - vx) / vpScale, (ctxMenu.y - vy) / vpScale)
     setCtxMenu(null)
   }, [ctxMenu, pasteClipboard])
@@ -395,6 +442,55 @@ export const BackdropTile = memo(function BackdropTile({
     frameAllItemsInViewport(rect.width, rect.height)
     setCtxMenu(null)
   }, [frameAllItemsInViewport])
+
+  const runCommonMenuResetView = useCallback(() => {
+    resetViewport()
+    setCtxMenu(null)
+  }, [resetViewport])
+
+  const runCommonMenuToggleSelectionLock = useCallback(() => {
+    const state = useCanvasStore.getState()
+    const selected = state.items.filter((item) => state.selectedIds.includes(item.id))
+    if (selected.length === 0) return
+    setItemsLocked(
+      selected.map((item) => item.id),
+      !selected.every((item) => item.locked),
+    )
+    setCtxMenu(null)
+  }, [setItemsLocked])
+
+  const runCommonMenuToggleCanvasLock = useCallback(() => {
+    setCanvasLocked(!canvasLocked)
+    setCtxMenu(null)
+  }, [canvasLocked, setCanvasLocked])
+
+  const runCommonMenuImportDailies = useCallback(() => {
+    useUiStore.getState().setDailiesModalOpen(true)
+    setCtxMenu(null)
+  }, [])
+
+  const runCommonMenuImportPrm = useCallback(() => {
+    useUiStore.getState().setPrmModalOpen(true)
+    setCtxMenu(null)
+  }, [])
+
+  const runCommonMenuRestartPlayingVideos = useCallback(() => {
+    for (const video of videoRegistry.values()) {
+      if (video.paused) continue
+      video.currentTime = 0
+    }
+    setCtxMenu(null)
+  }, [])
+
+  const runCommonMenuTogglePlayback = useCallback(() => {
+    setVideoPlaybackSuspended(!getVideoPlaybackSuspended())
+    setCtxMenu(null)
+  }, [])
+
+  const runCommonMenuGenerateProxies = useCallback(() => {
+    setCtxMenu(null)
+    void generateCanvasVideoProxies()
+  }, [])
 
   const runCommonMenuSettings = useCallback(() => {
     window.dispatchEvent(new CustomEvent('app-open-settings'))
@@ -511,7 +607,7 @@ export const BackdropTile = memo(function BackdropTile({
 
     const startItems = new Map<string, { x: number; y: number }>()
     for (const item of state.items) {
-      if (!movingIdSet.has(item.id)) continue
+      if (!movingIdSet.has(item.id) || item.locked) continue
       startItems.set(item.id, { x: item.x, y: item.y })
     }
     const liveTargetsSet = new Set<HTMLElement>()
@@ -629,18 +725,20 @@ export const BackdropTile = memo(function BackdropTile({
   const collapseBtnPx = Math.round(headerBtnPx * 0.9)
   const collapseFontPx = Math.round(collapseBtnPx * 0.62)
 
-  const enableResizing = backdrop.collapsed
-    ? {
-        top: false,
-        topLeft: false,
-        topRight: false,
-        bottom: false,
-        bottomLeft: false,
-        bottomRight: false,
-        left: true,
-        right: true,
-      }
-    : true
+  const enableResizing = interactionLocked
+    ? false
+    : backdrop.collapsed
+      ? {
+          top: false,
+          topLeft: false,
+          topRight: false,
+          bottom: false,
+          bottomLeft: false,
+          bottomRight: false,
+          left: true,
+          right: true,
+        }
+      : true
 
   const minH = backdrop.collapsed ? COLLAPSED_STRIP_H : Math.max(120, headerH + 56)
 
@@ -730,6 +828,7 @@ export const BackdropTile = memo(function BackdropTile({
         size={{ width: backdrop.width, height: headerH }}
         scale={scale}
         enableResizing={false}
+        disableDragging={interactionLocked}
         cancel=".backdrop-no-drag"
         onDragStart={(e) => {
           e.stopPropagation()
@@ -815,7 +914,10 @@ export const BackdropTile = memo(function BackdropTile({
       >
         <div
           ref={headerRootRef}
-          className="backdrop-drag-handle w-full h-full flex items-center gap-2 px-2 bg-black/55 border cursor-grab active:cursor-grabbing select-none rounded-md"
+          className={[
+            'backdrop-drag-handle w-full h-full flex items-center gap-2 px-2 bg-black/55 border select-none rounded-md',
+            interactionLocked ? 'cursor-default' : 'cursor-grab active:cursor-grabbing',
+          ].join(' ')}
           style={{
             borderColor: hexToRgba(fillAdjusted, 0.45),
             boxShadow: selectedRing,
@@ -836,6 +938,15 @@ export const BackdropTile = memo(function BackdropTile({
             ::
           </div>
 
+          {backdrop.locked && (
+            <div
+              className="pointer-events-none shrink-0 rounded border border-amber-400/40 bg-black/60 px-1.5 py-0.5 font-bold tracking-wide text-amber-300"
+              style={{ fontSize: Math.max(9, Math.round(headerBtnFontPx * 0.38)) }}
+            >
+              LOCK
+            </div>
+          )}
+
           {!editingLabel ? (
             <div
               className={[
@@ -845,6 +956,7 @@ export const BackdropTile = memo(function BackdropTile({
               title="Double-click to rename"
               onDoubleClick={(ev) => {
                 ev.stopPropagation()
+                if (interactionLocked) return
                 if (!isSelected) selectOne(backdrop.id)
                 setEditingLabel(true)
               }}
@@ -882,8 +994,9 @@ export const BackdropTile = memo(function BackdropTile({
                 <button
                   key={sz}
                   type="button"
+                  disabled={interactionLocked}
                   className={[
-                    'backdrop-no-drag shrink-0 rounded border text-zinc-200/90 hover:text-zinc-50 hover:bg-black/60',
+                    'backdrop-no-drag shrink-0 rounded border text-zinc-200/90 hover:text-zinc-50 hover:bg-black/60 disabled:cursor-not-allowed disabled:opacity-35',
                     'bg-black/30 border-zinc-700/60',
                     backdrop.labelSize === sz ? 'ring-1 ring-zinc-200/40' : '',
                   ].join(' ')}
@@ -891,6 +1004,7 @@ export const BackdropTile = memo(function BackdropTile({
                   title={`Label size: ${sz.toUpperCase()}`}
                   onClick={(e) => {
                     e.stopPropagation()
+                    if (interactionLocked) return
                     const prevHeader = backdropHeaderHeight(backdrop.labelSize)
                     const nextHeader = backdropHeaderHeight(sz)
                     const dHeader = nextHeader - prevHeader
@@ -918,9 +1032,11 @@ export const BackdropTile = memo(function BackdropTile({
 
           <button
             type="button"
+            disabled={interactionLocked}
             onMouseDown={(ev) => ev.stopPropagation()}
             onClick={(ev) => {
               ev.stopPropagation()
+              if (interactionLocked) return
               onCollapseToggle()
             }}
             className="backdrop-no-drag shrink-0 flex items-center justify-center rounded bg-black/30 hover:bg-black/60 border border-zinc-700/60 text-zinc-100 leading-none"
@@ -937,16 +1053,18 @@ export const BackdropTile = memo(function BackdropTile({
         <div
           ref={backdropMenuRef}
           data-backdrop-ctx-menu="true"
-          className="fixed z-[10000] rounded-lg border border-zinc-700/70 bg-zinc-950/95 shadow-2xl p-2"
+          className="fixed z-[10000] overflow-y-auto rounded-lg border border-zinc-700/70 bg-zinc-950/95 shadow-2xl p-2"
           style={{
             left: backdropMenuPosition?.left ?? ctxMenu.x,
             top: backdropMenuPosition?.top ?? ctxMenu.y,
+            maxHeight: 'calc(100vh - 16px)',
           }}
           onMouseDown={(e) => e.stopPropagation()}
         >
           <button
             type="button"
-            className="w-full text-left px-2 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800/80 rounded transition-colors"
+            disabled={interactionLocked}
+            className="w-full text-left px-2 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800/80 rounded transition-colors disabled:cursor-not-allowed disabled:opacity-35"
             onClick={() => {
               updateItem(backdrop.id, {
                 displayMode: backdrop.displayMode === 'frame' ? 'solid' : 'frame',
@@ -967,8 +1085,9 @@ export const BackdropTile = memo(function BackdropTile({
                 <button
                   key={color}
                   type="button"
+                  disabled={canvasLocked || selectionLockState === 'locked'}
                   className={[
-                    'h-7 w-7 rounded-md border transition-transform hover:scale-105',
+                    'h-7 w-7 rounded-md border transition-transform hover:scale-105 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:scale-100',
                     isActive ? 'ring-2 ring-zinc-100/70' : '',
                   ].join(' ')}
                   style={{
@@ -989,6 +1108,7 @@ export const BackdropTile = memo(function BackdropTile({
             <input
               className="w-[160px] backdrop-no-drag"
               type="range"
+              disabled={canvasLocked || selectionLockState === 'locked'}
               min={0}
               max={359}
               value={Math.round(hueBase)}
@@ -1008,6 +1128,7 @@ export const BackdropTile = memo(function BackdropTile({
               <input
                 className="w-[160px] backdrop-no-drag"
                 type="range"
+                disabled={interactionLocked}
                 min={0}
                 max={100}
                 value={Math.round(backdrop.brightness ?? 40)}
@@ -1027,6 +1148,7 @@ export const BackdropTile = memo(function BackdropTile({
               <input
                 className="w-[160px] backdrop-no-drag"
                 type="range"
+                disabled={interactionLocked}
                 min={0}
                 max={200}
                 value={Math.round(backdrop.saturation ?? 100)}
@@ -1044,12 +1166,24 @@ export const BackdropTile = memo(function BackdropTile({
           <CanvasCommonMenuSection
             clipboardAvailable={clipboardCount > 0}
             alwaysOnTop={alwaysOnTop}
+            playbackSuspended={playbackSuspended}
+            canvasLocked={canvasLocked}
+            selectionLockState={selectionLockState}
+            showStudioImport={showStudioImport}
+            onImportDailies={runCommonMenuImportDailies}
+            onImportPrm={runCommonMenuImportPrm}
+            onRestartPlayingVideos={runCommonMenuRestartPlayingVideos}
+            onTogglePlayback={runCommonMenuTogglePlayback}
+            onGenerateProxies={runCommonMenuGenerateProxies}
             onNewNote={runCommonMenuNewNote}
             onAddBackdrop={runCommonMenuAddBackdrop}
             onPaste={runCommonMenuPaste}
             onGridAlign={runCommonMenuGridAlign}
             onLayoutMediaRow={runCommonMenuLayoutMediaRow}
             onFitAll={runCommonMenuFitAll}
+            onResetView={runCommonMenuResetView}
+            onToggleSelectionLock={runCommonMenuToggleSelectionLock}
+            onToggleCanvasLock={runCommonMenuToggleCanvasLock}
             onSettings={runCommonMenuSettings}
             onToggleAlwaysOnTop={runCommonMenuToggleAlwaysOnTop}
             onQuit={runCommonMenuQuit}

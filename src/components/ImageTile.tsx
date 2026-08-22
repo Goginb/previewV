@@ -57,9 +57,11 @@ export const ImageTile = memo(function ImageTile({ item, scale, isSelected, isHi
   const selectOne    = useCanvasStore((s) => s.selectOne)
   const toggleSelect = useCanvasStore((s) => s.toggleSelect)
   const selectedIds = useCanvasStore((s) => s.selectedIds)
+  const canvasLocked = useCanvasStore((s) => s.canvasLocked)
   const imageEditModeId = useCanvasStore((s) => s.imageEditModeId)
   const setImageEditModeId = useCanvasStore((s) => s.setImageEditModeId)
   const isEditing = imageEditModeId === item.id
+  const interactionLocked = canvasLocked || !!item.locked
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const areaRef   = useRef<HTMLDivElement>(null)
@@ -339,11 +341,13 @@ export const ImageTile = memo(function ImageTile({ item, scale, isSelected, isHi
   const toCanvas = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const c    = canvasRef.current!
     const rect = c.getBoundingClientRect()
+    const x = (e.clientX - rect.left) * (c.width / rect.width)
+    const y = (e.clientY - rect.top) * (c.height / rect.height)
     return {
-      x: (e.clientX - rect.left) * (c.width  / rect.width),
-      y: (e.clientY - rect.top)  * (c.height / rect.height),
+      x: item.flipX ? c.width - x : x,
+      y: item.flipY ? c.height - y : y,
     }
-  }, [])
+  }, [item.flipX, item.flipY])
 
   // ── Pointer handlers ─────────────────────────────────────────────────────
   const onDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -502,6 +506,7 @@ export const ImageTile = memo(function ImageTile({ item, scale, isSelected, isHi
       minWidth={isEditing ? 200 : 120}
       minHeight={isEditing ? 160 : 100}
       cancel=".image-no-drag, button, canvas"
+      disableDragging={interactionLocked}
       onDragStart={() => {
         window.dispatchEvent(new CustomEvent('canvas-history-action'))
         const state = useCanvasStore.getState()
@@ -511,7 +516,7 @@ export const ImageTile = memo(function ImageTile({ item, scale, isSelected, isHi
         }
         const origins = new Map<string, { x: number; y: number }>()
         for (const it of state.items) {
-          if (state.selectedIds.includes(it.id)) {
+          if (state.selectedIds.includes(it.id) && !it.locked) {
             origins.set(it.id, { x: it.x, y: it.y })
           }
         }
@@ -566,7 +571,7 @@ export const ImageTile = memo(function ImageTile({ item, scale, isSelected, isHi
         scheduleResizeUpdate({ x: position.x, y: position.y, width: w, height: h })
       }}
       onResizeStart={(e) => {
-        if (isEditing) return false
+        if (isEditing || interactionLocked) return false
         if ('button' in e && typeof e.button === 'number' && e.button !== 0) return false
         window.dispatchEvent(new CustomEvent('canvas-history-action'))
         resizeActiveRef.current = true
@@ -587,7 +592,7 @@ export const ImageTile = memo(function ImageTile({ item, scale, isSelected, isHi
           { recordHistory: false },
         )
       }}
-      enableResizing={!isEditing}
+      enableResizing={!isEditing && !interactionLocked}
       style={{ 
         zIndex: isEditing ? 30 : 15, 
         pointerEvents: isHidden ? 'none' : 'auto',
@@ -611,7 +616,7 @@ export const ImageTile = memo(function ImageTile({ item, scale, isSelected, isHi
         data-item-id={item.id}
         className={[
           dragHandleClassName,
-          'w-full h-full flex flex-col rounded-lg overflow-hidden shadow-2xl bg-zinc-900 border',
+          'relative w-full h-full flex flex-col rounded-lg overflow-hidden shadow-2xl bg-zinc-900 border',
           isSelected
             ? 'border-emerald-200 ring-[3px] ring-emerald-300/95 shadow-[0_0_0_2px_rgba(16,185,129,0.45),0_0_36px_rgba(16,185,129,0.35)]'
             : 'border-zinc-700/60',
@@ -620,12 +625,19 @@ export const ImageTile = memo(function ImageTile({ item, scale, isSelected, isHi
         onClick={handleClickSelection}
       >
 
+        {item.locked && (
+          <div className="pointer-events-none absolute right-1.5 top-1.5 z-50 rounded border border-amber-400/40 bg-black/75 px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-amber-300">
+            LOCK
+          </div>
+        )}
+
         {/* ── Toolbar / drag handle ──────────────────────────────────── */}
         <div
           className={[
             isEditing ? 'img-drag-handle' : '',
             !isEditing ? 'image-no-drag' : '',
-            'flex items-center gap-1 px-2 h-8 min-h-[32px] bg-zinc-800/90 cursor-grab active:cursor-grabbing shrink-0 select-none overflow-hidden',
+            'flex items-center gap-1 px-2 h-8 min-h-[32px] bg-zinc-800/90 shrink-0 select-none overflow-hidden',
+            interactionLocked ? 'cursor-default' : 'cursor-grab active:cursor-grabbing',
           ].filter(Boolean).join(' ')}
         >
 
@@ -738,14 +750,20 @@ export const ImageTile = memo(function ImageTile({ item, scale, isSelected, isHi
                 src={item.srcUrl}
                 onLoad={onBaseImageLoad}
                 className="absolute inset-0 w-full h-full object-contain select-none"
-                style={{ pointerEvents: isEditing ? 'none' : 'auto' }}
+                style={{
+                  pointerEvents: isEditing ? 'none' : 'auto',
+                  transform: `scale(${item.flipX ? -1 : 1}, ${item.flipY ? -1 : 1})`,
+                }}
                 draggable={false}
                 alt=""
               />
               <canvas
                 ref={canvasRef}
                 className={['absolute inset-0 w-full h-full', !isEditing && 'pointer-events-none opacity-0'].filter(Boolean).join(' ')}
-                style={{ cursor: isEditing ? CURSOR[tool] : 'default' }}
+                style={{
+                  cursor: isEditing ? CURSOR[tool] : 'default',
+                  transform: `scale(${item.flipX ? -1 : 1}, ${item.flipY ? -1 : 1})`,
+                }}
                 onMouseDown={onDown}
                 onMouseMove={onMove}
                 onMouseUp={onUp}

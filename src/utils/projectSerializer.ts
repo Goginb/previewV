@@ -25,6 +25,7 @@ interface SerializeProjectOptions {
   items: CanvasItem[]
   viewport: ViewportState
   meta: ProjectMeta
+  canvasLocked?: boolean
   assetPathForImage: (item: ImageItem) => string
   previewAssetPathForImage?: (item: ImageItem) => string | undefined
 }
@@ -101,14 +102,24 @@ function normalizeToForwardSlashes(path: string): string {
 }
 
 export function localPathToMediaUrl(localPath: string): string {
-  const normalized = normalizeToForwardSlashes(localPath).replace(/^\/+/, '')
+  const forwardPath = normalizeToForwardSlashes(localPath)
+  const isUncPath = /^\/{2,}/.test(forwardPath)
+  const normalized = forwardPath.replace(/^\/+/, '')
   // Encode each path segment so reserved chars (incl. #, %, spaces, unicode) are safe in URL.
   const encoded = normalized
     .split('/')
     .filter((part, idx, arr) => part.length > 0 || (idx === arr.length - 1 && normalized.endsWith('/')))
     .map((part) => encodeURIComponent(part))
     .join('/')
-  return `media:///${encoded}`
+  return isUncPath ? `media://unc/${encoded}` : `media:///${encoded}`
+}
+
+function optionalBoolean(v: unknown, field: string): boolean | undefined {
+  if (v === undefined) return undefined
+  if (typeof v !== 'boolean') {
+    throw new Error(`Invalid project: field "${field}" must be a boolean`)
+  }
+  return v
 }
 
 function decodeMediaUrlPathSegment(rest: string): string {
@@ -118,24 +129,32 @@ function decodeMediaUrlPathSegment(rest: string): string {
   } catch {
     decoded = rest
   }
-  // Unix absolute paths are stored without a leading slash (same scheme as Windows drive paths).
-  if (!/^[a-zA-Z]:/.test(decoded) && !decoded.startsWith('/')) {
-    decoded = `/${decoded}`
-  }
   return decoded
 }
 
 export function mediaUrlToLocalPath(mediaUrl: string): string {
   let rest = ''
-  if (mediaUrl.startsWith('media:///')) rest = mediaUrl.slice('media:///'.length)
+  let isUncPath = false
+  if (mediaUrl.startsWith('media://unc/')) {
+    rest = mediaUrl.slice('media://unc/'.length)
+    isUncPath = true
+  }
+  else if (mediaUrl.startsWith('media:///')) rest = mediaUrl.slice('media:///'.length)
   else if (mediaUrl.startsWith('media://')) rest = mediaUrl.slice('media://'.length)
   else return ''
 
   const decoded = decodeMediaUrlPathSegment(rest)
-  if (typeof process !== 'undefined' && process.platform === 'win32') {
+  if (isUncPath) {
+    return `\\\\${decoded.replace(/^\/+/, '').replace(/\//g, '\\')}`
+  }
+  if (/^[a-zA-Z]:/.test(decoded)) {
     return decoded.replace(/\//g, '\\')
   }
-  return decoded
+  if (typeof process !== 'undefined' && process.platform === 'win32') {
+    const absolute = decoded.startsWith('/') ? decoded : `/${decoded}`
+    return absolute.replace(/\//g, '\\')
+  }
+  return decoded.startsWith('/') ? decoded : `/${decoded}`
 }
 
 export function isDataUrl(value: string): boolean {
@@ -167,6 +186,7 @@ function validateItemV1(raw: unknown): ProjectCanvasItemV1 {
   const y = mustBeNumber(raw.y, 'item.y')
   const width = mustBeNumber(raw.width, 'item.width')
   const height = mustBeNumber(raw.height, 'item.height')
+  const locked = optionalBoolean(raw.locked, 'item.locked')
 
   if (type === 'video') {
     const fileName = mustBeString(raw.fileName, 'item.fileName')
@@ -191,6 +211,7 @@ function validateItemV1(raw: unknown): ProjectCanvasItemV1 {
       ...(proxyForVideoPath !== undefined ? { proxyForVideoPath } : {}),
       ...(aspectApplied !== undefined ? { aspectApplied } : {}),
       ...(uiColor !== undefined ? { uiColor } : {}),
+      ...(locked !== undefined ? { locked } : {}),
     }
   }
 
@@ -253,6 +274,9 @@ function validateItemV2(raw: unknown): ProjectCanvasItemV2 {
   const y = mustBeNumber(raw.y, 'item.y')
   const width = mustBeNumber(raw.width, 'item.width')
   const height = mustBeNumber(raw.height, 'item.height')
+  const locked = optionalBoolean(raw.locked, 'item.locked')
+  const flipX = optionalBoolean(raw.flipX, 'item.flipX')
+  const flipY = optionalBoolean(raw.flipY, 'item.flipY')
 
   if (type === 'video') {
     const fileName = mustBeString(raw.fileName, 'item.fileName')
@@ -277,6 +301,9 @@ function validateItemV2(raw: unknown): ProjectCanvasItemV2 {
       ...(proxyForVideoPath !== undefined ? { proxyForVideoPath } : {}),
       ...(aspectApplied !== undefined ? { aspectApplied } : {}),
       ...(uiColor !== undefined ? { uiColor } : {}),
+      ...(locked !== undefined ? { locked } : {}),
+      ...(flipX !== undefined ? { flipX } : {}),
+      ...(flipY !== undefined ? { flipY } : {}),
     }
   }
 
@@ -307,6 +334,9 @@ function validateItemV2(raw: unknown): ProjectCanvasItemV2 {
         ...(fileName !== undefined ? { fileName } : {}),
         imageSourcePath,
         ...(previewAssetPath !== undefined ? { previewAssetPath } : {}),
+        ...(locked !== undefined ? { locked } : {}),
+        ...(flipX !== undefined ? { flipX } : {}),
+        ...(flipY !== undefined ? { flipY } : {}),
       }
     }
 
@@ -325,6 +355,9 @@ function validateItemV2(raw: unknown): ProjectCanvasItemV2 {
         ...(naturalHeight !== undefined ? { naturalHeight } : {}),
         ...(fileName !== undefined ? { fileName } : {}),
         assetPath,
+        ...(locked !== undefined ? { locked } : {}),
+        ...(flipX !== undefined ? { flipX } : {}),
+        ...(flipY !== undefined ? { flipY } : {}),
       }
     }
 
@@ -349,6 +382,7 @@ function validateItemV2(raw: unknown): ProjectCanvasItemV2 {
       ...(fontSizeTier ? { fontSizeTier } : {}),
       ...(color !== undefined ? { color } : {}),
       ...(fontFamily !== undefined ? { fontFamily } : {}),
+      ...(locked !== undefined ? { locked } : {}),
     }
   }
 
@@ -389,6 +423,7 @@ function validateItemV2(raw: unknown): ProjectCanvasItemV2 {
       collapsed,
       ...(expandedHeight !== undefined ? { expandedHeight } : {}),
       attachedVideoIds,
+      ...(locked !== undefined ? { locked } : {}),
     }
   }
 
@@ -431,6 +466,9 @@ export function serializeProject(params: SerializeProjectOptions): ProjectFileV2
         ...(item.proxyForSourcePath ? { proxyForVideoPath: item.proxyForSourcePath } : {}),
         ...(item.aspectApplied !== undefined ? { aspectApplied: item.aspectApplied } : {}),
         ...(item.uiColor !== undefined ? { uiColor: item.uiColor } : {}),
+        ...(item.locked !== undefined ? { locked: item.locked } : {}),
+        ...(item.flipX !== undefined ? { flipX: item.flipX } : {}),
+        ...(item.flipY !== undefined ? { flipY: item.flipY } : {}),
       }
     }
 
@@ -451,6 +489,9 @@ export function serializeProject(params: SerializeProjectOptions): ProjectFileV2
           ...(item.fileName !== undefined ? { fileName: item.fileName } : {}),
           imageSourcePath: item.sourceFilePath,
           ...(previewAssetPath ? { previewAssetPath } : {}),
+          ...(item.locked !== undefined ? { locked: item.locked } : {}),
+          ...(item.flipX !== undefined ? { flipX: item.flipX } : {}),
+          ...(item.flipY !== undefined ? { flipY: item.flipY } : {}),
         }
       }
 
@@ -468,6 +509,9 @@ export function serializeProject(params: SerializeProjectOptions): ProjectFileV2
         ...(item.naturalHeight !== undefined ? { naturalHeight: item.naturalHeight } : {}),
         ...(item.fileName !== undefined ? { fileName: item.fileName } : {}),
         assetPath,
+        ...(item.locked !== undefined ? { locked: item.locked } : {}),
+        ...(item.flipX !== undefined ? { flipX: item.flipX } : {}),
+        ...(item.flipY !== undefined ? { flipY: item.flipY } : {}),
       }
     }
 
@@ -489,6 +533,7 @@ export function serializeProject(params: SerializeProjectOptions): ProjectFileV2
         collapsed: item.collapsed,
         ...(expandedHeight !== undefined ? { expandedHeight } : {}),
         attachedVideoIds: item.attachedVideoIds,
+        ...(item.locked !== undefined ? { locked: item.locked } : {}),
       }
     }
 
@@ -504,6 +549,7 @@ export function serializeProject(params: SerializeProjectOptions): ProjectFileV2
       ...(item.fontSizeTier ? { fontSizeTier: item.fontSizeTier } : {}),
       ...(item.color !== undefined ? { color: item.color } : {}),
       ...(item.fontFamily !== undefined ? { fontFamily: item.fontFamily } : {}),
+      ...(item.locked !== undefined ? { locked: item.locked } : {}),
     }
   })
 
@@ -512,6 +558,7 @@ export function serializeProject(params: SerializeProjectOptions): ProjectFileV2
     items,
     viewport: params.viewport,
     meta: params.meta,
+    canvasLocked: params.canvasLocked ?? false,
   }
 }
 
@@ -530,6 +577,7 @@ export function deserializeProject(
 
   const viewport = validateViewport(raw.viewport)
   const meta = validateMeta(raw.meta)
+  const canvasLocked = optionalBoolean(raw.canvasLocked, 'canvasLocked') ?? false
 
   if (version === 1) {
     const items: CanvasItem[] = raw.items.map((i) => {
@@ -589,7 +637,7 @@ export function deserializeProject(
       return note
     })
 
-    return { items, viewport, meta }
+    return { items, viewport, meta, canvasLocked }
   }
 
   const items: CanvasItem[] = raw.items.map((i) => {
@@ -610,6 +658,9 @@ export function deserializeProject(
         ...(validated.proxyForVideoPath !== undefined ? { proxyForSourcePath: validated.proxyForVideoPath } : {}),
         ...(validated.aspectApplied !== undefined ? { aspectApplied: validated.aspectApplied } : {}),
         ...(validated.uiColor !== undefined ? { uiColor: validated.uiColor } : {}),
+        ...(validated.locked !== undefined ? { locked: validated.locked } : {}),
+        ...(validated.flipX !== undefined ? { flipX: validated.flipX } : {}),
+        ...(validated.flipY !== undefined ? { flipY: validated.flipY } : {}),
       }
       return video
     }
@@ -634,6 +685,9 @@ export function deserializeProject(
           ...(validated.naturalHeight !== undefined ? { naturalHeight: validated.naturalHeight } : {}),
           ...(validated.fileName !== undefined ? { fileName: validated.fileName } : {}),
           ...(preview ? { projectAssetPath: preview.absolutePath } : {}),
+          ...(validated.locked !== undefined ? { locked: validated.locked } : {}),
+          ...(validated.flipX !== undefined ? { flipX: validated.flipX } : {}),
+          ...(validated.flipY !== undefined ? { flipY: validated.flipY } : {}),
         }
         return img
       }
@@ -653,6 +707,9 @@ export function deserializeProject(
         ...(validated.naturalHeight !== undefined ? { naturalHeight: validated.naturalHeight } : {}),
         ...(validated.fileName !== undefined ? { fileName: validated.fileName } : {}),
         projectAssetPath: asset.absolutePath,
+        ...(validated.locked !== undefined ? { locked: validated.locked } : {}),
+        ...(validated.flipX !== undefined ? { flipX: validated.flipX } : {}),
+        ...(validated.flipY !== undefined ? { flipY: validated.flipY } : {}),
       }
       return img
     }
@@ -674,6 +731,7 @@ export function deserializeProject(
         collapsed: validated.collapsed,
         ...(validated.expandedHeight !== undefined ? { expandedHeight: validated.expandedHeight } : {}),
         attachedVideoIds: validated.attachedVideoIds,
+        ...(validated.locked !== undefined ? { locked: validated.locked } : {}),
       }
       return backdrop
     }
@@ -690,9 +748,10 @@ export function deserializeProject(
       ...(validated.fontSizeTier ? { fontSizeTier: validated.fontSizeTier } : {}),
       ...(validated.color !== undefined ? { color: validated.color } : {}),
       ...(validated.fontFamily !== undefined ? { fontFamily: validated.fontFamily } : {}),
+      ...(validated.locked !== undefined ? { locked: validated.locked } : {}),
     }
     return note
   })
 
-  return { items, viewport, meta }
+  return { items, viewport, meta, canvasLocked }
 }

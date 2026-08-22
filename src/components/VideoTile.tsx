@@ -105,6 +105,7 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
   const selectOne = useCanvasStore((s) => s.selectOne)
   const toggleSelect = useCanvasStore((s) => s.toggleSelect)
   const selectedIds = useCanvasStore((s) => s.selectedIds)
+  const canvasLocked = useCanvasStore((s) => s.canvasLocked)
   const suppressClickUntilRef = useRef(0)
   const dragOriginsRef = useRef<Map<string, { x: number; y: number }> | null>(null)
   const dragPeerElementsRef = useRef<HTMLElement[]>([])
@@ -610,6 +611,7 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
     }
   }, [isSelected, selectOne, selectedIds.length, tile.id])
   const dragHandleClassName = 'video-root-drag-handle'
+  const interactionLocked = canvasLocked || !!tile.locked
 
   return (
     <Rnd
@@ -619,6 +621,7 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
       minWidth={200}
       minHeight={TITLE_H + 80 + CONTROLS_H}
       cancel=".video-no-drag, .video-controls, button, [role='slider']"
+      disableDragging={interactionLocked}
       onDragStart={() => {
         window.dispatchEvent(new CustomEvent('canvas-history-action'))
         const state = useCanvasStore.getState()
@@ -628,7 +631,7 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
         }
         const origins = new Map<string, { x: number; y: number }>()
         for (const item of state.items) {
-          if (state.selectedIds.includes(item.id)) {
+          if (state.selectedIds.includes(item.id) && !item.locked) {
             origins.set(item.id, { x: item.x, y: item.y })
           }
         }
@@ -729,7 +732,7 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
           { recordHistory: false },
         )
       }}
-      enableResizing={true}
+      enableResizing={!interactionLocked}
       style={{
         zIndex: 10,
         pointerEvents: isHidden ? 'none' : 'auto',
@@ -762,8 +765,16 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
         onMouseDown={handleSelect}
         onClick={handleClickSelection}
       >
+        {tile.locked && (
+          <div className="pointer-events-none absolute right-1.5 top-1.5 z-50 rounded border border-amber-400/40 bg-black/75 px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-amber-300">
+            LOCK
+          </div>
+        )}
         <div
-          className="absolute left-0 right-0 top-0 z-20 flex items-center px-2 cursor-grab active:cursor-grabbing"
+          className={[
+            'absolute left-0 right-0 top-0 z-20 flex items-center px-2',
+            interactionLocked ? 'cursor-default' : 'cursor-grab active:cursor-grabbing',
+          ].join(' ')}
           style={{
             height: TITLE_H,
             background: headerBackground,
@@ -806,7 +817,10 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
             ref={videoRef}
             src={activeSrcUrl}
             className="absolute inset-0 w-full h-full object-contain"
-            style={{ display: showNavigationPreview ? 'none' : undefined }}
+            style={{
+              display: showNavigationPreview ? 'none' : undefined,
+              transform: `scale(${tile.flipX ? -1 : 1}, ${tile.flipY ? -1 : 1})`,
+            }}
             loop
             muted
             playsInline

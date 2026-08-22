@@ -64,12 +64,15 @@ interface CanvasState {
   items: CanvasItem[]
   selectedIds: string[]
   viewport: Viewport
+  canvasLocked: boolean
   clipboard: CanvasItem[]
   currentProjectPath: string | null
   isDirty: boolean
   projectMeta: ProjectMeta | null
   imageEditModeId: string | null
   setImageEditModeId: (id: string | null) => void
+  setCanvasLocked: (locked: boolean) => void
+  setItemsLocked: (ids: string[], locked: boolean) => void
   _past: CanvasItem[][]
   _future: CanvasItem[][]
   addItem: (item: CanvasItem) => void
@@ -102,13 +105,19 @@ interface CanvasState {
   markSaved: (path?: string | null) => void
   syncSavedProjectState: (project: DeserializedProject, projectPath: string | null) => void
   loadProjectState: (project: DeserializedProject, projectPath: string | null) => void
-  getProjectDataForSave: () => { items: CanvasItem[]; viewport: ViewportState; meta: ProjectMeta }
+  getProjectDataForSave: () => {
+    items: CanvasItem[]
+    viewport: ViewportState
+    meta: ProjectMeta
+    canvasLocked: boolean
+  }
 }
 
 export const useCanvasStore = create<CanvasState>((set, get) => ({
   items: [],
   selectedIds: [],
   viewport: DEFAULT_VIEWPORT,
+  canvasLocked: false,
   clipboard: [],
   currentProjectPath: null,
   isDirty: false,
@@ -117,7 +126,43 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   _past: [],
   _future: [],
 
-  setImageEditModeId: (id) => set({ imageEditModeId: id }),
+  setImageEditModeId: (id) => {
+    if (id) {
+      const state = get()
+      const item = state.items.find((candidate) => candidate.id === id)
+      if (state.canvasLocked || item?.locked) return
+    }
+    set({ imageEditModeId: id })
+  },
+
+  setCanvasLocked: (locked) =>
+    set((state) => {
+      if (state.canvasLocked === locked) return {}
+      return {
+        canvasLocked: locked,
+        imageEditModeId: locked ? null : state.imageEditModeId,
+        isDirty: true,
+      }
+    }),
+
+  setItemsLocked: (ids, locked) => {
+    const idSet = new Set(ids)
+    if (idSet.size === 0) return
+    set((state) => {
+      const changed = state.items.some((item) => idSet.has(item.id) && !!item.locked !== locked)
+      if (!changed) return {}
+      return {
+        _past: pushPast(state._past, state.items),
+        items: state.items.map((item) => (idSet.has(item.id) ? { ...item, locked } : item)),
+        imageEditModeId:
+          locked && state.imageEditModeId && idSet.has(state.imageEditModeId)
+            ? null
+            : state.imageEditModeId,
+        isDirty: true,
+        _future: [],
+      }
+    })
+  },
 
   addItem: (item) => {
     get().addItems([item])
@@ -125,6 +170,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   addItems: (items) => {
     if (!items.length) return
+    if (get().canvasLocked) return
     set((state) => ({
       _past: pushPast(state._past, state.items),
       items: [...state.items, ...items],
@@ -178,7 +224,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     }))
   },
 
-  removeItem: (id) =>
+  removeItem: (id) => {
+    const state = get()
+    const item = state.items.find((candidate) => candidate.id === id)
+    if (state.canvasLocked || !item || item.locked) return
     set((state) => ({
       _past: pushPast(state._past, state.items),
       items: state.items.filter((item) => item.id !== id),
@@ -186,10 +235,15 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       imageEditModeId: state.imageEditModeId === id ? null : state.imageEditModeId,
       isDirty: true,
       _future: [],
-    })),
+    }))
+  },
 
   removeItems: (ids) => {
-    const idSet = new Set(ids)
+    const current = get()
+    if (current.canvasLocked) return
+    const idSet = new Set(
+      ids.filter((id) => current.items.some((item) => item.id === id && !item.locked)),
+    )
     if (idSet.size === 0) return
     set((state) => ({
       _past: pushPast(state._past, state.items),
@@ -283,13 +337,15 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   layoutMediaRow: () => {
     const state = get()
+    if (state.canvasLocked) return
     const selectionSet = new Set(state.selectedIds)
-    const canMove = (id: string) => (selectionSet.size > 0 ? selectionSet.has(id) : true)
+    const canMove = (item: CanvasItem) =>
+      !item.locked && (selectionSet.size > 0 ? selectionSet.has(item.id) : true)
     const videos = state.items.filter(
-      (i): i is Extract<CanvasItem, { type: 'video' }> => i.type === 'video' && canMove(i.id),
+      (i): i is Extract<CanvasItem, { type: 'video' }> => i.type === 'video' && canMove(i),
     )
     const images = state.items.filter(
-      (i): i is Extract<CanvasItem, { type: 'image' }> => i.type === 'image' && canMove(i.id),
+      (i): i is Extract<CanvasItem, { type: 'image' }> => i.type === 'image' && canMove(i),
     )
     if (videos.length === 0 && images.length === 0) return
 
@@ -338,11 +394,13 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   gridAlignTiles: () => {
     const state = get()
+    if (state.canvasLocked) return
     const selectionSet = new Set(state.selectedIds)
 
     const isTile = (i: CanvasItem) => i.type === 'video' || i.type === 'image' || i.type === 'note'
     const canMove = (i: CanvasItem) => {
       if (!isTile(i)) return false
+      if (i.locked) return false
       return selectionSet.size > 0 ? selectionSet.has(i.id) : true
     }
 
@@ -469,7 +527,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   setClipboard: (items) => set({ clipboard: items }),
 
   pasteClipboard: (atX, atY, offsetX = 30, offsetY = 30) => {
-    const { clipboard } = get()
+    const { clipboard, canvasLocked } = get()
+    if (canvasLocked) return
     if (!clipboard.length) return
 
     const originX = Math.min(...clipboard.map((i) => i.x))
@@ -495,9 +554,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
 
   duplicateSelection: () => {
     const state = get()
+    if (state.canvasLocked) return
     const idSet = new Set(state.selectedIds)
     if (idSet.size === 0) return
-    const toDup = state.items.filter((i) => idSet.has(i.id))
+    const toDup = state.items.filter((i) => idSet.has(i.id) && !i.locked)
     if (toDup.length === 0) return
 
     const prefix = `dup-${Date.now()}`
@@ -544,6 +604,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       return {
         items: project.items,
         viewport: project.viewport,
+        canvasLocked: project.canvasLocked ?? false,
         selectedIds,
         currentProjectPath: projectPath,
         projectMeta: project.meta,
@@ -556,6 +617,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     set({
       items: project.items,
       viewport: project.viewport,
+      canvasLocked: project.canvasLocked ?? false,
       selectedIds: [],
       clipboard: [],
       _past: [],
@@ -579,6 +641,11 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       updatedAt: now,
     }
     set({ projectMeta: meta })
-    return { items: normalizeBackdropAttachments(state.items), viewport: state.viewport, meta }
+    return {
+      items: normalizeBackdropAttachments(state.items),
+      viewport: state.viewport,
+      meta,
+      canvasLocked: state.canvasLocked,
+    }
   },
 }))

@@ -7,6 +7,7 @@ export interface ElectronWindowAPI {
   getAlwaysOnTop: () => Promise<boolean>
   getFullscreen: () => Promise<boolean>
   setFullscreen: (enabled: boolean) => Promise<void>
+  moveBy: (deltaX: number, deltaY: number) => void
 }
 
 export interface AppRuntimeInfo {

@@ -5,12 +5,17 @@ interface BaseItem {
   width: number
   height: number
   aspectApplied?: boolean
+  /** Prevent accidental layout changes while keeping the item viewable/selectable. */
+  locked?: boolean
 }
 
 export type ImageStorage = 'linked' | 'asset' | 'legacy-inline'
 
 export interface VideoItem extends BaseItem {
   type: 'video'
+  /** Mirror media content without changing the source file. */
+  flipX?: boolean
+  flipY?: boolean
   srcUrl: string
   fileName: string
   /** Absolute path to the original source file on disk, even if srcUrl points to a proxy. */
@@ -45,6 +50,9 @@ export interface NoteItem extends BaseItem {
 
 export interface ImageItem extends BaseItem {
   type: 'image'
+  /** Mirror media content without changing the source file. */
+  flipX?: boolean
+  flipY?: boolean
   /** Render source for the image (media:// local file or data: URL for unsaved/generated assets). */
   srcUrl: string
   /** Backing storage mode used for project persistence. */
@@ -98,6 +106,9 @@ export type ItemUpdate = {
   y?: number
   width?: number
   height?: number
+  locked?: boolean
+  flipX?: boolean
+  flipY?: boolean
   // NoteItem
   text?: string
   fontSize?: number

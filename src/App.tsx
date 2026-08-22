@@ -1,7 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Canvas } from './components/Canvas'
-import { ViewportHud } from './components/ViewportHud'
-import { ProjectTitleBar } from './components/ProjectTitleBar'
 import { HelpGuideModal } from './components/HelpGuideModal'
 import { SettingsModal } from './components/SettingsModal'
 import { DailiesImportModal } from './components/DailiesImportModal'
@@ -14,6 +12,7 @@ import { hydrateProjectVideoSources } from './utils/hydrateProjectVideoSources'
 import { createEmptyProject } from './utils/emptyProject'
 import { importMediaPathsToCanvas } from './utils/importMediaPaths'
 import { collectExistingSourcePaths, normalizePathKey } from './utils/sourcePaths'
+import { isTypingTarget } from './utils/keyboard'
 import {
   beginProjectOpenProgress,
   cancelProjectOpenProgress,
@@ -92,7 +91,6 @@ const App: React.FC = () => {
   const getProjectDataForSave = useCanvasStore((s) => s.getProjectDataForSave)
   const syncSavedProjectState = useCanvasStore((s) => s.syncSavedProjectState)
   const theme = useUiStore((s) => s.theme)
-  const isCanvasFullscreen = useUiStore((s) => s.isCanvasFullscreen)
 
   const waitForUiPaint = useCallback((maxDelayMs = 48) => {
     return new Promise<void>((resolve) => {
@@ -172,6 +170,25 @@ const App: React.FC = () => {
     const onHelp = () => setHelpOpen(true)
     window.addEventListener('app-show-help', onHelp)
     return () => window.removeEventListener('app-show-help', onHelp)
+  }, [])
+
+  useEffect(() => {
+    const openHelpOnI = (event: KeyboardEvent) => {
+      if (
+        event.code !== 'KeyI' ||
+        event.repeat ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.altKey ||
+        isTypingTarget(event)
+      ) {
+        return
+      }
+      event.preventDefault()
+      setHelpOpen(true)
+    }
+    window.addEventListener('keydown', openHelpOnI, true)
+    return () => window.removeEventListener('keydown', openHelpOnI, true)
   }, [])
 
   useEffect(() => {
@@ -520,17 +537,9 @@ const App: React.FC = () => {
           </div>
         </div>
       )}
-      {!isCanvasFullscreen && <ProjectTitleBar />}
-      <div
-        className={
-          isCanvasFullscreen
-            ? 'absolute inset-0 min-h-0'
-            : 'absolute inset-x-0 bottom-0 top-11 min-h-0'
-        }
-      >
+      <div className="absolute inset-0 min-h-0">
         <Canvas />
       </div>
-      {!isCanvasFullscreen && <ViewportHud />}
     </div>
   )
 }

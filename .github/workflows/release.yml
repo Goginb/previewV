@@ -33,7 +33,7 @@ jobs:
         run: |
           npm run ensure:ffmpeg
           npm run build
-          npx electron-builder --win nsis --win portable
+          npx electron-builder --win nsis --win portable --publish never
           npm run sync:version-marker
 
       - name: Upload Windows artifacts
@@ -71,7 +71,7 @@ jobs:
         run: |
           npm run ensure:ffmpeg
           npm run build
-          npx electron-builder --mac dmg zip
+          npx electron-builder --mac dmg zip --publish never
           npm run sync:version-marker
 
       - name: Upload macOS artifacts

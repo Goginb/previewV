@@ -16,7 +16,7 @@ import { imageExportRegistry } from '../utils/imageExportRegistry'
 import { flushImageAnnotations } from '../utils/flushImageAnnotations'
 import { importImageFile, isRasterImportFile } from '../utils/imageImport'
 import { isTypingTarget } from '../utils/keyboard'
-import { mediaUrlToLocalPath } from '../utils/projectSerializer'
+import { localPathToMediaUrl, mediaUrlToLocalPath } from '../utils/projectSerializer'
 import {
   getNoteCreationMetrics,
   getNoteCreationMetricsForText,
@@ -38,7 +38,11 @@ import {
   resolveSharedColorForIds,
 } from '../utils/selectionColors'
 import { defaultVideoTileSizeForNew, imageTileViewSize } from '../utils/tileSizing'
-import { getVideoPlaybackSuspended, setVideoPlaybackSuspended } from '../utils/videoGlobalPlayback'
+import {
+  getVideoPlaybackSuspended,
+  setVideoPlaybackSuspended,
+  subscribeVideoPlaybackSuspended,
+} from '../utils/videoGlobalPlayback'
 import { setVideoUserPausedByUser } from '../utils/videoUserPausedRegistry'
 import { setManualPlaybackAllowedInSuspended } from '../utils/videoSuspendedManualAllowRegistry'
 import { requestVideoWarmupEarly } from '../utils/warmupCanvasMedia'
@@ -55,6 +59,7 @@ import {
 import type { CanvasItem, ImageItem, NoteFontFamily, NoteItem, VideoItem } from '../types'
 import { useUiStore } from '../store/uiStore'
 import logoGreenFx from '../assets/logo-greenfx.png'
+import { generateCanvasVideoProxies } from '../utils/generateCanvasVideoProxies'
 
 // ── File helpers ──────────────────────────────────────────────────────────────
 
@@ -66,6 +71,8 @@ const ACCEPTED_EXTENSIONS = new Set([
   '.mp4', '.webm', '.mov', '.mkv', '.avi', '.m4v', '.ogv',
 ])
 
+const WINDOW_DRAG_THRESHOLD_PX = 6
+
 function isVideoFile(file: File): boolean {
   if (ACCEPTED_VIDEO_TYPES.has(file.type)) return true
   const ext = '.' + file.name.split('.').pop()?.toLowerCase()
@@ -74,11 +81,7 @@ function isVideoFile(file: File): boolean {
 
 function fileToUrl(file: File): string {
   const nativePath = (file as File & { path?: string }).path
-  if (nativePath) {
-    const normalized = nativePath.replace(/\\/g, '/').replace(/^\//, '')
-    const encoded = normalized.split('/').map((part) => encodeURIComponent(part)).join('/')
-    return `media:///${encoded}`
-  }
+  if (nativePath) return localPathToMediaUrl(nativePath)
   return URL.createObjectURL(file)
 }
 
@@ -201,6 +204,7 @@ export const Canvas: React.FC = () => {
   const items           = useCanvasStore((s) => s.items)
   const selectedIds     = useCanvasStore((s) => s.selectedIds)
   const viewport        = useCanvasStore((s) => s.viewport)
+  const canvasLocked    = useCanvasStore((s) => s.canvasLocked)
   const currentProjectPath = useCanvasStore((s) => s.currentProjectPath)
   const addItem         = useCanvasStore((s) => s.addItem)
   const addItems        = useCanvasStore((s) => s.addItems)
@@ -215,18 +219,30 @@ export const Canvas: React.FC = () => {
   const frameAllItemsInViewport = useCanvasStore((s) => s.frameAllItemsInViewport)
   const imageEditModeId = useCanvasStore((s) => s.imageEditModeId)
   const setImageEditModeId = useCanvasStore((s) => s.setImageEditModeId)
+  const setCanvasLocked = useCanvasStore((s) => s.setCanvasLocked)
+  const setItemsLocked  = useCanvasStore((s) => s.setItemsLocked)
   const showBackgroundGrid = useUiStore((s) => s.showBackgroundGrid)
   const gridSizeX = useUiStore((s) => s.gridSizeX)
   const gridSizeY = useUiStore((s) => s.gridSizeY)
   const theme = useUiStore((s) => s.theme)
   const alwaysOnTop = useUiStore((s) => s.alwaysOnTop)
   const setAlwaysOnTop = useUiStore((s) => s.setAlwaysOnTop)
+  const showStudioImport = window.electronAPI?.platform === 'win32'
 
   const containerRef    = useRef<HTMLDivElement>(null)
   const lastMouseScreen = useRef({ x: 0, y: 0 })
   const lastCommandContextRef = useRef<'text' | 'canvas'>('canvas')
   const internalClipboardSystemSignatureRef = useRef<string | null>(null)
   const lastObservedSystemClipboardSignatureRef = useRef<string | null>(null)
+  const windowDragRef = useRef<null | {
+    pointerId: number
+    startScreenX: number
+    startScreenY: number
+    lastScreenX: number
+    lastScreenY: number
+    moved: boolean
+  }>(null)
+  const suppressContextMenuUntilRef = useRef(0)
   const [ctxMenu, setCtxMenu] = useState<null | {
     x: number
     y: number
@@ -243,6 +259,13 @@ export const Canvas: React.FC = () => {
   const [sourcePathModalOpen, setSourcePathModalOpen] = useState(false)
   const sourcePathInputRef = useRef<HTMLInputElement>(null)
   const [isFarZoomMode, setIsFarZoomMode] = useState(() => resolveFarZoomMode(false, viewport.scale))
+  const [playbackSuspended, setPlaybackSuspendedState] = useState(getVideoPlaybackSuspended)
+
+  useEffect(() => {
+    return subscribeVideoPlaybackSuspended(() => {
+      setPlaybackSuspendedState(getVideoPlaybackSuspended())
+    })
+  }, [])
 
   const readSystemClipboardText = useCallback(
     () => window.electronAPI?.projectAPI.readClipboardText?.() ?? '',
@@ -343,10 +366,11 @@ export const Canvas: React.FC = () => {
 
   const cutCanvasSelection = useCallback(() => {
     const state = useCanvasStore.getState()
+    if (state.canvasLocked) return false
     const ids = state.selectedIds
     if (!ids.length) return false
     const idSet = new Set(ids)
-    const selected = state.items.filter((i) => idSet.has(i.id))
+    const selected = state.items.filter((i) => idSet.has(i.id) && !i.locked)
     if (!selected.length) return false
     const copies: CanvasItem[] = selected.map(cloneCanvasItemForClipboard)
     setInternalClipboard(copies)
@@ -358,6 +382,7 @@ export const Canvas: React.FC = () => {
   const createTextNoteAtScreenPoint = useCallback(
     (screenX: number, screenY: number, text: string) => {
       const state = useCanvasStore.getState()
+      if (state.canvasLocked) return null
       const trimmedText = text.trim()
       if (!trimmedText) return null
       const { x: vx, y: vy, scale } = state.viewport
@@ -438,6 +463,7 @@ export const Canvas: React.FC = () => {
 
   const createImageTileFromDataUrlAtScreenPoint = useCallback(
     async (screenX: number, screenY: number, dataUrl: string) => {
+      if (useCanvasStore.getState().canvasLocked) return null
       const img = await new Promise<HTMLImageElement>((resolve, reject) => {
         const el = new Image()
         el.onload = () => resolve(el)
@@ -470,6 +496,7 @@ export const Canvas: React.FC = () => {
 
   const pasteUsingBestSource = useCallback(async (activeElement: HTMLElement | null) => {
     const state = useCanvasStore.getState()
+    if (state.canvasLocked && !shouldPreferTextCommands(activeElement)) return false
     const clipboardSnapshot = await readClipboardSnapshot()
     const clipboardText = clipboardSnapshot.text
     const trimmedText = clipboardText.trim()
@@ -597,6 +624,14 @@ export const Canvas: React.FC = () => {
   useCanvasPanZoom(containerRef)
   useVideoPlaybackManager(containerRef)
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds])
+  const selectionLockState = useMemo<'none' | 'locked' | 'unlocked' | 'mixed'>(() => {
+    const selected = items.filter((item) => selectedIdSet.has(item.id))
+    if (selected.length === 0) return 'none'
+    const lockedCount = selected.filter((item) => item.locked).length
+    if (lockedCount === 0) return 'unlocked'
+    if (lockedCount === selected.length) return 'locked'
+    return 'mixed'
+  }, [items, selectedIdSet])
   const hiddenItemIds = useMemo(() => {
     const set = new Set<string>()
     for (const it of items) {
@@ -693,6 +728,39 @@ export const Canvas: React.FC = () => {
     ctxMenu?.kind === 'note' && ctxMenu.itemId
       ? items.find((item): item is NoteItem => item.type === 'note' && item.id === ctxMenu.itemId) ?? null
       : null
+  const ctxItemInteractionLocked = useMemo(() => {
+    if (canvasLocked) return true
+    if (!ctxMenu?.itemId) return false
+    return !!items.find((item) => item.id === ctxMenu.itemId)?.locked
+  }, [canvasLocked, ctxMenu?.itemId, items])
+  const ctxSelectionMutationLocked = useMemo(() => {
+    if (canvasLocked) return true
+    const ids = selectedIds.length > 0
+      ? selectedIds
+      : ctxMenu?.itemId
+        ? [ctxMenu.itemId]
+        : []
+    if (ids.length === 0) return false
+    return ids.every((id) => items.find((item) => item.id === id)?.locked)
+  }, [canvasLocked, ctxMenu?.itemId, items, selectedIds])
+  const ctxMenuMediaTargetIds = useMemo(() => {
+    if (!ctxMenu?.itemId || (ctxMenu.kind !== 'video' && ctxMenu.kind !== 'image')) return []
+    const selectedMediaIds = items
+      .filter(
+        (item) =>
+          selectedIds.includes(item.id) &&
+          (item.type === 'video' || item.type === 'image'),
+      )
+      .map((item) => item.id)
+    return selectedIds.includes(ctxMenu.itemId) && selectedMediaIds.length > 0
+      ? selectedMediaIds
+      : [ctxMenu.itemId]
+  }, [ctxMenu, items, selectedIds])
+  const ctxMediaMutationLocked = useMemo(() => {
+    if (canvasLocked) return true
+    if (ctxMenuMediaTargetIds.length === 0) return false
+    return ctxMenuMediaTargetIds.every((id) => items.find((item) => item.id === id)?.locked)
+  }, [canvasLocked, ctxMenuMediaTargetIds, items])
   const selectedColorableIds = useMemo(
     () => getSelectedColorableIds(items, selectedIds),
     [items, selectedIds],
@@ -712,21 +780,51 @@ export const Canvas: React.FC = () => {
   )
 
   const applyContextMenuColor = useCallback((color: string) => {
+    if (canvasLocked) return
     if (ctxMenuColorTargetIds.length === 0) return
-    const updates = buildColorUpdatesForIds(items, ctxMenuColorTargetIds, color)
+    const unlockedIds = ctxMenuColorTargetIds.filter((id) =>
+      items.some((item) => item.id === id && !item.locked),
+    )
+    const updates = buildColorUpdatesForIds(items, unlockedIds, color)
     if (!updates.length) return
     updateItemsBatch(updates, { recordHistory: true })
-  }, [ctxMenuColorTargetIds, items, updateItemsBatch])
+  }, [canvasLocked, ctxMenuColorTargetIds, items, updateItemsBatch])
+
+  const toggleMediaFlip = useCallback((axis: 'horizontal' | 'vertical', targetIds?: string[]) => {
+    const state = useCanvasStore.getState()
+    if (state.canvasLocked) return
+    const idSet = new Set(targetIds ?? state.selectedIds)
+    const mediaItems = state.items.filter(
+      (item) =>
+        idSet.has(item.id) &&
+        (item.type === 'video' || item.type === 'image') &&
+        !item.locked,
+    )
+    if (mediaItems.length === 0) return
+    updateItemsBatch(
+      mediaItems.map((item) => ({
+        id: item.id,
+        updates:
+          axis === 'horizontal'
+            ? { flipX: !item.flipX }
+            : { flipY: !item.flipY },
+      })),
+      { recordHistory: true },
+    )
+    markCanvasCommandContext()
+  }, [markCanvasCommandContext, updateItemsBatch])
 
   const applyNoteFontFamily = useCallback((targetId: string, fontFamily: NoteFontFamily) => {
     const state = useCanvasStore.getState()
+    if (state.canvasLocked) return
     const selectedNoteIds = state.selectedIds.filter((id) =>
       state.items.some((item) => item.id === id && item.type === 'note'),
     )
-    const ids =
+    const ids = (
       selectedNoteIds.length > 0 && selectedNoteIds.includes(targetId)
         ? selectedNoteIds
         : [targetId]
+    ).filter((id) => state.items.some((item) => item.id === id && !item.locked))
     updateItemsBatch(
       ids.map((id) => ({ id, updates: { fontFamily } })),
       { recordHistory: true },
@@ -735,13 +833,15 @@ export const Canvas: React.FC = () => {
 
   const applyNoteFontSize = useCallback((targetId: string, fontSize: number) => {
     const state = useCanvasStore.getState()
+    if (state.canvasLocked) return
     const selectedNoteIds = state.selectedIds.filter((id) =>
       state.items.some((item) => item.id === id && item.type === 'note'),
     )
-    const ids =
+    const ids = (
       selectedNoteIds.length > 0 && selectedNoteIds.includes(targetId)
         ? selectedNoteIds
         : [targetId]
+    ).filter((id) => state.items.some((item) => item.id === id && !item.locked))
     updateItemsBatch(
       ids.map((id) => ({
         id,
@@ -753,6 +853,7 @@ export const Canvas: React.FC = () => {
 
   const runCommonMenuNewNote = useCallback(() => {
     const state = useCanvasStore.getState()
+    if (state.canvasLocked) return
     const sx = ctxMenu?.x ?? lastMouseScreen.current.x
     const sy = ctxMenu?.y ?? lastMouseScreen.current.y
     const { x: vx, y: vy, scale } = state.viewport
@@ -777,6 +878,7 @@ export const Canvas: React.FC = () => {
 
   const runCommonMenuAddBackdrop = useCallback(() => {
     const state = useCanvasStore.getState()
+    if (state.canvasLocked) return
     const sx = ctxMenu?.x ?? lastMouseScreen.current.x
     const sy = ctxMenu?.y ?? lastMouseScreen.current.y
     const { x: vx, y: vy, scale } = state.viewport
@@ -796,6 +898,7 @@ export const Canvas: React.FC = () => {
 
   const runCommonMenuPaste = useCallback(() => {
     const state = useCanvasStore.getState()
+    if (state.canvasLocked) return
     const sx = ctxMenu?.x ?? lastMouseScreen.current.x
     const sy = ctxMenu?.y ?? lastMouseScreen.current.y
     const { x: vx, y: vy, scale } = state.viewport
@@ -822,6 +925,55 @@ export const Canvas: React.FC = () => {
     frameAllItemsInViewport(width, height)
     setCtxMenu(null)
   }, [frameAllItemsInViewport])
+
+  const runCommonMenuResetView = useCallback(() => {
+    resetViewport()
+    setCtxMenu(null)
+  }, [resetViewport])
+
+  const runCommonMenuToggleSelectionLock = useCallback(() => {
+    const state = useCanvasStore.getState()
+    const selected = state.items.filter((item) => state.selectedIds.includes(item.id))
+    if (selected.length === 0) return
+    const shouldLock = !selected.every((item) => item.locked)
+    setItemsLocked(selected.map((item) => item.id), shouldLock)
+    markCanvasCommandContext()
+    setCtxMenu(null)
+  }, [markCanvasCommandContext, setItemsLocked])
+
+  const runCommonMenuToggleCanvasLock = useCallback(() => {
+    setCanvasLocked(!canvasLocked)
+    markCanvasCommandContext()
+    setCtxMenu(null)
+  }, [canvasLocked, markCanvasCommandContext, setCanvasLocked])
+
+  const runCommonMenuImportDailies = useCallback(() => {
+    useUiStore.getState().setDailiesModalOpen(true)
+    setCtxMenu(null)
+  }, [])
+
+  const runCommonMenuImportPrm = useCallback(() => {
+    useUiStore.getState().setPrmModalOpen(true)
+    setCtxMenu(null)
+  }, [])
+
+  const runCommonMenuRestartPlayingVideos = useCallback(() => {
+    for (const video of videoRegistry.values()) {
+      if (video.paused) continue
+      video.currentTime = 0
+    }
+    setCtxMenu(null)
+  }, [])
+
+  const runCommonMenuTogglePlayback = useCallback(() => {
+    setVideoPlaybackSuspended(!getVideoPlaybackSuspended())
+    setCtxMenu(null)
+  }, [])
+
+  const runCommonMenuGenerateProxies = useCallback(() => {
+    setCtxMenu(null)
+    void generateCanvasVideoProxies()
+  }, [])
 
   const runCommonMenuSettings = useCallback(() => {
     window.dispatchEvent(new CustomEvent('app-open-settings'))
@@ -1161,6 +1313,28 @@ export const Canvas: React.FC = () => {
         return
       }
 
+      if ((e.ctrlKey || e.metaKey) && e.code === 'KeyR' && !e.shiftKey && !e.altKey && !isTypingTarget(e)) {
+        e.preventDefault()
+        const state = useCanvasStore.getState()
+        state.setCanvasLocked(!state.canvasLocked)
+        markCanvasCommandContext()
+        return
+      }
+
+      // Windows reports the right Alt (AltGr) as Ctrl+Alt, so Ctrl must be allowed here.
+      if (e.altKey && e.code === 'KeyL' && !e.metaKey && !e.shiftKey && !isTypingTarget(e)) {
+        e.preventDefault()
+        const state = useCanvasStore.getState()
+        const selected = state.items.filter((item) => state.selectedIds.includes(item.id))
+        if (selected.length === 0) return
+        state.setItemsLocked(
+          selected.map((item) => item.id),
+          !selected.every((item) => item.locked),
+        )
+        markCanvasCommandContext()
+        return
+      }
+
       if (e.code === 'Space' && !isTypingTarget(e)) {
         const state = useCanvasStore.getState()
         const allVideoIds = state.items
@@ -1287,13 +1461,26 @@ export const Canvas: React.FC = () => {
         return
       }
 
+      if (
+        (e.code === 'KeyH' || e.code === 'KeyV') &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        !isTypingTarget(e)
+      ) {
+        e.preventDefault()
+        toggleMediaFlip(e.code === 'KeyH' ? 'horizontal' : 'vertical')
+        return
+      }
+
       // Shift+D — duplicate selection (offset copy, new ids)
       if (e.shiftKey && e.code === 'KeyD' && !e.ctrlKey && !e.metaKey && !isTypingTarget(e)) {
         e.preventDefault()
         const state = useCanvasStore.getState()
+        if (state.canvasLocked) return
         const idSet = new Set(state.selectedIds)
         if (idSet.size === 0) return
-        const toDup = state.items.filter((item) => idSet.has(item.id))
+        const toDup = state.items.filter((item) => idSet.has(item.id) && !item.locked)
         if (!toDup.length) return
         const prefix = `dup-${Date.now()}`
         const offsetX = 32
@@ -1361,6 +1548,7 @@ export const Canvas: React.FC = () => {
       if (e.code === 'KeyB' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && !isTypingTarget(e)) {
         e.preventDefault()
         const state = useCanvasStore.getState()
+        if (state.canvasLocked) return
         const idSet = new Set(state.selectedIds)
         const selectedItems = state.items.filter(
           (it) =>
@@ -1431,6 +1619,7 @@ export const Canvas: React.FC = () => {
 
       if (e.code === 'KeyN' && !e.ctrlKey && !e.metaKey && !e.altKey && !isTypingTarget(e)) {
         e.preventDefault()
+        if (useCanvasStore.getState().canvasLocked) return
         const { x: sx, y: sy } = lastMouseScreen.current
         const { x: vx, y: vy, scale } = useCanvasStore.getState().viewport
         const noteMetrics = getNoteCreationMetrics(scale)
@@ -1455,6 +1644,7 @@ export const Canvas: React.FC = () => {
       if (e.code === 'F3') {
         e.preventDefault()
         const state = useCanvasStore.getState()
+        if (state.canvasLocked) return
         const ids   = new Set(state.selectedIds)
         const selected = state.items.find(
           (i) => i.type === 'video' && ids.has(i.id),
@@ -1488,6 +1678,8 @@ export const Canvas: React.FC = () => {
           y: anchor.y,
           width: box.width,
           height: box.height,
+          ...(selected.flipX !== undefined ? { flipX: selected.flipX } : {}),
+          ...(selected.flipY !== undefined ? { flipY: selected.flipY } : {}),
         }
         addItem(img)
         selectOne(img.id)
@@ -1499,7 +1691,7 @@ export const Canvas: React.FC = () => {
         if (state.selectedIds.length !== 1) return
         const sid = state.selectedIds[0]
         const it = state.items.find((i) => i.id === sid)
-        if (!it || it.type !== 'image') return
+        if (!it || it.type !== 'image' || state.canvasLocked || it.locked) return
         if (state.imageEditModeId === sid) {
           const bake = imageDrawBakeRegistry.get(sid)
           if (bake?.()) return
@@ -1524,9 +1716,11 @@ export const Canvas: React.FC = () => {
     cutCanvasSelection,
     openVideoSearch,
     openSourcePathModal,
+    markCanvasCommandContext,
     runRedoCommand,
     runUndoCommand,
     theme,
+    toggleMediaFlip,
   ])
 
   // ── Context menu (canvas + video tiles) ───────────────────────────────────
@@ -1550,6 +1744,15 @@ export const Canvas: React.FC = () => {
 
   useEffect(() => {
     const onContextMenu = (e: MouseEvent) => {
+      if (
+        windowDragRef.current?.moved ||
+        performance.now() < suppressContextMenuUntilRef.current
+      ) {
+        e.preventDefault()
+        e.stopPropagation()
+        return
+      }
+
       if (e.defaultPrevented) return
       const t = e.target as HTMLElement | null
       if (!t) return
@@ -1780,6 +1983,68 @@ export const Canvas: React.FC = () => {
     [clearSelection],
   )
 
+  const handleWindowPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 2) return
+    const target = e.target as HTMLElement | null
+    if (!target || isTypingTarget(target)) return
+    windowDragRef.current = {
+      pointerId: e.pointerId,
+      startScreenX: e.screenX,
+      startScreenY: e.screenY,
+      lastScreenX: e.screenX,
+      lastScreenY: e.screenY,
+      moved: false,
+    }
+  }, [])
+
+  const handleWindowPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = windowDragRef.current
+    if (!drag || drag.pointerId !== e.pointerId || (e.buttons & 2) === 0) return
+
+    if (!drag.moved) {
+      const distance = Math.hypot(
+        e.screenX - drag.startScreenX,
+        e.screenY - drag.startScreenY,
+      )
+      if (distance < WINDOW_DRAG_THRESHOLD_PX) return
+      drag.moved = true
+      setCtxMenu(null)
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId)
+      } catch {
+        // Pointer capture is best-effort; dragging still works while inside the window.
+      }
+    }
+
+    const deltaX = e.screenX - drag.lastScreenX
+    const deltaY = e.screenY - drag.lastScreenY
+    drag.lastScreenX = e.screenX
+    drag.lastScreenY = e.screenY
+    if (deltaX !== 0 || deltaY !== 0) {
+      window.electronAPI?.windowAPI.moveBy(deltaX, deltaY)
+    }
+    e.preventDefault()
+    e.stopPropagation()
+  }, [])
+
+  const finishWindowDrag = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = windowDragRef.current
+    if (!drag || drag.pointerId !== e.pointerId) return
+    if (drag.moved) {
+      suppressContextMenuUntilRef.current = performance.now() + 350
+      e.preventDefault()
+      e.stopPropagation()
+    }
+    try {
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId)
+      }
+    } catch {
+      // Ignore a capture that was already released by the browser.
+    }
+    windowDragRef.current = null
+  }, [])
+
   return (
     <div
       id="previewv-canvas-root"
@@ -1790,6 +2055,10 @@ export const Canvas: React.FC = () => {
       tabIndex={-1}
       onMouseMove={handleMouseMove}
       onMouseDown={handleMouseDown}
+      onPointerDownCapture={handleWindowPointerDown}
+      onPointerMoveCapture={handleWindowPointerMove}
+      onPointerUpCapture={finishWindowDrag}
+      onPointerCancelCapture={finishWindowDrag}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >
@@ -1882,6 +2151,12 @@ export const Canvas: React.FC = () => {
         {/* Tiles first, backdrops last so backdrop headers stack above videos/images/notes (z-index + paint order). */}
         {renderedItemNodes}
       </div>
+
+      {canvasLocked && (
+        <div className="pointer-events-none absolute bottom-3 right-3 z-[9000] rounded-md border border-sky-500/40 bg-sky-950/80 px-2.5 py-1.5 text-[11px] font-semibold tracking-wide text-sky-300 shadow-lg backdrop-blur-sm">
+          CANVAS LOCKED · Ctrl+R
+        </div>
+      )}
 
       {items.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none">
@@ -2084,10 +2359,11 @@ export const Canvas: React.FC = () => {
           <div
             ref={canvasMenuRef}
             data-canvas-ctx-menu="true"
-            className="fixed z-[10000] rounded-lg border p-1.5 min-w-[220px]"
+            className="fixed z-[10000] min-w-[220px] overflow-y-auto rounded-lg border p-1.5"
             style={{
               left: canvasMenuPosition?.left ?? ctxMenu.x,
               top: canvasMenuPosition?.top ?? ctxMenu.y,
+              maxHeight: 'calc(100vh - 16px)',
               borderColor: 'var(--menu-border)',
               background: 'var(--menu-bg)',
               boxShadow: 'var(--menu-shadow)',
@@ -2110,7 +2386,8 @@ export const Canvas: React.FC = () => {
               <>
                 <button
                   type="button"
-                  className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
+                  disabled={ctxSelectionMutationLocked}
+                  className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors disabled:cursor-not-allowed disabled:opacity-35"
                   onClick={() => {
                     const state = useCanvasStore.getState()
                     const ids = state.selectedIds.length ? state.selectedIds : [ctxMenu.itemId!]
@@ -2135,11 +2412,38 @@ export const Canvas: React.FC = () => {
                 >
                   Copy
                 </button>
+                {(ctxMenu.kind === 'video' || ctxMenu.kind === 'image') && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={ctxMediaMutationLocked}
+                      className="mb-0.5 w-full rounded border border-cyan-500/40 bg-cyan-500/20 px-2 py-1.5 text-left text-sm font-medium text-cyan-300 transition-colors hover:bg-cyan-500/40 disabled:cursor-not-allowed disabled:opacity-35"
+                      onClick={() => {
+                        toggleMediaFlip('horizontal', ctxMenuMediaTargetIds)
+                        setCtxMenu(null)
+                      }}
+                    >
+                      Flip horizontal (H)
+                    </button>
+                    <button
+                      type="button"
+                      disabled={ctxMediaMutationLocked}
+                      className="mb-0.5 w-full rounded border border-violet-500/40 bg-violet-500/20 px-2 py-1.5 text-left text-sm font-medium text-violet-300 transition-colors hover:bg-violet-500/40 disabled:cursor-not-allowed disabled:opacity-35"
+                      onClick={() => {
+                        toggleMediaFlip('vertical', ctxMenuMediaTargetIds)
+                        setCtxMenu(null)
+                      }}
+                    >
+                      Flip vertical (V)
+                    </button>
+                  </>
+                )}
                 {ctxMenu.kind === 'video' ? (
                   <>
                     <button
                       type="button"
-                      className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
+                      disabled={canvasLocked}
+                      className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors disabled:cursor-not-allowed disabled:opacity-35"
                       onClick={() => {
                         const state = useCanvasStore.getState()
                         const vid = videoRegistry.get(ctxMenu.itemId!)
@@ -2150,6 +2454,10 @@ export const Canvas: React.FC = () => {
                         const worldX = (sx - vx) / scale
                         const worldY = (sy - vy) / scale
                         const view = imageTileViewSize(cap.width, cap.height)
+                        const source = state.items.find(
+                          (item): item is VideoItem =>
+                            item.id === ctxMenu.itemId && item.type === 'video',
+                        )
                         const img: ImageItem = {
                           type: 'image',
                           id: `image-${Date.now()}`,
@@ -2163,6 +2471,8 @@ export const Canvas: React.FC = () => {
                           naturalWidth: cap.width,
                           naturalHeight: cap.height,
                           fileName: 'Frame',
+                          ...(source?.flipX !== undefined ? { flipX: source.flipX } : {}),
+                          ...(source?.flipY !== undefined ? { flipY: source.flipY } : {}),
                         }
                         addItem(img)
                         setSelection([img.id])
@@ -2177,6 +2487,7 @@ export const Canvas: React.FC = () => {
                     <div className="px-2 pt-1 pb-1 text-[11px] text-themeText-400 select-none">Size</div>
                     <div className="px-2 pb-1">
                       <select
+                        disabled={ctxItemInteractionLocked}
                         className="w-full rounded border border-[var(--menu-border)] bg-[var(--app-bg)] px-2 py-1 text-sm text-themeText-100"
                         value={
                           ctxNoteItem
@@ -2195,6 +2506,7 @@ export const Canvas: React.FC = () => {
                     <div className="px-2 pt-1 pb-1 text-[11px] text-themeText-400 select-none">Font</div>
                     <div className="px-2 pb-1">
                       <select
+                        disabled={ctxItemInteractionLocked}
                         className="w-full rounded border border-[var(--menu-border)] bg-[var(--app-bg)] px-2 py-1 text-sm text-themeText-100"
                         value={ctxNoteItem?.fontFamily ?? DEFAULT_NOTE_FONT_FAMILY}
                         onChange={(e) => applyNoteFontFamily(ctxMenu.itemId!, e.target.value as NoteFontFamily)}
@@ -2210,7 +2522,8 @@ export const Canvas: React.FC = () => {
                 ) : (
                   <button
                     type="button"
-                    className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
+                    disabled={ctxItemInteractionLocked}
+                    className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors disabled:cursor-not-allowed disabled:opacity-35"
                     onClick={() => {
                       setImageEditModeId(ctxMenu.itemId!)
                       setCtxMenu(null)
@@ -2235,8 +2548,9 @@ export const Canvas: React.FC = () => {
                       <button
                         key={color}
                         type="button"
+                        disabled={ctxSelectionMutationLocked}
                         className={[
-                          'h-7 w-7 rounded-md border transition-transform hover:scale-105',
+                          'h-7 w-7 rounded-md border transition-transform hover:scale-105 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:scale-100',
                           isActive ? 'ring-2 ring-zinc-100/70' : '',
                         ].join(' ')}
                         style={{
@@ -2259,12 +2573,24 @@ export const Canvas: React.FC = () => {
             <CanvasCommonMenuSection
               clipboardAvailable={useCanvasStore.getState().clipboard.length > 0}
               alwaysOnTop={alwaysOnTop}
+              playbackSuspended={playbackSuspended}
+              canvasLocked={canvasLocked}
+              selectionLockState={selectionLockState}
+              showStudioImport={showStudioImport}
+              onImportDailies={runCommonMenuImportDailies}
+              onImportPrm={runCommonMenuImportPrm}
+              onRestartPlayingVideos={runCommonMenuRestartPlayingVideos}
+              onTogglePlayback={runCommonMenuTogglePlayback}
+              onGenerateProxies={runCommonMenuGenerateProxies}
               onNewNote={runCommonMenuNewNote}
               onAddBackdrop={runCommonMenuAddBackdrop}
               onPaste={runCommonMenuPaste}
               onGridAlign={runCommonMenuGridAlign}
               onLayoutMediaRow={runCommonMenuLayoutMediaRow}
               onFitAll={runCommonMenuFitAll}
+              onResetView={runCommonMenuResetView}
+              onToggleSelectionLock={runCommonMenuToggleSelectionLock}
+              onToggleCanvasLock={runCommonMenuToggleCanvasLock}
               onSettings={runCommonMenuSettings}
               onToggleAlwaysOnTop={runCommonMenuToggleAlwaysOnTop}
               onQuit={runCommonMenuQuit}

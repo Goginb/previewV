@@ -5,11 +5,6 @@ import { isTypingTarget } from '../utils/keyboard'
 /** Exponential zoom speed for wheel input. Events are coalesced per animation frame. */
 const WHEEL_EXP_K = 0.00156
 
-/** Right-drag zoom: uses PointerEvent/MouseEvent movementY (screen px since last event) for 1:1 feel. */
-const RMB_ZOOM_K = 0.0048
-/** Pixels of vertical move before RMB gesture is treated as zoom (quick click still opens menu). */
-const RMB_DRAG_THRESHOLD_PX = 5
-
 const PAN_WHEEL_GUARD_MS = 280
 
 /** Shared with Canvas so marquee selection does not start while Space-panning */
@@ -19,7 +14,7 @@ export const spacePanActiveRef = { current: false }
 export const marqueeSelectActiveRef = { current: false }
 
 /**
- * Attaches pan (middle-mouse or Space+LMB), zoom (wheel), and zoom-by-drag (RMB + vertical move).
+ * Attaches pan (middle-mouse or Space+LMB) and wheel zoom.
  * Pan/zoom commits are coalesced per animation frame to keep navigation smooth under heavy scenes.
  */
 export function useCanvasPanZoom(containerRef: React.RefObject<HTMLElement | null>) {
@@ -58,43 +53,6 @@ export function useCanvasPanZoom(containerRef: React.RefObject<HTMLElement | nul
   const spaceDown = useRef(false)
   const wheelGuardUntilRef = useRef(0)
 
-  /** After RMB zoom drag, suppress the following contextmenu so the canvas menu does not pop under the cursor. */
-  const suppressNextContextMenuRef = useRef(false)
-
-  const rmbDownRef = useRef(false)
-  const rmbZoomArmedRef = useRef(false)
-  const rmbGestureStartYRef = useRef(0)
-  const rmbZoomAnchorReadyRef = useRef(false)
-  const rmbZoomAnchorScreenRef = useRef({ x: 0, y: 0 })
-  const rmbZoomAnchorWorldRef = useRef({ x: 0, y: 0 })
-  const pendingRmbZoomMyRef = useRef(0)
-  const rmbZoomFrameRef = useRef(0)
-
-  const captureRmbZoomAnchor = useCallback(
-    (clientX: number, clientY: number) => {
-      const rect = containerRef.current?.getBoundingClientRect()
-      const { x, y, scale } = viewportRef.current
-      if (!rect || !Number.isFinite(scale) || scale <= 0) return false
-
-      const anchorScreenX = clientX - rect.left
-      const anchorScreenY = clientY - rect.top
-      rmbZoomAnchorScreenRef.current = { x: anchorScreenX, y: anchorScreenY }
-      rmbZoomAnchorWorldRef.current = {
-        x: (anchorScreenX - x) / scale,
-        y: (anchorScreenY - y) / scale,
-      }
-      return true
-    },
-    [containerRef],
-  )
-
-  const handleContextMenuCapture = useCallback((e: MouseEvent) => {
-    if (!suppressNextContextMenuRef.current) return
-    suppressNextContextMenuRef.current = false
-    e.preventDefault()
-    e.stopImmediatePropagation()
-  }, [])
-
   const applyPendingWheelZoom = useCallback(() => {
     wheelFrameRef.current = 0
     const raw = pendingWheelRawRef.current
@@ -123,33 +81,6 @@ export function useCanvasPanZoom(containerRef: React.RefObject<HTMLElement | nul
     }
     applyPendingWheelZoom()
   }, [applyPendingWheelZoom])
-
-  const applyPendingRmbZoom = useCallback(() => {
-    rmbZoomFrameRef.current = 0
-    const totalMovementY = pendingRmbZoomMyRef.current
-    pendingRmbZoomMyRef.current = 0
-    if (totalMovementY === 0) return
-
-    const { scale } = viewportRef.current
-    if (!Number.isFinite(scale) || scale <= 0) return
-
-    const factor = Math.exp(-totalMovementY * RMB_ZOOM_K)
-    const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale * factor))
-    const anchorScreen = rmbZoomAnchorScreenRef.current
-    const anchorWorld = rmbZoomAnchorWorldRef.current
-    applyViewport({
-      scale: newScale,
-      x: anchorScreen.x - anchorWorld.x * newScale,
-      y: anchorScreen.y - anchorWorld.y * newScale,
-    })
-  }, [applyViewport])
-
-  const flushPendingRmbZoom = useCallback(() => {
-    if (rmbZoomFrameRef.current) {
-      cancelAnimationFrame(rmbZoomFrameRef.current)
-    }
-    applyPendingRmbZoom()
-  }, [applyPendingRmbZoom])
 
   const handleWheel = useCallback(
     (e: WheelEvent) => {
@@ -230,18 +161,8 @@ export function useCanvasPanZoom(containerRef: React.RefObject<HTMLElement | nul
         startPan(e.clientX, e.clientY, 0)
         return
       }
-      if (e.button === 2) {
-        if (marqueeSelectActiveRef.current) return
-        if (isPanning.current) return
-        e.preventDefault()
-        flushPendingWheelZoom()
-        rmbDownRef.current = true
-        rmbZoomArmedRef.current = false
-        rmbGestureStartYRef.current = e.clientY
-        rmbZoomAnchorReadyRef.current = captureRmbZoomAnchor(e.clientX, e.clientY)
-      }
     },
-    [captureRmbZoomAnchor, flushPendingWheelZoom, startPan],
+    [flushPendingWheelZoom, startPan],
   )
 
   const handleMouseMove = useCallback(
@@ -255,29 +176,8 @@ export function useCanvasPanZoom(containerRef: React.RefObject<HTMLElement | nul
         })
         return
       }
-
-      if (!rmbDownRef.current) return
-      if ((e.buttons & 2) === 0) return
-      if (marqueeSelectActiveRef.current) return
-
-      if (!rmbZoomArmedRef.current) {
-        if (Math.abs(e.clientY - rmbGestureStartYRef.current) < RMB_DRAG_THRESHOLD_PX) return
-        if (!rmbZoomAnchorReadyRef.current) {
-          rmbZoomAnchorReadyRef.current = captureRmbZoomAnchor(e.clientX, e.clientY)
-        }
-        rmbZoomArmedRef.current = true
-        wheelGuardUntilRef.current = Date.now() + PAN_WHEEL_GUARD_MS
-      }
-
-      const my = e.movementY
-      if (my === 0) return
-
-      pendingRmbZoomMyRef.current += my
-      if (!rmbZoomFrameRef.current) {
-        rmbZoomFrameRef.current = requestAnimationFrame(applyPendingRmbZoom)
-      }
     },
-    [applyPendingRmbZoom, captureRmbZoomAnchor, schedulePanViewport],
+    [schedulePanViewport],
   )
 
   const stopPan = useCallback((e?: MouseEvent) => {
@@ -290,28 +190,14 @@ export function useCanvasPanZoom(containerRef: React.RefObject<HTMLElement | nul
     document.body.style.cursor = ''
   }, [flushPendingPanViewport])
 
-  const handleMouseUp = useCallback(
-    (e: MouseEvent) => {
-      stopPan(e)
-      if (e.button === 2) {
-        flushPendingRmbZoom()
-        if (rmbZoomArmedRef.current) suppressNextContextMenuRef.current = true
-        rmbDownRef.current = false
-        rmbZoomArmedRef.current = false
-        rmbZoomAnchorReadyRef.current = false
-      }
-    },
-    [flushPendingRmbZoom, stopPan],
-  )
+  const handleMouseUp = useCallback((e: MouseEvent) => {
+    stopPan(e)
+  }, [stopPan])
 
   const handleBlur = useCallback(() => {
     stopPan()
     flushPendingWheelZoom()
-    flushPendingRmbZoom()
-    rmbDownRef.current = false
-    rmbZoomArmedRef.current = false
-    rmbZoomAnchorReadyRef.current = false
-  }, [flushPendingRmbZoom, flushPendingWheelZoom, stopPan])
+  }, [flushPendingWheelZoom, stopPan])
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -341,8 +227,6 @@ export function useCanvasPanZoom(containerRef: React.RefObject<HTMLElement | nul
     const el = containerRef.current
     if (!el) return
 
-    window.addEventListener('contextmenu', handleContextMenuCapture, true)
-
     el.addEventListener('wheel', handleWheel, { passive: false })
     el.addEventListener('mousedown', handleMouseDown)
     window.addEventListener('mousemove', handleMouseMove)
@@ -354,8 +238,6 @@ export function useCanvasPanZoom(containerRef: React.RefObject<HTMLElement | nul
     return () => {
       flushPendingPanViewport()
       flushPendingWheelZoom()
-      flushPendingRmbZoom()
-      window.removeEventListener('contextmenu', handleContextMenuCapture, true)
       el.removeEventListener('wheel', handleWheel)
       el.removeEventListener('mousedown', handleMouseDown)
       window.removeEventListener('mousemove', handleMouseMove)
@@ -372,10 +254,8 @@ export function useCanvasPanZoom(containerRef: React.RefObject<HTMLElement | nul
     handleBlur,
     handleKeyDown,
     handleKeyUp,
-    handleContextMenuCapture,
     flushPendingPanViewport,
     flushPendingWheelZoom,
-    flushPendingRmbZoom,
     containerRef,
   ])
 }

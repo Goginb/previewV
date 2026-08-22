@@ -23,6 +23,8 @@ export interface ProjectFileV2 {
   items: ProjectCanvasItemV2[]
   viewport: ViewportState
   meta: ProjectMeta
+  /** Locks structural canvas edits while keeping navigation and playback available. */
+  canvasLocked?: boolean
 }
 
 export type ProjectFile = ProjectFileV1 | ProjectFileV2
@@ -44,6 +46,7 @@ export type ProjectCanvasItemV1 =
       proxyForVideoPath?: string
       aspectApplied?: boolean
       uiColor?: string
+      locked?: boolean
     }
   | {
       type: 'image'
@@ -91,6 +94,9 @@ export type ProjectCanvasItemV2 =
       proxyForVideoPath?: string
       aspectApplied?: boolean
       uiColor?: string
+      locked?: boolean
+      flipX?: boolean
+      flipY?: boolean
     }
   | {
       type: 'image'
@@ -108,6 +114,9 @@ export type ProjectCanvasItemV2 =
       imageSourcePath: string
       /** Optional relative preview PNG path inside <project>.previewv.assets */
       previewAssetPath?: string
+      locked?: boolean
+      flipX?: boolean
+      flipY?: boolean
     }
   | {
       type: 'image'
@@ -123,6 +132,9 @@ export type ProjectCanvasItemV2 =
       fileName?: string
       /** Relative asset path inside <project>.previewv.assets */
       assetPath: string
+      locked?: boolean
+      flipX?: boolean
+      flipY?: boolean
     }
   | {
       type: 'note'
@@ -136,6 +148,7 @@ export type ProjectCanvasItemV2 =
       fontSizeTier?: 's' | 'm' | 'l'
       color?: string
       fontFamily?: NoteFontFamily
+      locked?: boolean
     }
   | {
       type: 'backdrop'
@@ -153,6 +166,7 @@ export type ProjectCanvasItemV2 =
       expandedHeight?: number
       displayMode?: 'solid' | 'frame'
       attachedVideoIds: string[]
+      locked?: boolean
     }
 
 export type ProjectCanvasItem = ProjectCanvasItemV1 | ProjectCanvasItemV2
@@ -161,5 +175,6 @@ export interface DeserializedProject {
   items: CanvasItem[]
   viewport: ViewportState
   meta: ProjectMeta
+  canvasLocked?: boolean
 }
 

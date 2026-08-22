@@ -2,12 +2,30 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import type { CanvasItem, ImageItem, VideoItem } from '../src/types'
-import { deserializeProject, localPathToMediaUrl, serializeProject } from '../src/utils/projectSerializer'
+import {
+  deserializeProject,
+  localPathToMediaUrl,
+  mediaUrlToLocalPath,
+  serializeProject,
+} from '../src/utils/projectSerializer'
 
 const META = {
   createdAt: '2026-03-23T00:00:00.000Z',
   updatedAt: '2026-03-23T00:00:00.000Z',
 }
+
+test('media URL conversion preserves Windows UNC paths', () => {
+  const uncPath =
+    '\\\\192.168.100.56\\data\\_Projects\\2026\\AZNM\\episodes\\ep_01\\CLN\\_dailies\\CLN_0103\\clip rec709.mov'
+  const mediaUrl = localPathToMediaUrl(uncPath)
+
+  assert.equal(
+    mediaUrl,
+    'media://unc/192.168.100.56/data/_Projects/2026/AZNM/episodes/ep_01/CLN/_dailies/CLN_0103/clip%20rec709.mov',
+  )
+  assert.equal(mediaUrlToLocalPath(mediaUrl), uncPath)
+  assert.equal(mediaUrlToLocalPath(new URL(mediaUrl).toString()), uncPath)
+})
 
 test('deserializeProject maps legacy v1 inline images to runtime legacy-inline items', () => {
   const project = deserializeProject({
@@ -424,4 +442,93 @@ test('deserializeProject preserves video aspectApplied flag', () => {
   assert.equal(video.width, 500)
   assert.equal(video.height, 240)
   assert.equal(video.sourceFilePath, 'C:\\media\\clip.mp4')
+})
+
+test('project serialization preserves item and canvas layout locks', () => {
+  const serialized = serializeProject({
+    items: [
+      {
+        type: 'note',
+        id: 'locked-note',
+        x: 10,
+        y: 20,
+        width: 240,
+        height: 120,
+        text: 'Pinned',
+        locked: true,
+      },
+    ],
+    viewport: { x: 0, y: 0, scale: 1 },
+    meta: META,
+    canvasLocked: true,
+    assetPathForImage: () => 'unused.png',
+  })
+
+  assert.equal(serialized.canvasLocked, true)
+  assert.equal(serialized.items[0]?.locked, true)
+
+  const reopened = deserializeProject(serialized)
+  assert.equal(reopened.canvasLocked, true)
+  assert.equal(reopened.items[0]?.locked, true)
+})
+
+test('project serialization preserves horizontal and vertical media flips', () => {
+  const items: CanvasItem[] = [
+    {
+      type: 'video',
+      id: 'flipped-video',
+      x: 10,
+      y: 20,
+      width: 320,
+      height: 180,
+      fileName: 'clip.mov',
+      srcUrl: localPathToMediaUrl('C:\\media\\clip.mov'),
+      flipX: true,
+      flipY: false,
+    },
+    {
+      type: 'image',
+      id: 'flipped-image',
+      x: 360,
+      y: 20,
+      width: 240,
+      height: 180,
+      srcUrl: localPathToMediaUrl('C:\\media\\still.png'),
+      storage: 'linked',
+      sourceVideoId: '',
+      sourceFilePath: 'C:\\media\\still.png',
+      flipX: false,
+      flipY: true,
+    },
+  ]
+
+  const serialized = serializeProject({
+    items,
+    viewport: { x: 0, y: 0, scale: 1 },
+    meta: META,
+    assetPathForImage: () => 'unused.png',
+  })
+  const reopened = deserializeProject(serialized)
+  const video = reopened.items.find((item) => item.id === 'flipped-video') as VideoItem
+  const image = reopened.items.find((item) => item.id === 'flipped-image') as ImageItem
+
+  assert.equal(video.flipX, true)
+  assert.equal(video.flipY, false)
+  assert.equal(image.flipX, false)
+  assert.equal(image.flipY, true)
+})
+
+test('empty projects serialize and reopen as valid projects', () => {
+  const serialized = serializeProject({
+    items: [],
+    viewport: { x: 40, y: 50, scale: 1.25 },
+    meta: META,
+    canvasLocked: false,
+    assetPathForImage: () => 'unused.png',
+  })
+
+  assert.deepEqual(serialized.items, [])
+  const reopened = deserializeProject(serialized)
+  assert.deepEqual(reopened.items, [])
+  assert.deepEqual(reopened.viewport, { x: 40, y: 50, scale: 1.25 })
 })

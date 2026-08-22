@@ -1007,6 +1007,56 @@ async function resolveVideoSourceFromPath(
     }
   }
 
+  // An explicit Generate Proxy action should honor the user's request for any
+  // supported video, including otherwise directly playable H.264 MOV/MP4 files.
+  if (generateProxy) {
+    const proxyDirs = preferredProjectPath
+      ? [getProjectProresProxyDir(preferredProjectPath), getDesktopProresProxyDir()]
+      : [getDesktopProresProxyDir()]
+    const proxyFileName = persistentProxyFileNameForSource(normalizedPath)
+    const proxyPath = join(proxyDirs[0], proxyFileName)
+    const existingProxyPath = await findPersistentProxyInDirs(
+      proxyDirs,
+      normalizedPath,
+      stat.mtimeMs,
+      'mjpeg',
+    )
+    if (existingProxyPath) {
+      await appendVideoDebugLog(`using explicit persistent proxy "${existingProxyPath}"`)
+      return {
+        srcUrl: localPathToMediaUrl(existingProxyPath),
+        sourceFilePath: normalizedPath,
+        transcoded: true,
+        proxyFilePath: existingProxyPath,
+        proxyForSourcePath: normalizedPath,
+      }
+    }
+
+    await fs.mkdir(proxyDirs[0], { recursive: true })
+    await appendVideoDebugLog(`transcoding explicit persistent proxy "${normalizedPath}" -> "${proxyPath}"`)
+    try {
+      await transcodeVideoProxy(normalizedPath, proxyPath)
+      return {
+        srcUrl: localPathToMediaUrl(proxyPath),
+        sourceFilePath: normalizedPath,
+        transcoded: true,
+        proxyFilePath: proxyPath,
+        proxyForSourcePath: normalizedPath,
+      }
+    } catch (error) {
+      await appendVideoDebugLog(
+        `explicit persistent transcode failed for "${normalizedPath}": ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+      return {
+        srcUrl: localPathToMediaUrl(normalizedPath),
+        sourceFilePath: normalizedPath,
+        transcoded: false,
+      }
+    }
+  }
+
   const shouldUseRuntimeProxy = VIDEO_PROXY_EXT.has(ext)
   if (!shouldUseRuntimeProxy) {
     await appendVideoDebugLog(`using direct media url for "${normalizedPath}"`)
@@ -1720,6 +1770,8 @@ function createWindow(): void {
     height: 800,
     minWidth: 800,
     minHeight: 600,
+    frame: false,
+    autoHideMenuBar: true,
     show: showImmediately,
     backgroundColor: '#09090b',
     webPreferences: {
@@ -1746,7 +1798,9 @@ function createWindow(): void {
 
   activeWindow = mainWindow
   setupWindowCloseGuard(mainWindow)
-  refreshApplicationMenu().catch(() => {})
+  refreshApplicationMenu()
+    .then(() => mainWindow.setMenuBarVisibility(false))
+    .catch(() => {})
 
   // Global hotkeys handled in main so they work over canvas/video.
   // Ignores auto-repeat. Physical key codes for layout-stable bindings.
@@ -1820,6 +1874,22 @@ app.whenReady().then(() => {
     if (!activeWindow) return
     applyCanvasFullscreen(activeWindow, Boolean(enabled))
   })
+
+  ipcMain.on(
+    'window:move-by',
+    (event, payload: { deltaX?: unknown; deltaY?: unknown }) => {
+      const win = BrowserWindow.fromWebContents(event.sender)
+      if (!win || win.isDestroyed() || win.isFullScreen() || win.isMaximized()) return
+      const rawDeltaX = typeof payload?.deltaX === 'number' ? payload.deltaX : 0
+      const rawDeltaY = typeof payload?.deltaY === 'number' ? payload.deltaY : 0
+      if (!Number.isFinite(rawDeltaX) || !Number.isFinite(rawDeltaY)) return
+      const deltaX = Math.max(-240, Math.min(240, Math.round(rawDeltaX)))
+      const deltaY = Math.max(-240, Math.min(240, Math.round(rawDeltaY)))
+      if (deltaX === 0 && deltaY === 0) return
+      const [x, y] = win.getPosition()
+      win.setPosition(x + deltaX, y + deltaY, false)
+    },
+  )
 
   ipcMain.handle('app:get-runtime-info', async () => {
     const versionMarkerPath = await syncInstalledVersionMarker()
@@ -2200,6 +2270,7 @@ app.whenReady().then(() => {
     const project = serializeProject({
       items,
       viewport: projectData.viewport,
+      canvasLocked: projectData.canvasLocked === true,
       meta: {
         createdAt: projectData.meta.createdAt,
         updatedAt: projectData.meta.updatedAt ?? now,

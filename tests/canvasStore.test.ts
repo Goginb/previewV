@@ -27,6 +27,7 @@ function resetStore(): void {
     items: [],
     selectedIds: [],
     viewport: { x: 0, y: 0, scale: 1 },
+    canvasLocked: false,
     clipboard: [],
     currentProjectPath: null,
     isDirty: false,
@@ -99,6 +100,40 @@ test('syncSavedProjectState replaces runtime items while clearing dirty state', 
   assert.equal(state.viewport.scale, 1.5)
   assert.equal(state.items[0]?.x, 500)
   assert.deepEqual(state.selectedIds, ['note-a'])
+})
+
+test('locked items and a locked canvas reject destructive layout actions', () => {
+  resetStore()
+  useCanvasStore.setState({
+    items: [note('free'), { ...note('pinned', 40, 40), locked: true }],
+    selectedIds: ['free', 'pinned'],
+  })
+
+  useCanvasStore.getState().removeItems(['free', 'pinned'])
+  assert.deepEqual(useCanvasStore.getState().items.map((item) => item.id), ['pinned'])
+
+  useCanvasStore.getState().setCanvasLocked(true)
+  useCanvasStore.getState().addItem(note('blocked-add'))
+  useCanvasStore.getState().removeItems(['pinned'])
+  assert.deepEqual(useCanvasStore.getState().items.map((item) => item.id), ['pinned'])
+  assert.equal(useCanvasStore.getState().canvasLocked, true)
+})
+
+test('selection locking is undoable and saved with the project', () => {
+  resetStore()
+  useCanvasStore.setState({ items: [note('note-a')] })
+
+  useCanvasStore.getState().setItemsLocked(['note-a'], true)
+  assert.equal(useCanvasStore.getState().items[0]?.locked, true)
+
+  useCanvasStore.getState().undo()
+  assert.equal(useCanvasStore.getState().items[0]?.locked, undefined)
+
+  useCanvasStore.getState().setItemsLocked(['note-a'], true)
+  useCanvasStore.getState().setCanvasLocked(true)
+  const saved = useCanvasStore.getState().getProjectDataForSave()
+  assert.equal(saved.items[0]?.locked, true)
+  assert.equal(saved.canvasLocked, true)
 })
 
 test('getProjectDataForSave refreshes nested backdrop attachments from geometry', () => {

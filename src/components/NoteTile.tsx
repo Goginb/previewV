@@ -40,6 +40,8 @@ export const NoteTile = memo(function NoteTile({ note, scale, isSelected, isHidd
   const selectOne    = useCanvasStore((s) => s.selectOne)
   const toggleSelect = useCanvasStore((s) => s.toggleSelect)
   const selectedIds = useCanvasStore((s) => s.selectedIds)
+  const canvasLocked = useCanvasStore((s) => s.canvasLocked)
+  const interactionLocked = canvasLocked || !!note.locked
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -73,10 +75,10 @@ export const NoteTile = memo(function NoteTile({ note, scale, isSelected, isHidd
 
   // Auto-focus the textarea when the note is first created (empty text)
   useEffect(() => {
-    if (note.text === '') {
+    if (note.text === '' && !interactionLocked) {
       textareaRef.current?.focus()
     }
-  }, [note.text])
+  }, [interactionLocked, note.text])
 
   const fontPx = getNoteFontPx(note)
   const canDecreaseFont = fontPx > MIN_NOTE_FONT_PX
@@ -149,10 +151,11 @@ export const NoteTile = memo(function NoteTile({ note, scale, isSelected, isHidd
     return NOTE_FONT_STEP_DEFAULT
   }, [])
   const updateFontByDelta = useCallback((delta: number) => {
+    if (interactionLocked) return
     const nextFontPx = clampNumber(fontPx + delta, MIN_NOTE_FONT_PX, MAX_NOTE_FONT_PX)
     if (nextFontPx === fontPx) return
     updateItem(note.id, { fontSize: nextFontPx, fontSizeTier: undefined })
-  }, [fontPx, note.id, updateItem])
+  }, [fontPx, interactionLocked, note.id, updateItem])
 
   return (
     <Rnd
@@ -162,6 +165,8 @@ export const NoteTile = memo(function NoteTile({ note, scale, isSelected, isHidd
       minWidth={140}
       minHeight={80}
       cancel=".note-no-drag, textarea, button"
+      disableDragging={interactionLocked}
+      enableResizing={!interactionLocked}
       onDragStart={() => {
         window.dispatchEvent(new CustomEvent('canvas-history-action'))
         const state = useCanvasStore.getState()
@@ -171,7 +176,7 @@ export const NoteTile = memo(function NoteTile({ note, scale, isSelected, isHidd
         }
         const origins = new Map<string, { x: number; y: number }>()
         for (const item of state.items) {
-          if (state.selectedIds.includes(item.id)) {
+          if (state.selectedIds.includes(item.id) && !item.locked) {
             origins.set(item.id, { x: item.x, y: item.y })
           }
         }
@@ -227,6 +232,7 @@ export const NoteTile = memo(function NoteTile({ note, scale, isSelected, isHidd
         scheduleResizeUpdate({ x: position.x, y: position.y, width: w, height: h })
       }}
       onResizeStart={(e) => {
+        if (interactionLocked) return false
         if ('button' in e && typeof e.button === 'number' && e.button !== 0) return false
         window.dispatchEvent(new CustomEvent('canvas-history-action'))
         resizeActiveRef.current = true
@@ -271,7 +277,7 @@ export const NoteTile = memo(function NoteTile({ note, scale, isSelected, isHidd
         data-item-id={note.id}
         className={[
           dragHandleClassName,
-          'w-full h-full flex flex-col rounded-lg overflow-hidden border',
+          'relative w-full h-full flex flex-col rounded-lg overflow-hidden border',
         ].join(' ')}
         style={{
           background: noteBackground,
@@ -281,9 +287,17 @@ export const NoteTile = memo(function NoteTile({ note, scale, isSelected, isHidd
         onMouseDown={handleSelect}
         onClick={handleClickSelection}
       >
+        {note.locked && (
+          <div className="pointer-events-none absolute right-1.5 top-1.5 z-50 rounded border border-amber-400/40 bg-black/75 px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-amber-300">
+            LOCK
+          </div>
+        )}
         {/* Drag handle */}
         <div
-          className="flex items-center px-2 h-6 min-h-[24px] cursor-grab active:cursor-grabbing shrink-0"
+          className={[
+            'flex items-center px-2 h-6 min-h-[24px] shrink-0',
+            interactionLocked ? 'cursor-default' : 'cursor-grab active:cursor-grabbing',
+          ].join(' ')}
           style={{ background: noteHeaderBackground }}
         >
           <svg
@@ -301,14 +315,15 @@ export const NoteTile = memo(function NoteTile({ note, scale, isSelected, isHidd
           </span>
           <div className="flex-1" />
           <button
+            disabled={interactionLocked}
             className={[
               'note-no-drag h-5 min-w-[1.25rem] px-1 flex items-center justify-center rounded border text-[10px] font-semibold transition-opacity pointer-events-auto',
-              canDecreaseFont ? 'opacity-100 hover:opacity-100' : 'opacity-40 cursor-default',
+              canDecreaseFont && !interactionLocked ? 'opacity-100 hover:opacity-100' : 'opacity-40 cursor-default',
             ].join(' ')}
             title="Decrease text size (20px, Shift 10px, Ctrl 5px)"
             onMouseDown={(e) => {
               e.stopPropagation()
-              if (!canDecreaseFont) return
+              if (!canDecreaseFont || interactionLocked) return
               updateFontByDelta(-getFontStep(e))
             }}
             onClick={(e) => e.stopPropagation()}
@@ -328,14 +343,15 @@ export const NoteTile = memo(function NoteTile({ note, scale, isSelected, isHidd
             {fontPx}px
           </div>
           <button
+            disabled={interactionLocked}
             className={[
               'note-no-drag h-5 min-w-[1.25rem] px-1 flex items-center justify-center rounded border text-[10px] font-semibold transition-opacity pointer-events-auto',
-              canIncreaseFont ? 'opacity-100 hover:opacity-100' : 'opacity-40 cursor-default',
+              canIncreaseFont && !interactionLocked ? 'opacity-100 hover:opacity-100' : 'opacity-40 cursor-default',
             ].join(' ')}
             title="Increase text size (20px, Shift 10px, Ctrl 5px)"
             onMouseDown={(e) => {
               e.stopPropagation()
-              if (!canIncreaseFont) return
+              if (!canIncreaseFont || interactionLocked) return
               updateFontByDelta(getFontStep(e))
             }}
             onClick={(e) => e.stopPropagation()}
@@ -372,6 +388,7 @@ export const NoteTile = memo(function NoteTile({ note, scale, isSelected, isHidd
           )}
           <textarea
             ref={textareaRef}
+            readOnly={interactionLocked}
             className={[
               'note-no-drag w-full max-h-full resize-none bg-transparent text-center',
               'outline-none leading-relaxed',
