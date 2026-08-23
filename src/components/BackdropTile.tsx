@@ -4,7 +4,10 @@ import { createPortal } from 'react-dom'
 import { useCanvasStore } from '../store/canvasStore'
 import { useUiStore } from '../store/uiStore'
 import type { BackdropItem, NoteItem } from '../types'
-import { CanvasCommonMenuSection } from './CanvasCommonMenuSection'
+import {
+  CanvasCommonMenuSection,
+  type CanvasProjectMenuAction,
+} from './CanvasCommonMenuSection'
 import { useClampedMenuPosition } from '../hooks/useClampedMenuPosition'
 import { backdropDomRegistry } from '../utils/backdropDomRegistry'
 import { tileDomRegistry } from '../utils/tileDomRegistry'
@@ -491,6 +494,18 @@ export const BackdropTile = memo(function BackdropTile({
     setCtxMenu(null)
     void generateCanvasVideoProxies()
   }, [])
+
+  const runCommonMenuProjectAction = useCallback(
+    (action: CanvasProjectMenuAction, path?: string) => {
+      window.dispatchEvent(
+        new CustomEvent('project-menu-action', {
+          detail: { action, ...(path ? { path } : {}) },
+        }),
+      )
+      setCtxMenu(null)
+    },
+    [],
+  )
 
   const runCommonMenuSettings = useCallback(() => {
     window.dispatchEvent(new CustomEvent('app-open-settings'))
@@ -1184,6 +1199,7 @@ export const BackdropTile = memo(function BackdropTile({
             onResetView={runCommonMenuResetView}
             onToggleSelectionLock={runCommonMenuToggleSelectionLock}
             onToggleCanvasLock={runCommonMenuToggleCanvasLock}
+            onProjectAction={runCommonMenuProjectAction}
             onSettings={runCommonMenuSettings}
             onToggleAlwaysOnTop={runCommonMenuToggleAlwaysOnTop}
             onQuit={runCommonMenuQuit}

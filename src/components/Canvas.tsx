@@ -7,7 +7,10 @@ import { useVideoPlaybackManager } from '../hooks/useVideoPlaybackManager'
 import { VideoTile } from './VideoTile'
 import { NoteTile } from './NoteTile'
 import { ImageTile } from './ImageTile'
-import { CanvasCommonMenuSection } from './CanvasCommonMenuSection'
+import {
+  CanvasCommonMenuSection,
+  type CanvasProjectMenuAction,
+} from './CanvasCommonMenuSection'
 import { videoRegistry } from '../utils/videoRegistry'
 import { imageDrawUndoRegistry } from '../utils/imageDrawUndoRegistry'
 import { imageDrawRedoRegistry } from '../utils/imageDrawRedoRegistry'
@@ -975,6 +978,18 @@ export const Canvas: React.FC = () => {
     void generateCanvasVideoProxies()
   }, [])
 
+  const runCommonMenuProjectAction = useCallback(
+    (action: CanvasProjectMenuAction, path?: string) => {
+      window.dispatchEvent(
+        new CustomEvent('project-menu-action', {
+          detail: { action, ...(path ? { path } : {}) },
+        }),
+      )
+      setCtxMenu(null)
+    },
+    [],
+  )
+
   const runCommonMenuSettings = useCallback(() => {
     window.dispatchEvent(new CustomEvent('app-open-settings'))
     setCtxMenu(null)
@@ -1235,6 +1250,8 @@ export const Canvas: React.FC = () => {
   // ── Keyboard ──────────────────────────────────────────────────────────────
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (document.querySelector('[data-previewv-modal="true"]')) return
+
       if ((e.ctrlKey || e.metaKey) && !e.altKey && e.code === 'KeyZ') {
         e.preventDefault()
         const activeElement = document.activeElement as HTMLElement | null
@@ -2591,6 +2608,7 @@ export const Canvas: React.FC = () => {
               onResetView={runCommonMenuResetView}
               onToggleSelectionLock={runCommonMenuToggleSelectionLock}
               onToggleCanvasLock={runCommonMenuToggleCanvasLock}
+              onProjectAction={runCommonMenuProjectAction}
               onSettings={runCommonMenuSettings}
               onToggleAlwaysOnTop={runCommonMenuToggleAlwaysOnTop}
               onQuit={runCommonMenuQuit}

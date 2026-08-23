@@ -201,6 +201,7 @@ export function useCanvasPanZoom(containerRef: React.RefObject<HTMLElement | nul
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
+      if (document.querySelector('[data-previewv-modal="true"]')) return
       if (e.code === 'Space' && !e.repeat && !isTypingTarget(e)) {
         e.preventDefault()
         spaceDown.current = true

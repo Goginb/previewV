@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import flightImage from '../assets/help/user-refs/flight.png'
 import goldGrabImage from '../assets/help/user-refs/gold-grab.png'
 import robotControlsImage from '../assets/help/user-refs/robot-controls.png'
@@ -193,7 +193,8 @@ const HOTKEY_GROUPS: HotkeyGroup[] = [
     title: 'Окно и защита',
     accent: 'rose',
     items: [
-      { keys: 'I', action: 'Открыть инструкцию и хоткеи' },
+      { keys: 'I', action: 'Открыть или закрыть полноэкранную инструкцию' },
+      { keys: 'Esc / Enter / Space', action: 'Закрыть инструкцию' },
       { keys: 'ПКМ + drag', action: 'Перетащить окно приложения' },
       { keys: 'Alt+L', action: 'Закрепить или открепить выделение — работает с обоими Alt' },
       { keys: 'Ctrl+R', action: 'Заблокировать компоновку холста' },
@@ -234,11 +235,41 @@ const HOTKEY_ACCENTS: Record<HotkeyAccent, { heading: string; badge: string; lin
 
 export const HelpGuideModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [view, setView] = useState<'guide' | 'hotkeys'>('guide')
+  const fullscreenRestoreRef = useRef<boolean | null>(null)
+
+  useEffect(() => {
+    const windowAPI = window.electronAPI?.windowAPI
+    if (!windowAPI?.getFullscreen || !windowAPI?.setFullscreen) return
+    let active = true
+
+    void windowAPI
+      .getFullscreen()
+      .then(async (wasFullscreen) => {
+        if (!active) return
+        fullscreenRestoreRef.current = wasFullscreen
+        if (!wasFullscreen) await windowAPI.setFullscreen(true)
+      })
+      .catch(() => {})
+
+    return () => {
+      active = false
+      if (fullscreenRestoreRef.current === false) {
+        void windowAPI.setFullscreen(false)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
+      const shouldClose =
+        event.key === 'Escape' ||
+        event.code === 'KeyI' ||
+        event.key === 'Enter' ||
+        event.code === 'NumpadEnter' ||
+        event.code === 'Space'
+      if (!shouldClose || event.repeat) return
       event.preventDefault()
+      event.stopPropagation()
       onClose()
     }
     window.addEventListener('keydown', handleKeyDown, true)
@@ -247,15 +278,13 @@ export const HelpGuideModal: React.FC<{ onClose: () => void }> = ({ onClose }) =
 
   return (
     <div
-      className="fixed inset-0 z-[5000] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
+      data-previewv-modal="true"
+      className="fixed inset-0 z-[12000] flex h-screen w-screen bg-[var(--app-bg)]"
       role="dialog"
       aria-modal="true"
       aria-labelledby="help-guide-title"
-      onMouseDown={(ev) => {
-        if (ev.target === ev.currentTarget) onClose()
-      }}
     >
-      <div className="flex max-h-[min(90vh,52rem)] w-full max-w-4xl flex-col rounded-xl border border-[var(--menu-border)] bg-[var(--menu-bg)] shadow-2xl">
+      <div className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-[var(--menu-bg)]">
         <div className="flex items-center justify-between gap-3 border-b border-[var(--menu-border)] px-4 py-3 shrink-0">
           <div>
             <h2 id="help-guide-title" className="text-base font-semibold text-themeText-100">
@@ -267,13 +296,16 @@ export const HelpGuideModal: React.FC<{ onClose: () => void }> = ({ onClose }) =
                 : 'Все сочетания сгруппированы по области применения.'}
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg border border-[var(--menu-border)] bg-themeBg-active px-3 py-1.5 text-sm text-themeText-200 hover:bg-themeBg-hover"
-          >
-            Закрыть
-          </button>
+          <div className="flex items-center gap-3">
+            <div className="hidden text-xs text-themeText-500 md:block">Esc · I · Enter · Space — закрыть</div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-lg border border-[var(--menu-border)] bg-themeBg-active px-3 py-1.5 text-sm text-themeText-200 hover:bg-themeBg-hover"
+            >
+              Закрыть
+            </button>
+          </div>
         </div>
         <div className="flex gap-2 border-b border-[var(--menu-border)] px-4 py-2.5">
           <button
@@ -302,7 +334,7 @@ export const HelpGuideModal: React.FC<{ onClose: () => void }> = ({ onClose }) =
           </button>
         </div>
         {view === 'guide' ? (
-          <div className="max-h-[min(76vh,46rem)] overflow-y-auto px-4 py-4 md:px-5 md:py-5">
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-8 md:py-6">
             <section className="overflow-hidden rounded-2xl border border-sky-500/25 bg-gradient-to-br from-sky-950/45 via-black/15 to-amber-950/25 shadow-xl">
               <div className="grid md:grid-cols-[0.9fr_1.25fr]">
                 <div className="flex flex-col justify-center px-5 py-6 md:px-7 md:py-8">
@@ -427,7 +459,7 @@ export const HelpGuideModal: React.FC<{ onClose: () => void }> = ({ onClose }) =
             </section>
           </div>
         ) : (
-          <div className="max-h-[min(72vh,44rem)] overflow-y-auto px-4 py-4 md:px-5">
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 md:px-8 md:py-6">
             <div className="mb-4">
               <div className="text-sm font-semibold text-themeText-100">Горячие клавиши</div>
               <div className="mt-0.5 text-xs text-themeText-500">
