@@ -20,21 +20,32 @@ function clampMenuPosition(anchor: MenuAnchor, width: number, height: number, pa
 export function useClampedMenuPosition(anchor: MenuAnchor | null, padding = 8) {
   const menuRef = useRef<HTMLDivElement>(null)
   const [position, setPosition] = useState<MenuPosition | null>(null)
+  const anchorX = anchor?.x
+  const anchorY = anchor?.y
 
   useLayoutEffect(() => {
-    if (!anchor) {
-      setPosition(null)
+    if (anchorX === undefined || anchorY === undefined) {
+      setPosition((prev) => (prev === null ? prev : null))
       return
     }
 
     const update = () => {
       const menu = menuRef.current
       if (!menu) {
-        setPosition({ left: anchor.x, top: anchor.y })
+        setPosition((prev) =>
+          prev && prev.left === anchorX && prev.top === anchorY
+            ? prev
+            : { left: anchorX, top: anchorY },
+        )
         return
       }
       const rect = menu.getBoundingClientRect()
-      const next = clampMenuPosition(anchor, rect.width, rect.height, padding)
+      const next = clampMenuPosition(
+        { x: anchorX, y: anchorY },
+        rect.width,
+        rect.height,
+        padding,
+      )
       setPosition((prev) =>
         prev && prev.left === next.left && prev.top === next.top ? prev : next,
       )
@@ -43,7 +54,7 @@ export function useClampedMenuPosition(anchor: MenuAnchor | null, padding = 8) {
     update()
     window.addEventListener('resize', update)
     return () => window.removeEventListener('resize', update)
-  }, [anchor, padding])
+  }, [anchorX, anchorY, padding])
 
   return {
     menuRef,
