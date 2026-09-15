@@ -183,6 +183,7 @@ const HOTKEY_GROUPS: HotkeyGroup[] = [
     accent: 'violet',
     items: [
       { keys: 'Space', action: 'Play / pause выбранных видео' },
+      { keys: '~ / Ё', action: 'Включить или выключить звук видео при наведении' },
       { keys: 'H', action: 'Отразить выбранные медиа по горизонтали' },
       { keys: 'V', action: 'Отразить выбранные медиа по вертикали' },
       { keys: 'F3', action: 'Сохранить текущий кадр видео' },

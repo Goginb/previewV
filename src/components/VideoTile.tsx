@@ -11,6 +11,7 @@ import { setManualPlaybackAllowedInSuspended } from '../utils/videoSuspendedManu
 import type { VideoItem } from '../types'
 import { computeAttachedItemIds } from '../utils/backdrops'
 import { localPathToMediaUrl } from '../utils/projectSerializer'
+import { beginVideoHoverAudio, endVideoHoverAudio } from '../utils/videoHoverAudio'
 
 interface VideoTileProps {
   tile: VideoItem
@@ -228,6 +229,7 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
     const video = videoRef.current
     if (video) videoRegistry.set(tile.id, video)
     return () => {
+      if (video) endVideoHoverAudio(video)
       videoRegistry.delete(tile.id)
       setVideoUserPausedByUser(tile.id, false)
     }
@@ -791,6 +793,14 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
           style={{
             top: TITLE_H,
             bottom: CONTROLS_H,
+          }}
+          onMouseEnter={() => {
+            const video = videoRef.current
+            if (video && !showNavigationPreview) beginVideoHoverAudio(video)
+          }}
+          onMouseLeave={() => {
+            const video = videoRef.current
+            if (video) endVideoHoverAudio(video)
           }}
         >
           {showNavigationPreview && (

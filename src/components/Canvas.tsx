@@ -63,6 +63,7 @@ import type { CanvasItem, ImageItem, NoteFontFamily, NoteItem, VideoItem } from 
 import { useUiStore } from '../store/uiStore'
 import logoGreenFx from '../assets/logo-greenfx.png'
 import { generateCanvasVideoProxies } from '../utils/generateCanvasVideoProxies'
+import { toggleVideoHoverAudioEnabled } from '../utils/videoHoverAudio'
 
 // ── File helpers ──────────────────────────────────────────────────────────────
 
@@ -1335,6 +1336,12 @@ export const Canvas: React.FC = () => {
         const state = useCanvasStore.getState()
         state.setCanvasLocked(!state.canvasLocked)
         markCanvasCommandContext()
+        return
+      }
+
+      if (e.code === 'Backquote' && !e.ctrlKey && !e.metaKey && !e.altKey && !isTypingTarget(e)) {
+        e.preventDefault()
+        toggleVideoHoverAudioEnabled()
         return
       }
 
