@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Canvas } from './components/Canvas'
 import { HelpGuideModal } from './components/HelpGuideModal'
+import { ImportantHotkeysModal } from './components/ImportantHotkeysModal'
 import { SettingsModal } from './components/SettingsModal'
 import { DailiesImportModal } from './components/DailiesImportModal'
 import { PrmImportModal } from './components/PrmImportModal'
@@ -74,6 +75,7 @@ function syncDocumentTitle(): void {
 
 const App: React.FC = () => {
   const [helpOpen, setHelpOpen] = useState(false)
+  const [importantHotkeysOpen, setImportantHotkeysOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [closePrompt, setClosePrompt] = useState<null | { fileLabel: string; busy: boolean }>(
     null,
@@ -189,6 +191,31 @@ const App: React.FC = () => {
     }
     window.addEventListener('keydown', openHelpOnI, true)
     return () => window.removeEventListener('keydown', openHelpOnI, true)
+  }, [])
+
+  useEffect(() => {
+    const toggleImportantHotkeys = (event: KeyboardEvent) => {
+      if (
+        event.code !== 'KeyH' ||
+        event.repeat ||
+        !event.shiftKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.altKey ||
+        isTypingTarget(event)
+      ) {
+        return
+      }
+
+      const openModal = document.querySelector<HTMLElement>('[data-previewv-modal="true"]')
+      if (openModal && openModal.dataset.importantHotkeysModal !== 'true') return
+
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      setImportantHotkeysOpen((open) => !open)
+    }
+    window.addEventListener('keydown', toggleImportantHotkeys, true)
+    return () => window.removeEventListener('keydown', toggleImportantHotkeys, true)
   }, [])
 
   useEffect(() => {
@@ -423,6 +450,9 @@ const App: React.FC = () => {
     <div className="relative w-full h-full min-h-[100dvh]" style={{ background: 'var(--app-bg)' }}>
       <ProjectLoadingOverlay />
       {helpOpen && <HelpGuideModal onClose={() => setHelpOpen(false)} />}
+      {importantHotkeysOpen && (
+        <ImportantHotkeysModal onClose={() => setImportantHotkeysOpen(false)} />
+      )}
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
       {isDailiesModalOpen && <DailiesImportModal />}
       {isPrmModalOpen && <PrmImportModal />}

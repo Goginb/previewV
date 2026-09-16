@@ -1,11 +1,17 @@
 import { useEffect, useRef, useCallback } from 'react'
 import { useCanvasStore, MIN_SCALE, MAX_SCALE } from '../store/canvasStore'
 import { isTypingTarget } from '../utils/keyboard'
+import { easePanVelocity, getArrowPanTarget, isArrowPanCode } from '../utils/keyboardPan'
 
 /** Exponential zoom speed for wheel input. Events are coalesced per animation frame. */
 const WHEEL_EXP_K = 0.00156
 
 const PAN_WHEEL_GUARD_MS = 280
+const KEYBOARD_PAN_SPEED_PX_PER_SECOND = 760
+const KEYBOARD_PAN_ACCELERATION = 11
+const KEYBOARD_PAN_DECELERATION = 14
+const KEYBOARD_PAN_STOP_EPSILON = 2
+const KEYBOARD_PAN_MAX_FRAME_SECONDS = 0.05
 
 /** Shared with Canvas so marquee selection does not start while Space-panning */
 export const spacePanActiveRef = { current: false }
@@ -52,6 +58,10 @@ export function useCanvasPanZoom(containerRef: React.RefObject<HTMLElement | nul
   const wheelFrameRef = useRef(0)
   const spaceDown = useRef(false)
   const wheelGuardUntilRef = useRef(0)
+  const keyboardPanKeysRef = useRef<Set<string>>(new Set())
+  const keyboardPanVelocityRef = useRef({ x: 0, y: 0 })
+  const keyboardPanFrameRef = useRef(0)
+  const keyboardPanLastFrameRef = useRef(0)
 
   const applyPendingWheelZoom = useCallback(() => {
     wheelFrameRef.current = 0
@@ -194,14 +204,78 @@ export function useCanvasPanZoom(containerRef: React.RefObject<HTMLElement | nul
     stopPan(e)
   }, [stopPan])
 
+  const startKeyboardPan = useCallback(() => {
+    if (keyboardPanFrameRef.current) return
+    keyboardPanLastFrameRef.current = performance.now()
+
+    const step = (now: number) => {
+      keyboardPanFrameRef.current = 0
+      const deltaSeconds = Math.min(
+        KEYBOARD_PAN_MAX_FRAME_SECONDS,
+        Math.max(0, (now - keyboardPanLastFrameRef.current) / 1000),
+      )
+      keyboardPanLastFrameRef.current = now
+
+      const target = getArrowPanTarget(keyboardPanKeysRef.current, KEYBOARD_PAN_SPEED_PX_PER_SECOND)
+      const hasPressedKey = target.x !== 0 || target.y !== 0
+      const velocity = easePanVelocity(
+        keyboardPanVelocityRef.current,
+        target,
+        deltaSeconds,
+        hasPressedKey ? KEYBOARD_PAN_ACCELERATION : KEYBOARD_PAN_DECELERATION,
+      )
+      keyboardPanVelocityRef.current = velocity
+
+      if (deltaSeconds > 0) {
+        const current = viewportRef.current
+        applyViewport({
+          x: current.x + velocity.x * deltaSeconds,
+          y: current.y + velocity.y * deltaSeconds,
+        })
+      }
+
+      const stillMoving =
+        hasPressedKey ||
+        Math.abs(velocity.x) > KEYBOARD_PAN_STOP_EPSILON ||
+        Math.abs(velocity.y) > KEYBOARD_PAN_STOP_EPSILON
+      if (stillMoving) {
+        keyboardPanFrameRef.current = requestAnimationFrame(step)
+      } else {
+        keyboardPanVelocityRef.current = { x: 0, y: 0 }
+      }
+    }
+
+    keyboardPanFrameRef.current = requestAnimationFrame(step)
+  }, [applyViewport])
+
+  const stopKeyboardPan = useCallback(() => {
+    keyboardPanKeysRef.current.clear()
+    keyboardPanVelocityRef.current = { x: 0, y: 0 }
+    if (keyboardPanFrameRef.current) cancelAnimationFrame(keyboardPanFrameRef.current)
+    keyboardPanFrameRef.current = 0
+  }, [])
+
   const handleBlur = useCallback(() => {
     stopPan()
     flushPendingWheelZoom()
-  }, [flushPendingWheelZoom, stopPan])
+    stopKeyboardPan()
+  }, [flushPendingWheelZoom, stopKeyboardPan, stopPan])
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       if (document.querySelector('[data-previewv-modal="true"]')) return
+      if (
+        isArrowPanCode(e.code) &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        !isTypingTarget(e)
+      ) {
+        e.preventDefault()
+        keyboardPanKeysRef.current.add(e.code)
+        startKeyboardPan()
+        return
+      }
       if (e.code === 'Space' && !e.repeat && !isTypingTarget(e)) {
         e.preventDefault()
         spaceDown.current = true
@@ -209,11 +283,18 @@ export function useCanvasPanZoom(containerRef: React.RefObject<HTMLElement | nul
         if (containerRef.current) containerRef.current.style.cursor = 'grab'
       }
     },
-    [containerRef],
+    [containerRef, startKeyboardPan],
   )
 
   const handleKeyUp = useCallback(
     (e: KeyboardEvent) => {
+      if (isArrowPanCode(e.code)) {
+        const wasActive = keyboardPanKeysRef.current.delete(e.code)
+        if (wasActive) {
+          e.preventDefault()
+          if (keyboardPanKeysRef.current.size > 0) startKeyboardPan()
+        }
+      }
       if (e.code === 'Space') {
         spaceDown.current = false
         spacePanActiveRef.current = false
@@ -221,7 +302,7 @@ export function useCanvasPanZoom(containerRef: React.RefObject<HTMLElement | nul
         if (containerRef.current) containerRef.current.style.cursor = ''
       }
     },
-    [containerRef, stopPan],
+    [containerRef, startKeyboardPan, stopPan],
   )
 
   useEffect(() => {
@@ -239,6 +320,7 @@ export function useCanvasPanZoom(containerRef: React.RefObject<HTMLElement | nul
     return () => {
       flushPendingPanViewport()
       flushPendingWheelZoom()
+      stopKeyboardPan()
       el.removeEventListener('wheel', handleWheel)
       el.removeEventListener('mousedown', handleMouseDown)
       window.removeEventListener('mousemove', handleMouseMove)
@@ -257,6 +339,7 @@ export function useCanvasPanZoom(containerRef: React.RefObject<HTMLElement | nul
     handleKeyUp,
     flushPendingPanViewport,
     flushPendingWheelZoom,
+    stopKeyboardPan,
     containerRef,
   ])
 }

@@ -3,7 +3,7 @@ import { Rnd } from 'react-rnd'
 import { createPortal } from 'react-dom'
 import { useCanvasStore } from '../store/canvasStore'
 import { useUiStore } from '../store/uiStore'
-import type { BackdropItem, NoteItem } from '../types'
+import type { BackdropItem } from '../types'
 import {
   CanvasCommonMenuSection,
   type CanvasProjectMenuAction,
@@ -11,8 +11,7 @@ import {
 import { useClampedMenuPosition } from '../hooks/useClampedMenuPosition'
 import { backdropDomRegistry } from '../utils/backdropDomRegistry'
 import { tileDomRegistry } from '../utils/tileDomRegistry'
-import { getNoteCreationMetrics } from '../utils/noteCreation'
-import { DEFAULT_NOTE_COLOR, DEFAULT_NOTE_FONT_FAMILY } from '../utils/noteStyle'
+import { DEFAULT_NOTE_COLOR } from '../utils/noteStyle'
 import {
   DEFAULT_SELECTION_VIDEO_UI_COLOR,
   buildColorUpdatesForIds,
@@ -27,12 +26,6 @@ import {
   computeAttachedItemIds,
   findBackdropAtPoint,
 } from '../utils/backdrops'
-import { videoRegistry } from '../utils/videoRegistry'
-import {
-  getVideoPlaybackSuspended,
-  setVideoPlaybackSuspended,
-  subscribeVideoPlaybackSuspended,
-} from '../utils/videoGlobalPlayback'
 import { generateCanvasVideoProxies } from '../utils/generateCanvasVideoProxies'
 
 const COLLAPSED_STRIP_H = 48
@@ -232,21 +225,12 @@ export const BackdropTile = memo(function BackdropTile({
   hiddenItemIds,
 }: BackdropTileProps) {
   const items = useCanvasStore((s) => s.items)
-  const addItem = useCanvasStore((s) => s.addItem)
   const updateItem = useCanvasStore((s) => s.updateItem)
   const updateItemsBatch = useCanvasStore((s) => s.updateItemsBatch)
-  const gridAlignTiles = useCanvasStore((s) => s.gridAlignTiles)
-  const layoutMediaRow = useCanvasStore((s) => s.layoutMediaRow)
-  const frameAllItemsInViewport = useCanvasStore((s) => s.frameAllItemsInViewport)
-  const resetViewport = useCanvasStore((s) => s.resetViewport)
   const selectOne = useCanvasStore((s) => s.selectOne)
   const toggleSelect = useCanvasStore((s) => s.toggleSelect)
   const selectedIds = useCanvasStore((s) => s.selectedIds)
   const canvasLocked = useCanvasStore((s) => s.canvasLocked)
-  const setCanvasLocked = useCanvasStore((s) => s.setCanvasLocked)
-  const setItemsLocked = useCanvasStore((s) => s.setItemsLocked)
-  const clipboardCount = useCanvasStore((s) => s.clipboard.length)
-  const pasteClipboard = useCanvasStore((s) => s.pasteClipboard)
   const alwaysOnTop = useUiStore((s) => s.alwaysOnTop)
   const setAlwaysOnTop = useUiStore((s) => s.setAlwaysOnTop)
   const showStudioImport = window.electronAPI?.platform === 'win32'
@@ -298,16 +282,10 @@ export const BackdropTile = memo(function BackdropTile({
     ctxMenu ? { x: ctxMenu.x, y: ctxMenu.y } : null,
   )
   const [editingLabel, setEditingLabel] = useState(false)
-  const [playbackSuspended, setPlaybackSuspendedState] = useState(getVideoPlaybackSuspended)
   const labelInputRef = useRef<HTMLInputElement>(null)
   const bgRootRef = useRef<HTMLDivElement>(null)
   const headerRootRef = useRef<HTMLDivElement>(null)
   const suppressClickUntilRef = useRef(0)
-  useEffect(() => {
-    return subscribeVideoPlaybackSuspended(() => {
-      setPlaybackSuspendedState(getVideoPlaybackSuspended())
-    })
-  }, [])
   useEffect(() => {
     if (isHidden) return
     if (!ctxMenu) return
@@ -376,97 +354,6 @@ export const BackdropTile = memo(function BackdropTile({
     return () => window.removeEventListener('mousedown', onDown, true)
   }, [editingLabel, isHidden])
 
-  const runCommonMenuNewNote = useCallback(() => {
-    if (!ctxMenu) return
-    const state = useCanvasStore.getState()
-    if (state.canvasLocked) return
-    const { x: vx, y: vy, scale: vpScale } = state.viewport
-    const noteMetrics = getNoteCreationMetrics(vpScale)
-    const note: NoteItem = {
-      type: 'note',
-      id: `note-${Date.now()}`,
-      x: (ctxMenu.x - vx) / vpScale - noteMetrics.width / 2,
-      y: (ctxMenu.y - vy) / vpScale - noteMetrics.height / 2,
-      width: noteMetrics.width,
-      height: noteMetrics.height,
-      fontSize: noteMetrics.fontSize,
-      fontSizeTier: noteMetrics.fontSizeTier,
-      color: DEFAULT_NOTE_COLOR,
-      fontFamily: DEFAULT_NOTE_FONT_FAMILY,
-      text: '',
-    }
-    addItem(note)
-    selectOne(note.id)
-    setCtxMenu(null)
-  }, [addItem, ctxMenu, selectOne])
-
-  const runCommonMenuAddBackdrop = useCallback(() => {
-    if (!ctxMenu) return
-    const state = useCanvasStore.getState()
-    if (state.canvasLocked) return
-    const { x: vx, y: vy, scale: vpScale } = state.viewport
-    const worldX = (ctxMenu.x - vx) / vpScale
-    const worldY = (ctxMenu.y - vy) / vpScale
-    const nextBackdrop = createBackdropItem({
-      id: `backdrop-${Date.now()}`,
-      x: worldX - 400,
-      y: worldY - 300,
-      width: 800,
-      height: 600,
-    })
-    addItem(nextBackdrop)
-    selectOne(nextBackdrop.id)
-    setCtxMenu(null)
-  }, [addItem, ctxMenu, selectOne])
-
-  const runCommonMenuPaste = useCallback(() => {
-    if (!ctxMenu) return
-    const state = useCanvasStore.getState()
-    if (state.canvasLocked) return
-    const { x: vx, y: vy, scale: vpScale } = state.viewport
-    pasteClipboard((ctxMenu.x - vx) / vpScale, (ctxMenu.y - vy) / vpScale)
-    setCtxMenu(null)
-  }, [ctxMenu, pasteClipboard])
-
-  const runCommonMenuGridAlign = useCallback(() => {
-    gridAlignTiles()
-    setCtxMenu(null)
-  }, [gridAlignTiles])
-
-  const runCommonMenuLayoutMediaRow = useCallback(() => {
-    layoutMediaRow()
-    setCtxMenu(null)
-  }, [layoutMediaRow])
-
-  const runCommonMenuFitAll = useCallback(() => {
-    const root = document.getElementById('previewv-canvas-root')
-    if (!root) return
-    const rect = root.getBoundingClientRect()
-    frameAllItemsInViewport(rect.width, rect.height)
-    setCtxMenu(null)
-  }, [frameAllItemsInViewport])
-
-  const runCommonMenuResetView = useCallback(() => {
-    resetViewport()
-    setCtxMenu(null)
-  }, [resetViewport])
-
-  const runCommonMenuToggleSelectionLock = useCallback(() => {
-    const state = useCanvasStore.getState()
-    const selected = state.items.filter((item) => state.selectedIds.includes(item.id))
-    if (selected.length === 0) return
-    setItemsLocked(
-      selected.map((item) => item.id),
-      !selected.every((item) => item.locked),
-    )
-    setCtxMenu(null)
-  }, [setItemsLocked])
-
-  const runCommonMenuToggleCanvasLock = useCallback(() => {
-    setCanvasLocked(!canvasLocked)
-    setCtxMenu(null)
-  }, [canvasLocked, setCanvasLocked])
-
   const runCommonMenuImportDailies = useCallback(() => {
     useUiStore.getState().setDailiesModalOpen(true)
     setCtxMenu(null)
@@ -474,19 +361,6 @@ export const BackdropTile = memo(function BackdropTile({
 
   const runCommonMenuImportPrm = useCallback(() => {
     useUiStore.getState().setPrmModalOpen(true)
-    setCtxMenu(null)
-  }, [])
-
-  const runCommonMenuRestartPlayingVideos = useCallback(() => {
-    for (const video of videoRegistry.values()) {
-      if (video.paused) continue
-      video.currentTime = 0
-    }
-    setCtxMenu(null)
-  }, [])
-
-  const runCommonMenuTogglePlayback = useCallback(() => {
-    setVideoPlaybackSuspended(!getVideoPlaybackSuspended())
     setCtxMenu(null)
   }, [])
 
@@ -1068,7 +942,7 @@ export const BackdropTile = memo(function BackdropTile({
         <div
           ref={backdropMenuRef}
           data-backdrop-ctx-menu="true"
-          className="fixed z-[10000] overflow-y-auto rounded-lg border border-zinc-700/70 bg-zinc-950/95 shadow-2xl p-2"
+          className="fixed z-[10000] overflow-y-auto rounded-lg border border-zinc-700/70 bg-zinc-950/95 shadow-2xl p-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           style={{
             left: backdropMenuPosition?.left ?? ctxMenu.x,
             top: backdropMenuPosition?.top ?? ctxMenu.y,
@@ -1179,26 +1053,12 @@ export const BackdropTile = memo(function BackdropTile({
           </div>
           <div className="h-px my-2 bg-zinc-800/80" />
           <CanvasCommonMenuSection
-            clipboardAvailable={clipboardCount > 0}
             alwaysOnTop={alwaysOnTop}
-            playbackSuspended={playbackSuspended}
             canvasLocked={canvasLocked}
-            selectionLockState={selectionLockState}
             showStudioImport={showStudioImport}
             onImportDailies={runCommonMenuImportDailies}
             onImportPrm={runCommonMenuImportPrm}
-            onRestartPlayingVideos={runCommonMenuRestartPlayingVideos}
-            onTogglePlayback={runCommonMenuTogglePlayback}
             onGenerateProxies={runCommonMenuGenerateProxies}
-            onNewNote={runCommonMenuNewNote}
-            onAddBackdrop={runCommonMenuAddBackdrop}
-            onPaste={runCommonMenuPaste}
-            onGridAlign={runCommonMenuGridAlign}
-            onLayoutMediaRow={runCommonMenuLayoutMediaRow}
-            onFitAll={runCommonMenuFitAll}
-            onResetView={runCommonMenuResetView}
-            onToggleSelectionLock={runCommonMenuToggleSelectionLock}
-            onToggleCanvasLock={runCommonMenuToggleCanvasLock}
             onProjectAction={runCommonMenuProjectAction}
             onSettings={runCommonMenuSettings}
             onToggleAlwaysOnTop={runCommonMenuToggleAlwaysOnTop}

@@ -9,26 +9,12 @@ export type CanvasProjectMenuAction =
   | 'open-recent'
 
 interface CanvasCommonMenuSectionProps {
-  clipboardAvailable: boolean
   alwaysOnTop: boolean
-  playbackSuspended: boolean
   canvasLocked: boolean
-  selectionLockState: 'none' | 'locked' | 'unlocked' | 'mixed'
   showStudioImport: boolean
   onImportDailies: () => void
   onImportPrm: () => void
-  onRestartPlayingVideos: () => void
-  onTogglePlayback: () => void
   onGenerateProxies: () => void
-  onNewNote: () => void
-  onAddBackdrop: () => void
-  onPaste: () => void
-  onGridAlign: () => void
-  onLayoutMediaRow: () => void
-  onFitAll: () => void
-  onResetView: () => void
-  onToggleSelectionLock: () => void
-  onToggleCanvasLock: () => void
   onProjectAction: (action: CanvasProjectMenuAction, path?: string) => void
   onSettings: () => void
   onToggleAlwaysOnTop: () => void
@@ -36,26 +22,12 @@ interface CanvasCommonMenuSectionProps {
 }
 
 export const CanvasCommonMenuSection: React.FC<CanvasCommonMenuSectionProps> = ({
-  clipboardAvailable,
   alwaysOnTop,
-  playbackSuspended,
   canvasLocked,
-  selectionLockState,
   showStudioImport,
   onImportDailies,
   onImportPrm,
-  onRestartPlayingVideos,
-  onTogglePlayback,
   onGenerateProxies,
-  onNewNote,
-  onAddBackdrop,
-  onPaste,
-  onGridAlign,
-  onLayoutMediaRow,
-  onFitAll,
-  onResetView,
-  onToggleSelectionLock,
-  onToggleCanvasLock,
   onProjectAction,
   onSettings,
   onToggleAlwaysOnTop,
@@ -94,38 +66,38 @@ export const CanvasCommonMenuSection: React.FC<CanvasCommonMenuSectionProps> = (
           <span>File</span>
           <span className="normal-case tracking-normal text-themeText-500">Project</span>
         </div>
-        <div className="grid grid-cols-2 gap-1">
+        <div className="space-y-0.5">
           <button
             type="button"
-            className="rounded border border-sky-500/35 bg-sky-500/15 px-2 py-1.5 text-left text-xs font-medium text-sky-200 transition-colors hover:bg-sky-500/30"
+            className="flex w-full items-center justify-between gap-3 rounded border border-sky-500/25 bg-sky-500/10 px-2.5 py-1.5 text-left text-xs font-medium text-sky-200 transition-colors hover:bg-sky-500/25"
             onClick={() => onProjectAction('open')}
           >
-            <span className="block">Open…</span>
-            <span className="text-[10px] font-normal text-sky-300/65">Ctrl+O</span>
+            <span>Open…</span>
+            <span className="shrink-0 text-[10px] font-normal text-sky-300/65">Ctrl+O</span>
           </button>
           <button
             type="button"
-            className="rounded border border-indigo-500/35 bg-indigo-500/15 px-2 py-1.5 text-left text-xs font-medium text-indigo-200 transition-colors hover:bg-indigo-500/30"
+            className="flex w-full items-center justify-between gap-3 rounded border border-indigo-500/25 bg-indigo-500/10 px-2.5 py-1.5 text-left text-xs font-medium text-indigo-200 transition-colors hover:bg-indigo-500/25"
             onClick={() => onProjectAction('add-folder')}
           >
-            <span className="block">Add folder…</span>
-            <span className="text-[10px] font-normal text-indigo-300/65">Media</span>
+            <span>Add folder…</span>
+            <span className="shrink-0 text-[10px] font-normal text-indigo-300/65">Media</span>
           </button>
           <button
             type="button"
-            className="rounded border border-emerald-500/35 bg-emerald-500/15 px-2 py-1.5 text-left text-xs font-medium text-emerald-200 transition-colors hover:bg-emerald-500/30"
+            className="flex w-full items-center justify-between gap-3 rounded border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-1.5 text-left text-xs font-medium text-emerald-200 transition-colors hover:bg-emerald-500/25"
             onClick={() => onProjectAction('save')}
           >
-            <span className="block">Save</span>
-            <span className="text-[10px] font-normal text-emerald-300/65">Ctrl+S</span>
+            <span>Save</span>
+            <span className="shrink-0 text-[10px] font-normal text-emerald-300/65">Ctrl+S</span>
           </button>
           <button
             type="button"
-            className="rounded border border-teal-500/35 bg-teal-500/15 px-2 py-1.5 text-left text-xs font-medium text-teal-200 transition-colors hover:bg-teal-500/30"
+            className="flex w-full items-center justify-between gap-3 rounded border border-teal-500/25 bg-teal-500/10 px-2.5 py-1.5 text-left text-xs font-medium text-teal-200 transition-colors hover:bg-teal-500/25"
             onClick={() => onProjectAction('save-as')}
           >
-            <span className="block">Save as…</span>
-            <span className="text-[10px] font-normal text-teal-300/65">Ctrl+Shift+S</span>
+            <span>Save as…</span>
+            <span className="shrink-0 text-[10px] font-normal text-teal-300/65">Ctrl+Shift+S</span>
           </button>
         </div>
         {recentProjects.length > 0 && (
@@ -157,151 +129,69 @@ export const CanvasCommonMenuSection: React.FC<CanvasCommonMenuSectionProps> = (
         </button>
       </section>
 
-    {showStudioImport && (
-      <>
-        <button
-          type="button"
-          disabled={canvasLocked}
-          className="mb-0.5 w-full rounded border border-indigo-500/40 bg-indigo-500/20 px-2 py-1.5 text-left text-sm font-medium text-indigo-300 transition-colors hover:bg-indigo-500/40 disabled:cursor-not-allowed disabled:opacity-35"
-          onClick={onImportDailies}
-        >
-          Import Dailies
-        </button>
-        <button
-          type="button"
-          disabled={canvasLocked}
-          className="mb-0.5 w-full rounded border border-teal-500/40 bg-teal-500/20 px-2 py-1.5 text-left text-sm font-medium text-teal-300 transition-colors hover:bg-teal-500/40 disabled:cursor-not-allowed disabled:opacity-35"
-          onClick={onImportPrm}
-        >
-          Import PRM
-        </button>
-      </>
-    )}
-    <button
-      type="button"
-      className="mb-0.5 w-full rounded border border-fuchsia-500/40 bg-fuchsia-500/20 px-2 py-1.5 text-left text-sm font-medium text-fuchsia-300 transition-colors hover:bg-fuchsia-500/40"
-      onClick={onGenerateProxies}
-    >
-      Generate proxies
-    </button>
-    <button
-      type="button"
-      className="mb-0.5 w-full rounded border border-amber-500/40 bg-amber-500/20 px-2 py-1.5 text-left text-sm font-medium text-amber-300 transition-colors hover:bg-amber-500/40"
-      onClick={onRestartPlayingVideos}
-    >
-      Restart playing videos
-    </button>
-    <button
-      type="button"
-      className={[
-        'w-full rounded border px-2 py-1.5 text-left text-sm font-medium transition-colors',
-        playbackSuspended
-          ? 'border-emerald-500/40 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/40'
-          : 'border-rose-500/40 bg-rose-500/20 text-rose-300 hover:bg-rose-500/40',
-      ].join(' ')}
-      onClick={onTogglePlayback}
-    >
-      {playbackSuspended ? 'Play all videos' : 'Stop all videos'}
-    </button>
-    <div className="h-px my-1 mx-1" style={{ background: 'var(--theme-divider)' }} />
+      <section className="mb-1 rounded-lg border border-fuchsia-500/20 bg-fuchsia-950/10 p-1">
+        <div className="flex items-center justify-between px-1 pb-1 text-[9px] font-semibold uppercase tracking-[0.16em] text-fuchsia-300">
+          <span>Actions</span>
+          <span className="normal-case tracking-normal text-themeText-500">Media</span>
+        </div>
+        <div className="grid grid-cols-3 gap-1">
+          {showStudioImport && (
+            <>
+              <button
+                type="button"
+                disabled={canvasLocked}
+                className="aspect-square rounded-md border border-indigo-500/40 bg-indigo-500/20 p-1 text-center text-[10px] font-semibold leading-3 text-indigo-200 transition-colors hover:bg-indigo-500/40 disabled:cursor-not-allowed disabled:opacity-35"
+                onClick={onImportDailies}
+              >
+                Import<br />Dailies
+              </button>
+              <button
+                type="button"
+                disabled={canvasLocked}
+                className="aspect-square rounded-md border border-teal-500/40 bg-teal-500/20 p-1 text-center text-[10px] font-semibold leading-3 text-teal-200 transition-colors hover:bg-teal-500/40 disabled:cursor-not-allowed disabled:opacity-35"
+                onClick={onImportPrm}
+              >
+                Import<br />PRM
+              </button>
+            </>
+          )}
+          <button
+            type="button"
+            className="aspect-square rounded-md border border-fuchsia-500/40 bg-fuchsia-500/20 p-1 text-center text-[10px] font-semibold leading-3 text-fuchsia-200 transition-colors hover:bg-fuchsia-500/40"
+            onClick={onGenerateProxies}
+          >
+            Generate<br />proxies
+          </button>
+        </div>
+      </section>
 
-    <button
-      type="button"
-      disabled={canvasLocked}
-      className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors disabled:cursor-not-allowed disabled:opacity-35"
-      onClick={onNewNote}
-    >
-      New note (N)
-    </button>
-    <button
-      type="button"
-      disabled={canvasLocked}
-      className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors disabled:cursor-not-allowed disabled:opacity-35"
-      onClick={onAddBackdrop}
-    >
-      Add backdrop (B)
-    </button>
-    <div className="h-px my-1 mx-1" style={{ background: 'var(--theme-divider)' }} />
-
-    <button
-      type="button"
-      className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors disabled:opacity-40"
-      disabled={!clipboardAvailable || canvasLocked}
-      onClick={onPaste}
-    >
-      Paste (Ctrl+V)
-    </button>
-    <button
-      type="button"
-      disabled={canvasLocked}
-      className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors disabled:cursor-not-allowed disabled:opacity-35"
-      onClick={onGridAlign}
-    >
-      Grid align (\)
-    </button>
-    <button
-      type="button"
-      disabled={canvasLocked}
-      className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors disabled:cursor-not-allowed disabled:opacity-35"
-      onClick={onLayoutMediaRow}
-    >
-      Layout media row (L)
-    </button>
-    <button
-      type="button"
-      className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
-      onClick={onFitAll}
-    >
-      Fit all (A)
-    </button>
-    <button
-      type="button"
-      className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
-      onClick={onResetView}
-    >
-      Reset view
-    </button>
-    <div className="h-px my-1 mx-1" style={{ background: 'var(--theme-divider)' }} />
-
-    {selectionLockState !== 'none' && (
-      <button
-        type="button"
-        className="mb-0.5 w-full rounded border border-amber-500/40 bg-amber-500/15 px-2 py-1.5 text-left text-sm font-medium text-amber-300 transition-colors hover:bg-amber-500/30"
-        onClick={onToggleSelectionLock}
+      <div
+        className="sticky bottom-0 z-10 -mx-1 rounded-b-lg px-1 pb-0.5 pt-0.5"
+        style={{ background: 'var(--menu-bg)' }}
       >
-        {selectionLockState === 'locked' ? 'Unlock selected' : 'Lock selected'} (Alt+L)
-      </button>
-    )}
-    <button
-      type="button"
-      className="w-full rounded border border-sky-500/40 bg-sky-500/15 px-2 py-1.5 text-left text-sm font-medium text-sky-300 transition-colors hover:bg-sky-500/30"
-      onClick={onToggleCanvasLock}
-    >
-      {canvasLocked ? 'Unlock canvas layout' : 'Lock canvas layout'} (Ctrl+R)
-    </button>
-    <div className="h-px my-1 mx-1" style={{ background: 'var(--theme-divider)' }} />
-
-    <button
-      type="button"
-      className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
-      onClick={onSettings}
-    >
-      Settings
-    </button>
-    <button
-      type="button"
-      className="w-full text-left px-2 py-1.5 text-sm text-themeText-100 hover:bg-themeBg-hover rounded transition-colors"
-      onClick={onToggleAlwaysOnTop}
-    >
-      {alwaysOnTop ? 'Disable always on top' : 'Enable always on top'}
-    </button>
-    <button
-      type="button"
-      className="w-full text-left px-2 py-1.5 text-sm text-red-500 hover:bg-red-500/10 rounded transition-colors font-medium mt-1"
-      onClick={onQuit}
-    >
-      Quit / Exit
-    </button>
+        <div className="mx-1 mb-0.5 h-px" style={{ background: 'var(--theme-divider)' }} />
+        <button
+          type="button"
+          className="w-full rounded px-2 py-1 text-left text-xs text-themeText-100 transition-colors hover:bg-themeBg-hover"
+          onClick={onSettings}
+        >
+          Settings
+        </button>
+        <button
+          type="button"
+          className="w-full rounded px-2 py-1 text-left text-xs text-themeText-100 transition-colors hover:bg-themeBg-hover"
+          onClick={onToggleAlwaysOnTop}
+        >
+          {alwaysOnTop ? 'Disable always on top' : 'Enable always on top'}
+        </button>
+        <button
+          type="button"
+          className="mt-0.5 w-full rounded px-2 py-1 text-left text-xs font-medium text-red-500 transition-colors hover:bg-red-500/10"
+          onClick={onQuit}
+        >
+          Quit / Exit
+        </button>
+      </div>
     </>
   )
 }

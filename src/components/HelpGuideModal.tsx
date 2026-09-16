@@ -170,10 +170,12 @@ const HOTKEY_GROUPS: HotkeyGroup[] = [
       { keys: 'Space + drag', action: 'Перемещать холст' },
       { keys: 'MMB + drag', action: 'Перемещать холст средней кнопкой' },
       { keys: 'Ctrl + wheel', action: 'Изменять масштаб холста' },
+      { keys: 'Стрелки', action: 'Плавно перемещаться по холсту' },
       { keys: 'A', action: 'Показать весь холст' },
+      { keys: 'Shift+A', action: 'Сбросить масштаб и позицию холста' },
       { keys: 'B', action: 'Создать backdrop' },
       { keys: 'N', action: 'Создать заметку' },
-      { keys: '/', action: 'Открыть поиск по видео' },
+      { keys: '. после Ю', action: 'Открыть поиск по видео' },
       { keys: '\\', action: 'Grid align без наложения' },
       { keys: 'L', action: 'Разложить выбранные медиа в ряд' },
     ],
@@ -195,6 +197,7 @@ const HOTKEY_GROUPS: HotkeyGroup[] = [
     accent: 'rose',
     items: [
       { keys: 'I', action: 'Открыть или закрыть полноэкранную инструкцию' },
+      { keys: 'Shift+H', action: 'Открыть или закрыть важные хоткеи' },
       { keys: 'Esc / Enter / Space', action: 'Закрыть инструкцию' },
       { keys: 'ПКМ + drag', action: 'Перетащить окно приложения' },
       { keys: 'Alt+L', action: 'Закрепить или открепить выделение — работает с обоими Alt' },
@@ -392,7 +395,7 @@ export const HelpGuideModal: React.FC<{ onClose: () => void }> = ({ onClose }) =
               <div className="mt-2 text-xs text-themeText-500">
                 Быстро: перетащите файлы на холст · <span className="text-themeText-300">B</span> — сгруппировать ·{' '}
                 <span className="text-themeText-300">A</span> — показать весь холст ·{' '}
-                <span className="text-themeText-300">/</span> — найти видео
+                <span className="text-themeText-300">. после Ю</span> — найти видео
               </div>
             </section>
 

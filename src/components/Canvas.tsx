@@ -44,7 +44,6 @@ import { defaultVideoTileSizeForNew, imageTileViewSize } from '../utils/tileSizi
 import {
   getVideoPlaybackSuspended,
   setVideoPlaybackSuspended,
-  subscribeVideoPlaybackSuspended,
 } from '../utils/videoGlobalPlayback'
 import { setVideoUserPausedByUser } from '../utils/videoUserPausedRegistry'
 import { setManualPlaybackAllowedInSuspended } from '../utils/videoSuspendedManualAllowRegistry'
@@ -223,8 +222,6 @@ export const Canvas: React.FC = () => {
   const frameAllItemsInViewport = useCanvasStore((s) => s.frameAllItemsInViewport)
   const imageEditModeId = useCanvasStore((s) => s.imageEditModeId)
   const setImageEditModeId = useCanvasStore((s) => s.setImageEditModeId)
-  const setCanvasLocked = useCanvasStore((s) => s.setCanvasLocked)
-  const setItemsLocked  = useCanvasStore((s) => s.setItemsLocked)
   const showBackgroundGrid = useUiStore((s) => s.showBackgroundGrid)
   const gridSizeX = useUiStore((s) => s.gridSizeX)
   const gridSizeY = useUiStore((s) => s.gridSizeY)
@@ -263,14 +260,6 @@ export const Canvas: React.FC = () => {
   const [sourcePathModalOpen, setSourcePathModalOpen] = useState(false)
   const sourcePathInputRef = useRef<HTMLInputElement>(null)
   const [isFarZoomMode, setIsFarZoomMode] = useState(() => resolveFarZoomMode(false, viewport.scale))
-  const [playbackSuspended, setPlaybackSuspendedState] = useState(getVideoPlaybackSuspended)
-
-  useEffect(() => {
-    return subscribeVideoPlaybackSuspended(() => {
-      setPlaybackSuspendedState(getVideoPlaybackSuspended())
-    })
-  }, [])
-
   const readSystemClipboardText = useCallback(
     () => window.electronAPI?.projectAPI.readClipboardText?.() ?? '',
     [],
@@ -628,14 +617,6 @@ export const Canvas: React.FC = () => {
   useCanvasPanZoom(containerRef)
   useVideoPlaybackManager(containerRef)
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds])
-  const selectionLockState = useMemo<'none' | 'locked' | 'unlocked' | 'mixed'>(() => {
-    const selected = items.filter((item) => selectedIdSet.has(item.id))
-    if (selected.length === 0) return 'none'
-    const lockedCount = selected.filter((item) => item.locked).length
-    if (lockedCount === 0) return 'unlocked'
-    if (lockedCount === selected.length) return 'locked'
-    return 'mixed'
-  }, [items, selectedIdSet])
   const hiddenItemIds = useMemo(() => {
     const set = new Set<string>()
     for (const it of items) {
@@ -855,102 +836,6 @@ export const Canvas: React.FC = () => {
     )
   }, [updateItemsBatch])
 
-  const runCommonMenuNewNote = useCallback(() => {
-    const state = useCanvasStore.getState()
-    if (state.canvasLocked) return
-    const sx = ctxMenu?.x ?? lastMouseScreen.current.x
-    const sy = ctxMenu?.y ?? lastMouseScreen.current.y
-    const { x: vx, y: vy, scale } = state.viewport
-    const noteMetrics = getNoteCreationMetrics(scale)
-    const note: NoteItem = {
-      type: 'note',
-      id: `note-${Date.now()}`,
-      x: (sx - vx) / scale - noteMetrics.width / 2,
-      y: (sy - vy) / scale - noteMetrics.height / 2,
-      width: noteMetrics.width,
-      height: noteMetrics.height,
-      fontSize: noteMetrics.fontSize,
-      fontSizeTier: noteMetrics.fontSizeTier,
-      color: DEFAULT_NOTE_COLOR,
-      fontFamily: DEFAULT_NOTE_FONT_FAMILY,
-      text: '',
-    }
-    addItem(note)
-    selectOne(note.id)
-    setCtxMenu(null)
-  }, [addItem, ctxMenu, selectOne])
-
-  const runCommonMenuAddBackdrop = useCallback(() => {
-    const state = useCanvasStore.getState()
-    if (state.canvasLocked) return
-    const sx = ctxMenu?.x ?? lastMouseScreen.current.x
-    const sy = ctxMenu?.y ?? lastMouseScreen.current.y
-    const { x: vx, y: vy, scale } = state.viewport
-    const worldX = (sx - vx) / scale
-    const worldY = (sy - vy) / scale
-    const backdrop = createBackdropItem({
-      id: `backdrop-${Date.now()}`,
-      x: worldX - 400,
-      y: worldY - 300,
-      width: 800,
-      height: 600,
-    })
-    addItem(backdrop)
-    selectOne(backdrop.id)
-    setCtxMenu(null)
-  }, [addItem, ctxMenu, selectOne])
-
-  const runCommonMenuPaste = useCallback(() => {
-    const state = useCanvasStore.getState()
-    if (state.canvasLocked) return
-    const sx = ctxMenu?.x ?? lastMouseScreen.current.x
-    const sy = ctxMenu?.y ?? lastMouseScreen.current.y
-    const { x: vx, y: vy, scale } = state.viewport
-    state.pasteClipboard((sx - vx) / scale, (sy - vy) / scale)
-    setCtxMenu(null)
-  }, [ctxMenu])
-
-  const runCommonMenuGridAlign = useCallback(() => {
-    gridAlignTiles()
-    markCanvasCommandContext()
-    setCtxMenu(null)
-  }, [gridAlignTiles, markCanvasCommandContext])
-
-  const runCommonMenuLayoutMediaRow = useCallback(() => {
-    layoutMediaRow()
-    markCanvasCommandContext()
-    setCtxMenu(null)
-  }, [layoutMediaRow, markCanvasCommandContext])
-
-  const runCommonMenuFitAll = useCallback(() => {
-    const el = containerRef.current
-    if (!el) return
-    const { width, height } = el.getBoundingClientRect()
-    frameAllItemsInViewport(width, height)
-    setCtxMenu(null)
-  }, [frameAllItemsInViewport])
-
-  const runCommonMenuResetView = useCallback(() => {
-    resetViewport()
-    setCtxMenu(null)
-  }, [resetViewport])
-
-  const runCommonMenuToggleSelectionLock = useCallback(() => {
-    const state = useCanvasStore.getState()
-    const selected = state.items.filter((item) => state.selectedIds.includes(item.id))
-    if (selected.length === 0) return
-    const shouldLock = !selected.every((item) => item.locked)
-    setItemsLocked(selected.map((item) => item.id), shouldLock)
-    markCanvasCommandContext()
-    setCtxMenu(null)
-  }, [markCanvasCommandContext, setItemsLocked])
-
-  const runCommonMenuToggleCanvasLock = useCallback(() => {
-    setCanvasLocked(!canvasLocked)
-    markCanvasCommandContext()
-    setCtxMenu(null)
-  }, [canvasLocked, markCanvasCommandContext, setCanvasLocked])
-
   const runCommonMenuImportDailies = useCallback(() => {
     useUiStore.getState().setDailiesModalOpen(true)
     setCtxMenu(null)
@@ -958,19 +843,6 @@ export const Canvas: React.FC = () => {
 
   const runCommonMenuImportPrm = useCallback(() => {
     useUiStore.getState().setPrmModalOpen(true)
-    setCtxMenu(null)
-  }, [])
-
-  const runCommonMenuRestartPlayingVideos = useCallback(() => {
-    for (const video of videoRegistry.values()) {
-      if (video.paused) continue
-      video.currentTime = 0
-    }
-    setCtxMenu(null)
-  }, [])
-
-  const runCommonMenuTogglePlayback = useCallback(() => {
-    setVideoPlaybackSuspended(!getVideoPlaybackSuspended())
     setCtxMenu(null)
   }, [])
 
@@ -1455,8 +1327,29 @@ export const Canvas: React.FC = () => {
         return
       }
 
+      // Shift+A — reset canvas scale and position
+      if (
+        e.code === 'KeyA' &&
+        e.shiftKey &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        !isTypingTarget(e)
+      ) {
+        e.preventDefault()
+        resetViewport()
+        return
+      }
+
       // A — zoom/pan to show every tile in the canvas area
-      if (e.code === 'KeyA' && !e.ctrlKey && !e.metaKey && !e.altKey && !isTypingTarget(e)) {
+      if (
+        e.code === 'KeyA' &&
+        !e.shiftKey &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        !isTypingTarget(e)
+      ) {
         e.preventDefault()
         const el = containerRef.current
         if (!el) return
@@ -1486,7 +1379,7 @@ export const Canvas: React.FC = () => {
       }
 
       if (
-        (e.code === 'KeyH' || e.code === 'KeyV') &&
+        ((e.code === 'KeyH' && !e.shiftKey) || (e.code === 'KeyV' && !e.shiftKey)) &&
         !e.ctrlKey &&
         !e.metaKey &&
         !e.altKey &&
@@ -1743,6 +1636,7 @@ export const Canvas: React.FC = () => {
     markCanvasCommandContext,
     runRedoCommand,
     runUndoCommand,
+    resetViewport,
     theme,
     toggleMediaFlip,
   ])
@@ -2383,7 +2277,7 @@ export const Canvas: React.FC = () => {
           <div
             ref={canvasMenuRef}
             data-canvas-ctx-menu="true"
-            className="fixed z-[10000] min-w-[220px] overflow-y-auto rounded-lg border p-1.5"
+            className="fixed z-[10000] min-w-[220px] overflow-y-auto rounded-lg border p-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
             style={{
               left: canvasMenuPosition?.left ?? ctxMenu.x,
               top: canvasMenuPosition?.top ?? ctxMenu.y,
@@ -2595,26 +2489,12 @@ export const Canvas: React.FC = () => {
             )}
 
             <CanvasCommonMenuSection
-              clipboardAvailable={useCanvasStore.getState().clipboard.length > 0}
               alwaysOnTop={alwaysOnTop}
-              playbackSuspended={playbackSuspended}
               canvasLocked={canvasLocked}
-              selectionLockState={selectionLockState}
               showStudioImport={showStudioImport}
               onImportDailies={runCommonMenuImportDailies}
               onImportPrm={runCommonMenuImportPrm}
-              onRestartPlayingVideos={runCommonMenuRestartPlayingVideos}
-              onTogglePlayback={runCommonMenuTogglePlayback}
               onGenerateProxies={runCommonMenuGenerateProxies}
-              onNewNote={runCommonMenuNewNote}
-              onAddBackdrop={runCommonMenuAddBackdrop}
-              onPaste={runCommonMenuPaste}
-              onGridAlign={runCommonMenuGridAlign}
-              onLayoutMediaRow={runCommonMenuLayoutMediaRow}
-              onFitAll={runCommonMenuFitAll}
-              onResetView={runCommonMenuResetView}
-              onToggleSelectionLock={runCommonMenuToggleSelectionLock}
-              onToggleCanvasLock={runCommonMenuToggleCanvasLock}
               onProjectAction={runCommonMenuProjectAction}
               onSettings={runCommonMenuSettings}
               onToggleAlwaysOnTop={runCommonMenuToggleAlwaysOnTop}
