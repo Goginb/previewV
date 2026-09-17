@@ -10,10 +10,23 @@ interface MenuPosition {
   top: number
 }
 
-function clampMenuPosition(anchor: MenuAnchor, width: number, height: number, padding: number): MenuPosition {
+interface ViewportSize {
+  width: number
+  height: number
+}
+
+export function clampMenuPosition(
+  anchor: MenuAnchor,
+  width: number,
+  height: number,
+  padding: number,
+  viewport: ViewportSize,
+): MenuPosition {
+  const maxLeft = Math.max(padding, viewport.width - width - padding)
+  const maxTop = Math.max(padding, viewport.height - height - padding)
   return {
-    left: Math.max(padding, Math.min(anchor.x, window.innerWidth - width - padding)),
-    top: Math.max(padding, Math.min(anchor.y, window.innerHeight - height - padding)),
+    left: Math.max(padding, Math.min(anchor.x, maxLeft)),
+    top: Math.max(padding, Math.min(anchor.y, maxTop)),
   }
 }
 
@@ -45,6 +58,7 @@ export function useClampedMenuPosition(anchor: MenuAnchor | null, padding = 8) {
         rect.width,
         rect.height,
         padding,
+        { width: window.innerWidth, height: window.innerHeight },
       )
       setPosition((prev) =>
         prev && prev.left === next.left && prev.top === next.top ? prev : next,
@@ -52,8 +66,20 @@ export function useClampedMenuPosition(anchor: MenuAnchor | null, padding = 8) {
     }
 
     update()
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(update)
+    if (menuRef.current) resizeObserver?.observe(menuRef.current)
+
     window.addEventListener('resize', update)
-    return () => window.removeEventListener('resize', update)
+    window.visualViewport?.addEventListener('resize', update)
+    window.visualViewport?.addEventListener('scroll', update)
+    return () => {
+      resizeObserver?.disconnect()
+      window.removeEventListener('resize', update)
+      window.visualViewport?.removeEventListener('resize', update)
+      window.visualViewport?.removeEventListener('scroll', update)
+    }
   }, [anchorX, anchorY, padding])
 
   return {

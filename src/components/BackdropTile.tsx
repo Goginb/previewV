@@ -942,11 +942,12 @@ export const BackdropTile = memo(function BackdropTile({
         <div
           ref={backdropMenuRef}
           data-backdrop-ctx-menu="true"
-          className="fixed z-[10000] overflow-y-auto rounded-lg border border-zinc-700/70 bg-zinc-950/95 shadow-2xl p-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          className="fixed z-[10000] overflow-x-hidden overflow-y-auto rounded-lg border border-zinc-700/70 bg-zinc-950/95 shadow-2xl p-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           style={{
             left: backdropMenuPosition?.left ?? ctxMenu.x,
             top: backdropMenuPosition?.top ?? ctxMenu.y,
             maxHeight: 'calc(100vh - 16px)',
+            maxWidth: 'calc(100vw - 16px)',
           }}
           onMouseDown={(e) => e.stopPropagation()}
         >

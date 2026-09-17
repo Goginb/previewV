@@ -2277,11 +2277,12 @@ export const Canvas: React.FC = () => {
           <div
             ref={canvasMenuRef}
             data-canvas-ctx-menu="true"
-            className="fixed z-[10000] min-w-[220px] overflow-y-auto rounded-lg border p-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            className="fixed z-[10000] min-w-[220px] overflow-x-hidden overflow-y-auto rounded-lg border p-1.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
             style={{
               left: canvasMenuPosition?.left ?? ctxMenu.x,
               top: canvasMenuPosition?.top ?? ctxMenu.y,
               maxHeight: 'calc(100vh - 16px)',
+              maxWidth: 'calc(100vw - 16px)',
               borderColor: 'var(--menu-border)',
               background: 'var(--menu-bg)',
               boxShadow: 'var(--menu-shadow)',
