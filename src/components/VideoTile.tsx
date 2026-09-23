@@ -1,6 +1,7 @@
 import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Rnd } from 'react-rnd'
 import { useCanvasStore } from '../store/canvasStore'
+import { useVideoColorStore } from '../store/videoColorStore'
 import { videoRegistry } from '../utils/videoRegistry'
 import { tileDomRegistry } from '../utils/tileDomRegistry'
 import { collectLiveDragTargets } from '../utils/liveDragTargets'
@@ -107,6 +108,8 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
   const toggleSelect = useCanvasStore((s) => s.toggleSelect)
   const selectedIds = useCanvasStore((s) => s.selectedIds)
   const canvasLocked = useCanvasStore((s) => s.canvasLocked)
+  const brightness = useVideoColorStore((s) => s.brightness)
+  const gamma = useVideoColorStore((s) => s.gamma)
   const suppressClickUntilRef = useRef(0)
   const dragOriginsRef = useRef<Map<string, { x: number; y: number }> | null>(null)
   const dragPeerElementsRef = useRef<HTMLElement[]>([])
@@ -830,6 +833,7 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
             style={{
               display: showNavigationPreview ? 'none' : undefined,
               transform: `scale(${tile.flipX ? -1 : 1}, ${tile.flipY ? -1 : 1})`,
+              filter: brightness === 1 && gamma === 1 ? undefined : 'url(#previewv-video-color)',
             }}
             loop
             muted

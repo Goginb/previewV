@@ -8,12 +8,14 @@ import { PrmImportModal } from './components/PrmImportModal'
 import { ProjectLoadingOverlay } from './components/ProjectLoadingOverlay'
 import { useCanvasStore } from './store/canvasStore'
 import { useUiStore } from './store/uiStore'
+import { useVideoColorStore } from './store/videoColorStore'
 import { flushImageAnnotations } from './utils/flushImageAnnotations'
 import { hydrateProjectVideoSources } from './utils/hydrateProjectVideoSources'
 import { createEmptyProject } from './utils/emptyProject'
 import { importMediaPathsToCanvas } from './utils/importMediaPaths'
 import { collectExistingSourcePaths, normalizePathKey } from './utils/sourcePaths'
 import { isTypingTarget } from './utils/keyboard'
+import { videoColorCommandForKey } from './utils/videoColor'
 import {
   beginProjectOpenProgress,
   cancelProjectOpenProgress,
@@ -93,6 +95,8 @@ const App: React.FC = () => {
   const getProjectDataForSave = useCanvasStore((s) => s.getProjectDataForSave)
   const syncSavedProjectState = useCanvasStore((s) => s.syncSavedProjectState)
   const theme = useUiStore((s) => s.theme)
+  const brightness = useVideoColorStore((s) => s.brightness)
+  const gamma = useVideoColorStore((s) => s.gamma)
 
   const waitForUiPaint = useCallback((maxDelayMs = 48) => {
     return new Promise<void>((resolve) => {
@@ -276,6 +280,21 @@ const App: React.FC = () => {
   }, [theme])
 
   useEffect(() => {
+    const onVideoColorKeyDown = (event: KeyboardEvent) => {
+      const command = videoColorCommandForKey(event.code)
+      if (
+        !command || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey ||
+        isTypingTarget(event) || document.querySelector('[data-previewv-modal="true"]')
+      ) return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      useVideoColorStore.getState().applyCommand(command)
+    }
+    window.addEventListener('keydown', onVideoColorKeyDown, true)
+    return () => window.removeEventListener('keydown', onVideoColorKeyDown, true)
+  }, [])
+
+  useEffect(() => {
     syncWindowProjectState()
     syncDocumentTitle()
     let prevDirty = useCanvasStore.getState().isDirty
@@ -448,6 +467,15 @@ const App: React.FC = () => {
 
   return (
     <div className="relative w-full h-full min-h-[100dvh]" style={{ background: 'var(--app-bg)' }}>
+      <svg aria-hidden="true" width="0" height="0" className="absolute pointer-events-none">
+        <filter id="previewv-video-color" colorInterpolationFilters="sRGB">
+          <feComponentTransfer>
+            <feFuncR type="gamma" amplitude={brightness} exponent={1 / gamma} offset="0" />
+            <feFuncG type="gamma" amplitude={brightness} exponent={1 / gamma} offset="0" />
+            <feFuncB type="gamma" amplitude={brightness} exponent={1 / gamma} offset="0" />
+          </feComponentTransfer>
+        </filter>
+      </svg>
       <ProjectLoadingOverlay />
       {helpOpen && <HelpGuideModal onClose={() => setHelpOpen(false)} />}
       {importantHotkeysOpen && (
