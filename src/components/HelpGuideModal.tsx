@@ -170,7 +170,7 @@ const HOTKEY_GROUPS: HotkeyGroup[] = [
     items: [
       { keys: 'Space + drag', action: 'Перемещать холст' },
       { keys: 'MMB + drag', action: 'Перемещать холст средней кнопкой' },
-      { keys: 'Ctrl + wheel', action: 'Изменять масштаб холста' },
+      { keys: 'Колёсико', action: 'Изменять масштаб холста' },
       { keys: 'Стрелки', action: 'Плавно перемещаться по холсту' },
       { keys: 'A', action: 'Показать весь холст' },
       { keys: 'Shift+A', action: 'Сбросить масштаб и позицию холста' },
