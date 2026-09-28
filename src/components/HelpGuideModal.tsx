@@ -161,6 +161,7 @@ const HOTKEY_GROUPS: HotkeyGroup[] = [
       { keys: 'Ctrl+C / X / V', action: 'Копировать / вырезать / вставить' },
       { keys: 'Shift+D', action: 'Дублировать выделенные плитки' },
       { keys: 'Delete', action: 'Удалить выделение' },
+      { keys: 'Backspace', action: 'Упорядочить видео по имени' },
     ],
   },
   {

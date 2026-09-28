@@ -22,6 +22,19 @@ function note(id: string, x = 0, y = 0): CanvasItem {
   }
 }
 
+function video(id: string, fileName: string, x: number, y = 0): CanvasItem {
+  return {
+    type: 'video',
+    id,
+    fileName,
+    srcUrl: `media:///C:/clips/${fileName}`,
+    x,
+    y,
+    width: 100,
+    height: 60,
+  }
+}
+
 function resetStore(): void {
   useCanvasStore.setState({
     items: [],
@@ -100,6 +113,61 @@ test('syncSavedProjectState replaces runtime items while clearing dirty state', 
   assert.equal(state.viewport.scale, 1.5)
   assert.equal(state.items[0]?.x, 500)
   assert.deepEqual(state.selectedIds, ['note-a'])
+})
+
+test('name sorting uses natural numeric order and is undoable in one step', () => {
+  resetStore()
+  useCanvasStore.setState({
+    items: [
+      video('ten', 'shot_10.mov', 0),
+      video('two', 'shot_2.mov', 116),
+      video('one', 'shot_1.mov', 232),
+      note('note', 1000),
+    ],
+  })
+
+  useCanvasStore.getState().sortVideosByFileName()
+  let state = useCanvasStore.getState()
+  assert.deepEqual(
+    ['one', 'two', 'ten'].map((id) => state.items.find((item) => item.id === id)?.x),
+    [0, 116, 232],
+  )
+  assert.equal(state.items.find((item) => item.id === 'note')?.x, 1000)
+  assert.equal(state._past.length, 1)
+
+  state.sortVideosByFileName()
+  assert.equal(useCanvasStore.getState()._past.length, 1)
+
+  useCanvasStore.getState().undo()
+  state = useCanvasStore.getState()
+  assert.equal(state.items.find((item) => item.id === 'ten')?.x, 0)
+  assert.equal(state.items.find((item) => item.id === 'one')?.x, 232)
+})
+
+test('name sorting moves only selected unlocked videos clear of untouched tiles', () => {
+  resetStore()
+  useCanvasStore.setState({
+    items: [
+      video('ten', 'shot_10.mov', 0),
+      video('two', 'shot_2.mov', 116),
+      video('one', 'shot_1.mov', 400),
+      { ...video('locked', 'shot_0.mov', 500), locked: true },
+      note('obstacle', 0, 0),
+    ],
+    selectedIds: ['ten', 'two', 'locked'],
+  })
+
+  useCanvasStore.getState().sortVideosByFileName()
+  const state = useCanvasStore.getState()
+  const ten = state.items.find((item) => item.id === 'ten')!
+  const two = state.items.find((item) => item.id === 'two')!
+  assert.equal(two.x, 0)
+  assert.equal(ten.x, 116)
+  assert.ok(two.y >= 136)
+  assert.equal(ten.y, two.y)
+  assert.equal(state.items.find((item) => item.id === 'one')?.x, 400)
+  assert.equal(state.items.find((item) => item.id === 'locked')?.x, 500)
+  assert.equal(state.items.find((item) => item.id === 'obstacle')?.y, 0)
 })
 
 test('locked items and a locked canvas reject destructive layout actions', () => {

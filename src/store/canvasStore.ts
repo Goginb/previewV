@@ -18,7 +18,9 @@ export const MAX_SCALE = 4
 const MAX_HISTORY = 200
 const ROW_GAP = 16
 const LAYOUT_ROW_CAP = 20
+const NAME_SORT_ROW_CAP = 10
 const LAYOUT_SECTION_GAP = 48
+const fileNameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
 
 interface BatchUpdateOptions {
   markDirty?: boolean
@@ -94,6 +96,7 @@ interface CanvasState {
   frameAllItemsInViewport: (containerWidth: number, containerHeight: number) => void
   frameItemInViewport: (id: string, containerWidth: number, containerHeight: number, pad?: number) => void
   layoutMediaRow: () => void
+  sortVideosByFileName: () => void
   gridAlignTiles: () => void
   undo: () => void
   redo: () => void
@@ -386,6 +389,71 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       items: state.items.map((item) => {
         const next = pos.get(item.id)
         return next ? { ...item, x: next.x, y: next.y } : item
+      }),
+      isDirty: true,
+      _future: [],
+    }))
+  },
+
+  sortVideosByFileName: () => {
+    const state = get()
+    if (state.canvasLocked) return
+
+    const selected = new Set(state.selectedIds)
+    const videos = state.items.filter(
+      (item): item is Extract<CanvasItem, { type: 'video' }> =>
+        item.type === 'video' && !item.locked &&
+        (selected.size === 0 || selected.has(item.id)),
+    )
+    if (videos.length === 0) return
+
+    const anchorX = Math.min(...videos.map((item) => item.x))
+    const anchorY = Math.min(...videos.map((item) => item.y))
+    const sorted = sortByCanvasReadingOrder(videos).sort((a, b) =>
+      fileNameCollator.compare(a.fileName.split(/[/\\]/).pop() ?? a.fileName, b.fileName.split(/[/\\]/).pop() ?? b.fileName),
+    )
+    const positions = new Map<string, { x: number; y: number }>()
+    let y = anchorY
+    let right = anchorX
+    for (let i = 0; i < sorted.length; i += NAME_SORT_ROW_CAP) {
+      const row = sorted.slice(i, i + NAME_SORT_ROW_CAP)
+      let x = anchorX
+      let rowHeight = 0
+      for (const item of row) {
+        positions.set(item.id, { x, y })
+        right = Math.max(right, x + item.width)
+        rowHeight = Math.max(rowHeight, item.height)
+        x += item.width + ROW_GAP
+      }
+      y += rowHeight + ROW_GAP
+    }
+
+    // Move the sorted block below untouched media/notes if its new layout would cover them.
+    const movingIds = new Set(videos.map((item) => item.id))
+    const obstacles = state.items.filter((item) =>
+      item.type !== 'backdrop' && !movingIds.has(item.id) &&
+      item.x < right && item.x + item.width > anchorX,
+    )
+    let shiftY = 0
+    for (;;) {
+      const collision = obstacles.filter((item) =>
+        item.y < y + shiftY && item.y + item.height > anchorY + shiftY,
+      )
+      if (collision.length === 0) break
+      shiftY = Math.max(...collision.map((item) => item.y + item.height + ROW_GAP - anchorY))
+    }
+
+    const changed = videos.some((item) => {
+      const next = positions.get(item.id)!
+      return item.x !== next.x || item.y !== next.y + shiftY
+    })
+    if (!changed) return
+
+    set((current) => ({
+      _past: pushPast(current._past, current.items),
+      items: current.items.map((item) => {
+        const next = positions.get(item.id)
+        return next ? { ...item, x: next.x, y: next.y + shiftY } : item
       }),
       isDirty: true,
       _future: [],

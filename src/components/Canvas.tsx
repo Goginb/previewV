@@ -217,6 +217,7 @@ export const Canvas: React.FC = () => {
   const selectOne       = useCanvasStore((s) => s.selectOne)
   const setSelection    = useCanvasStore((s) => s.setSelection)
   const layoutMediaRow  = useCanvasStore((s) => s.layoutMediaRow)
+  const sortVideosByFileName = useCanvasStore((s) => s.sortVideosByFileName)
   const gridAlignTiles = useCanvasStore((s) => s.gridAlignTiles)
   const resetViewport   = useCanvasStore((s) => s.resetViewport)
   const frameAllItemsInViewport = useCanvasStore((s) => s.frameAllItemsInViewport)
@@ -1302,9 +1303,19 @@ export const Canvas: React.FC = () => {
         return
       }
 
-      if ((e.code === 'Delete' || e.code === 'Backspace') && !isTypingTarget(e)) {
+      if (e.code === 'Delete' && !isTypingTarget(e)) {
         const ids = useCanvasStore.getState().selectedIds
         if (ids.length) removeItems(ids)
+        return
+      }
+
+      if (
+        e.code === 'Backspace' && !e.repeat && !e.ctrlKey && !e.metaKey &&
+        !e.altKey && !e.shiftKey && !isTypingTarget(e)
+      ) {
+        e.preventDefault()
+        sortVideosByFileName()
+        markCanvasCommandContext()
         return
       }
 
@@ -1626,6 +1637,7 @@ export const Canvas: React.FC = () => {
     removeItems,
     selectOne,
     layoutMediaRow,
+    sortVideosByFileName,
     gridAlignTiles,
     frameAllItemsInViewport,
     pasteUsingBestSource,

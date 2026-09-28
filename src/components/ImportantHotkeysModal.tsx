@@ -17,6 +17,7 @@ const HOTKEY_GROUPS = [
     accent: 'emerald',
     items: [
       { keys: 'L', action: 'Разложить медиа в ряд' },
+      { keys: 'Backspace', action: 'Упорядочить видео по имени' },
       { keys: '\\', action: 'Выровнять плитки по сетке' },
       { keys: 'N', action: 'Создать заметку' },
       { keys: 'B', action: 'Создать backdrop' },
