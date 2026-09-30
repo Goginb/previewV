@@ -19,6 +19,7 @@ import { imageExportRegistry } from '../utils/imageExportRegistry'
 import { flushImageAnnotations } from '../utils/flushImageAnnotations'
 import { importImageFile, isRasterImportFile } from '../utils/imageImport'
 import { isTypingTarget } from '../utils/keyboard'
+import { matchesVideoFileName } from '../utils/videoSearch'
 import { localPathToMediaUrl, mediaUrlToLocalPath } from '../utils/projectSerializer'
 import {
   getNoteCreationMetrics,
@@ -704,9 +705,7 @@ export const Canvas: React.FC = () => {
     [items],
   )
   const filteredVideoSearchItems = useMemo(() => {
-    const query = videoSearchQuery.trim().toLowerCase()
-    if (!query) return videoSearchItems
-    return videoSearchItems.filter((item) => item.fileName.toLowerCase().includes(query))
+    return videoSearchItems.filter((item) => matchesVideoFileName(item.fileName, videoSearchQuery))
   }, [videoSearchItems, videoSearchQuery])
   const activeVideoSearchItem = filteredVideoSearchItems[videoSearchActiveIndex] ?? null
   const projectPathValue = currentProjectPath ?? ''

@@ -5,6 +5,7 @@ const HOTKEY_GROUPS = [
     title: 'Холст',
     accent: 'sky',
     items: [
+      { keys: 'Tab', action: 'Полный экран или окно' },
       { keys: 'Стрелки', action: 'Плавное перемещение' },
       { keys: 'A', action: 'Вписать всё в окно' },
       { keys: '. после Ю', action: 'Найти видео на холсте' },

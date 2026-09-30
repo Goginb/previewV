@@ -1770,7 +1770,7 @@ function createWindow(): void {
     height: 800,
     minWidth: 800,
     minHeight: 600,
-    frame: false,
+    frame: true,
     autoHideMenuBar: true,
     show: showImmediately,
     backgroundColor: '#09090b',
@@ -1873,6 +1873,11 @@ app.whenReady().then(() => {
   ipcMain.handle('window:set-fullscreen', (_e, enabled: unknown) => {
     if (!activeWindow) return
     applyCanvasFullscreen(activeWindow, Boolean(enabled))
+  })
+
+  ipcMain.handle('window:toggle-fullscreen', () => {
+    if (!activeWindow) return
+    applyCanvasFullscreen(activeWindow, !canvasFullscreenEnabled)
   })
 
   ipcMain.on(

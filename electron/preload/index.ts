@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getAlwaysOnTop: () => ipcRenderer.invoke('window:get-always-on-top'),
     getFullscreen: () => ipcRenderer.invoke('window:get-fullscreen'),
     setFullscreen: (enabled: boolean) => ipcRenderer.invoke('window:set-fullscreen', enabled),
+    toggleFullscreen: () => ipcRenderer.invoke('window:toggle-fullscreen'),
     moveBy: (deltaX: number, deltaY: number) =>
       ipcRenderer.send('window:move-by', { deltaX, deltaY }),
   },

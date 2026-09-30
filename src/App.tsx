@@ -223,6 +223,29 @@ const App: React.FC = () => {
   }, [])
 
   useEffect(() => {
+    const toggleWindowModeOnTab = (event: KeyboardEvent) => {
+      if (
+        event.code !== 'Tab' ||
+        event.repeat ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.altKey ||
+        event.shiftKey ||
+        isTypingTarget(event) ||
+        document.querySelector('[data-previewv-modal="true"], [role="dialog"]')
+      ) return
+
+      const windowAPI = window.electronAPI?.windowAPI
+      if (!windowAPI) return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      void windowAPI.toggleFullscreen()
+    }
+    window.addEventListener('keydown', toggleWindowModeOnTab, true)
+    return () => window.removeEventListener('keydown', toggleWindowModeOnTab, true)
+  }, [])
+
+  useEffect(() => {
     const onSettings = () => setSettingsOpen(true)
     window.addEventListener('app-open-settings', onSettings)
     return () => window.removeEventListener('app-open-settings', onSettings)

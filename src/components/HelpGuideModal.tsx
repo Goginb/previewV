@@ -205,6 +205,7 @@ const HOTKEY_GROUPS: HotkeyGroup[] = [
       { keys: 'Ctrl+R', action: 'Заблокировать компоновку холста' },
       { keys: 'Ctrl+Shift+A', action: 'Переключить Always on top' },
       { keys: 'F11', action: 'Включить или выключить полный экран' },
+      { keys: 'Tab', action: 'Переключить полноэкранный и оконный режим' },
       { keys: 'Esc', action: 'Закрыть справку или выйти из полного экрана' },
     ],
   },
