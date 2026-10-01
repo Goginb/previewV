@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Canvas } from './components/Canvas'
 import { HelpGuideModal } from './components/HelpGuideModal'
 import { ImportantHotkeysModal } from './components/ImportantHotkeysModal'
+import { WindowTitleBar } from './components/WindowTitleBar'
 import { SettingsModal } from './components/SettingsModal'
 import { DailiesImportModal } from './components/DailiesImportModal'
 import { PrmImportModal } from './components/PrmImportModal'
@@ -78,6 +79,7 @@ function syncDocumentTitle(): void {
 const App: React.FC = () => {
   const [helpOpen, setHelpOpen] = useState(false)
   const [importantHotkeysOpen, setImportantHotkeysOpen] = useState(false)
+  const [titleBarVisible, setTitleBarVisible] = useState(true)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [closePrompt, setClosePrompt] = useState<null | { fileLabel: string; busy: boolean }>(
     null,
@@ -95,8 +97,13 @@ const App: React.FC = () => {
   const getProjectDataForSave = useCanvasStore((s) => s.getProjectDataForSave)
   const syncSavedProjectState = useCanvasStore((s) => s.syncSavedProjectState)
   const theme = useUiStore((s) => s.theme)
+  const isCanvasFullscreen = useUiStore((s) => s.isCanvasFullscreen)
+  const currentProjectPath = useCanvasStore((s) => s.currentProjectPath)
+  const projectIsDirty = useCanvasStore((s) => s.isDirty)
   const brightness = useVideoColorStore((s) => s.brightness)
   const gamma = useVideoColorStore((s) => s.gamma)
+  const showTitleBar = titleBarVisible && !isCanvasFullscreen
+  const windowTitle = `${currentProjectPath ? fileLabelFromPath(currentProjectPath) : 'Untitled'}${projectIsDirty ? ' *' : ''} - PreviewV`
 
   const waitForUiPaint = useCallback((maxDelayMs = 48) => {
     return new Promise<void>((resolve) => {
@@ -223,7 +230,7 @@ const App: React.FC = () => {
   }, [])
 
   useEffect(() => {
-    const toggleWindowModeOnTab = (event: KeyboardEvent) => {
+    const toggleTitleBarOnTab = (event: KeyboardEvent) => {
       if (
         event.code !== 'Tab' ||
         event.repeat ||
@@ -231,18 +238,17 @@ const App: React.FC = () => {
         event.metaKey ||
         event.altKey ||
         event.shiftKey ||
+        useUiStore.getState().isCanvasFullscreen ||
         isTypingTarget(event) ||
         document.querySelector('[data-previewv-modal="true"], [role="dialog"]')
       ) return
 
-      const windowAPI = window.electronAPI?.windowAPI
-      if (!windowAPI) return
       event.preventDefault()
       event.stopImmediatePropagation()
-      void windowAPI.toggleFullscreen()
+      setTitleBarVisible((visible) => !visible)
     }
-    window.addEventListener('keydown', toggleWindowModeOnTab, true)
-    return () => window.removeEventListener('keydown', toggleWindowModeOnTab, true)
+    window.addEventListener('keydown', toggleTitleBarOnTab, true)
+    return () => window.removeEventListener('keydown', toggleTitleBarOnTab, true)
   }, [])
 
   useEffect(() => {
@@ -618,7 +624,8 @@ const App: React.FC = () => {
           </div>
         </div>
       )}
-      <div className="absolute inset-0 min-h-0">
+      {showTitleBar && <WindowTitleBar title={windowTitle} />}
+      <div className="absolute inset-x-0 bottom-0 min-h-0" style={{ top: showTitleBar ? 32 : 0 }}>
         <Canvas />
       </div>
     </div>

@@ -1770,7 +1770,7 @@ function createWindow(): void {
     height: 800,
     minWidth: 800,
     minHeight: 600,
-    frame: true,
+    frame: false,
     autoHideMenuBar: true,
     show: showImmediately,
     backgroundColor: '#09090b',
@@ -1875,9 +1875,19 @@ app.whenReady().then(() => {
     applyCanvasFullscreen(activeWindow, Boolean(enabled))
   })
 
-  ipcMain.handle('window:toggle-fullscreen', () => {
-    if (!activeWindow) return
-    applyCanvasFullscreen(activeWindow, !canvasFullscreenEnabled)
+  ipcMain.handle('window:minimize', (event) => {
+    BrowserWindow.fromWebContents(event.sender)?.minimize()
+  })
+
+  ipcMain.handle('window:toggle-maximize', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (!win || win.isDestroyed()) return
+    if (win.isMaximized()) win.unmaximize()
+    else win.maximize()
+  })
+
+  ipcMain.handle('window:close', (event) => {
+    BrowserWindow.fromWebContents(event.sender)?.close()
   })
 
   ipcMain.on(

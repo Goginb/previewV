@@ -7,7 +7,9 @@ export interface ElectronWindowAPI {
   getAlwaysOnTop: () => Promise<boolean>
   getFullscreen: () => Promise<boolean>
   setFullscreen: (enabled: boolean) => Promise<void>
-  toggleFullscreen: () => Promise<void>
+  minimize: () => Promise<void>
+  toggleMaximize: () => Promise<void>
+  close: () => Promise<void>
   moveBy: (deltaX: number, deltaY: number) => void
 }
 
