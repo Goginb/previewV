@@ -20,6 +20,7 @@ interface VideoTileProps {
   isSelected: boolean
   isHidden?: boolean
   isFarZoomMode?: boolean
+  shouldLoadVideo?: boolean
 }
 
 function areVideoTilePropsEqual(a: VideoTileProps, b: VideoTileProps): boolean {
@@ -28,7 +29,8 @@ function areVideoTilePropsEqual(a: VideoTileProps, b: VideoTileProps): boolean {
     a.scale === b.scale &&
     a.isSelected === b.isSelected &&
     (a.isHidden ?? false) === (b.isHidden ?? false) &&
-    (a.isFarZoomMode ?? false) === (b.isFarZoomMode ?? false)
+    (a.isFarZoomMode ?? false) === (b.isFarZoomMode ?? false) &&
+    (a.shouldLoadVideo ?? true) === (b.shouldLoadVideo ?? true)
   )
 }
 
@@ -83,7 +85,7 @@ function mixTowardWhite(hex: string, amount01: number): string {
   return `#${[nr, ng, nb].map((x) => x.toString(16).padStart(2, '0')).join('')}`
 }
 
-export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHidden, isFarZoomMode }: VideoTileProps) {
+export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHidden, isFarZoomMode, shouldLoadVideo }: VideoTileProps) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const trackRef = useRef<HTMLDivElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -94,6 +96,9 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
   const lastFrameSampleRef = useRef<null | { mediaTime: number; presentedFrames: number }>(null)
   const recoveryCooldownUntilRef = useRef(0)
   const recoveryTimeoutRef = useRef<number | null>(null)
+  const savedTimeRef = useRef(0)
+  const mediaActive = (shouldLoadVideo ?? true) && !isHidden && !isFarZoomMode
+  const [previewFrame, setPreviewFrame] = useState<string>()
 
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
@@ -372,6 +377,40 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
     }
   }, [syncFromVideo])
 
+  useLayoutEffect(() => {
+    const video = videoRef.current
+    if (!video || !mediaActive) return
+    const restoreTime = () => {
+      if (savedTimeRef.current > 0) {
+        const end = Number.isFinite(video.duration) ? Math.max(0, video.duration - 0.001) : savedTimeRef.current
+        video.currentTime = Math.min(savedTimeRef.current, end)
+      }
+    }
+    video.addEventListener('loadedmetadata', restoreTime, { once: true })
+    video.src = activeSrcUrl
+    video.load()
+    return () => {
+      video.removeEventListener('loadedmetadata', restoreTime)
+      savedTimeRef.current = Number.isFinite(video.currentTime) ? video.currentTime : 0
+      if (video.readyState >= 2 && video.videoWidth > 0) {
+        try {
+          const canvas = document.createElement('canvas')
+          const ratio = Math.min(320 / video.videoWidth, 180 / video.videoHeight, 1)
+          canvas.width = Math.max(1, Math.round(video.videoWidth * ratio))
+          canvas.height = Math.max(1, Math.round(video.videoHeight * ratio))
+          canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height)
+          setPreviewFrame(canvas.toDataURL('image/jpeg', 0.72))
+        } catch {
+          // A cached preview is optional; releasing the decoder is still required.
+        }
+      }
+      endVideoHoverAudio(video)
+      video.pause()
+      video.removeAttribute('src')
+      video.load()
+    }
+  }, [activeSrcUrl, mediaActive])
+
   useEffect(() => {
     const v = videoRef.current
     if (!v) return
@@ -384,7 +423,7 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
     }
 
     const attemptRecovery = (reason: string) => {
-      if (isHidden) return
+      if (!mediaActive || !v.hasAttribute('src')) return
       if (scrubRef.current) return
 
       const now = Date.now()
@@ -449,8 +488,9 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
       syncFromVideo()
     }
     const onStalled = () => attemptRecovery('stalled')
-    const onEmptied = () => attemptRecovery('emptied')
+    const onEmptied = () => syncFromVideo()
     const onError = () => {
+      if (!mediaActive || !v.hasAttribute('src')) return
       const current = (v.currentSrc && v.currentSrc.trim()) || activeSrcUrl
       if (current) failedSrcUrlsRef.current.add(current)
       const fallback = srcCandidates.find((src) => !failedSrcUrlsRef.current.has(src))
@@ -480,7 +520,7 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
       v.removeEventListener('emptied', onEmptied)
       v.removeEventListener('error', onError)
     }
-  }, [activeSrcUrl, isHidden, scheduleSyncAfterSeek, srcCandidates, syncFromVideo, tile.fileName, tile.id])
+  }, [activeSrcUrl, mediaActive, scheduleSyncAfterSeek, srcCandidates, syncFromVideo, tile.fileName, tile.id])
 
   const beginScrub = useCallback(() => {
     const v = videoRef.current
@@ -828,7 +868,7 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
           )}
           <video
             ref={videoRef}
-            src={activeSrcUrl}
+            poster={previewFrame}
             className="absolute inset-0 w-full h-full object-contain"
             style={{
               display: showNavigationPreview ? 'none' : undefined,
@@ -838,8 +878,13 @@ export const VideoTile = memo(function VideoTile({ tile, scale, isSelected, isHi
             loop
             muted
             playsInline
-            preload="metadata"
+            preload={mediaActive ? 'auto' : 'none'}
           />
+          {!mediaActive && !previewFrame && !showNavigationPreview && (
+            <div className="absolute inset-0 flex items-center justify-center px-3 text-center text-xs" style={{ background: previewBackground, color: hexToRgba(uiColorSoft, 0.92) }}>
+              {tile.fileName}
+            </div>
+          )}
         </div>
 
         {showNavigationPreview && (

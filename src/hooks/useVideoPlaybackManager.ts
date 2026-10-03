@@ -180,7 +180,7 @@ export function useVideoPlaybackManager(containerRef: React.RefObject<HTMLElemen
 
       for (const id of desiredSet) {
         const video = videoRegistry.get(id)
-        if (!video) {
+        if (!video || !video.hasAttribute('src')) {
           // Not registered yet (first paint / Rnd) — do not mark as "handled", retry soon.
           continue
         }

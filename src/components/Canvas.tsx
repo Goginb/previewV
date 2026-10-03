@@ -4,6 +4,7 @@ import { useCanvasStore } from '../store/canvasStore'
 import { useCanvasPanZoom, marqueeSelectActiveRef, spacePanActiveRef } from '../hooks/useCanvasPanZoom'
 import { useClampedMenuPosition } from '../hooks/useClampedMenuPosition'
 import { useVideoPlaybackManager } from '../hooks/useVideoPlaybackManager'
+import { useVideoSourceBudget } from '../hooks/useVideoSourceBudget'
 import { VideoTile } from './VideoTile'
 import { NoteTile } from './NoteTile'
 import { ImageTile } from './ImageTile'
@@ -618,6 +619,7 @@ export const Canvas: React.FC = () => {
 
   useCanvasPanZoom(containerRef)
   useVideoPlaybackManager(containerRef)
+  const loadedVideoIds = useVideoSourceBudget(containerRef)
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds])
   const hiddenItemIds = useMemo(() => {
     const set = new Set<string>()
@@ -648,6 +650,7 @@ export const Canvas: React.FC = () => {
             <VideoTile
               key={item.id}
               tile={item}
+              shouldLoadVideo={loadedVideoIds.has(item.id)}
               scale={viewport.scale}
               isSelected={sel}
               isHidden={hiddenItemIds.has(item.id)}
@@ -694,7 +697,7 @@ export const Canvas: React.FC = () => {
         }
         return null
       }),
-    [items, backdropDepthMap, hiddenItemIds, isFarZoomMode, renderItems, selectedIdSet, viewport.scale],
+    [items, backdropDepthMap, hiddenItemIds, isFarZoomMode, loadedVideoIds, renderItems, selectedIdSet, viewport.scale],
   )
   const videoSearchItems = useMemo(
     () =>
