@@ -23,10 +23,10 @@ export function splitNoteLinks(text: string): NoteTextPart[] {
   for (const match of text.matchAll(pattern)) {
     const start = match.index!
     let url = match[0]
-    // Sentence punctuation and unmatched closing brackets belong to the note.
-    url = url.replace(/[.,;!]+$/u, '')
+    // Only remove a surrounding bracket written outside the URL. Punctuation in
+    // paths and query values is valid URL data and must reach the handler intact.
     for (const [open, close] of [['(', ')'], ['[', ']'], ['{', '}']]) {
-      while (url.endsWith(close) && url.split(close).length > url.split(open).length) {
+      if (text[start - 1] === open && url.endsWith(close) && url.split(close).length > url.split(open).length) {
         url = url.slice(0, -1)
       }
     }

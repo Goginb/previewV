@@ -17,12 +17,20 @@ test('note links preserve Cyrillic, query parameters and original percent encodi
   assert.equal(parts.map((part) => part.text).join(''), text)
 })
 
-test('note links support upper-case protocols and balanced parentheses', () => {
-  const text = 'См. (HTTPS://example.com/a(b)) и cerebro:/проект?tid=1&pid=2.'
+test('note links support upper-case protocols and surrounding parentheses', () => {
+  const text = 'См. (HTTPS://example.com/a(b)) и cerebro:/проект?tid=1&pid=2'
   const parts = splitNoteLinks(text)
   assert.deepEqual(parts.filter((part) => part.url).map((part) => part.url), [
     'HTTPS://example.com/a(b)', 'cerebro:/проект?tid=1&pid=2',
   ])
+  assert.equal(parts.map((part) => part.text).join(''), text)
+})
+
+test('valid punctuation at the end of a URL is passed through unchanged', () => {
+  const urls = ['https://example.com/path.', 'http://example.com/path!', 'cerebro:/путь?filter=.;!', 'https://example.com/path)']
+  const text = urls.join('\n')
+  const parts = splitNoteLinks(text)
+  assert.deepEqual(parts.filter((part) => part.url).map((part) => part.url), urls)
   assert.equal(parts.map((part) => part.text).join(''), text)
 })
 
