@@ -3,6 +3,7 @@ import type { DeserializedProject } from './types/project'
 
 /** Window-level helpers from main (always-on-top, etc.). */
 export interface ElectronWindowAPI {
+  openExternalLink: (url: string) => Promise<boolean>
   getRuntimeInfo: () => Promise<AppRuntimeInfo>
   getAlwaysOnTop: () => Promise<boolean>
   getFullscreen: () => Promise<boolean>

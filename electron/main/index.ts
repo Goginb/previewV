@@ -18,6 +18,7 @@ import { promises as fs } from 'fs'
 import { Readable } from 'stream'
 
 import { imageTileViewSize } from '../../src/utils/tileSizing'
+import { isSupportedNoteUrl } from '../../src/utils/noteLinks'
 import {
   deserializeProject,
   isDataUrl,
@@ -1867,6 +1868,17 @@ app.whenReady().then(() => {
   void syncInstalledVersionMarker()
 
   ipcMain.handle('window:get-always-on-top', () => alwaysOnTopEnabled)
+
+  ipcMain.handle('note:open-external-link', async (_event, url: unknown) => {
+    if (!isSupportedNoteUrl(url)) return false
+    try {
+      await shell.openExternal(url)
+      return true
+    } catch (error) {
+      console.warn('[PreviewV] Failed to open note link:', error)
+      return false
+    }
+  })
 
   ipcMain.handle('window:get-fullscreen', () => canvasFullscreenEnabled)
 

@@ -1,10 +1,11 @@
-import React, { memo, useCallback, useEffect, useLayoutEffect, useRef } from 'react'
+import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Rnd } from 'react-rnd'
 import { useCanvasStore } from '../store/canvasStore'
 import { tileDomRegistry } from '../utils/tileDomRegistry'
 import { collectLiveDragTargets } from '../utils/liveDragTargets'
 import { MAX_NOTE_FONT_PX, MIN_NOTE_FONT_PX, getNoteFontPx } from '../utils/noteCreation'
 import { getNoteColor, getNoteFontFamilyCss, hexToRgba, mixHexTowardWhite } from '../utils/noteStyle'
+import { splitNoteLinks } from '../utils/noteLinks'
 import type { NoteItem } from '../types'
 
 interface NoteTileProps {
@@ -42,6 +43,9 @@ export const NoteTile = memo(function NoteTile({ note, scale, isSelected, isHidd
   const selectedIds = useCanvasStore((s) => s.selectedIds)
   const canvasLocked = useCanvasStore((s) => s.canvasLocked)
   const interactionLocked = canvasLocked || !!note.locked
+  const [isEditing, setIsEditing] = useState(note.text === '' && !interactionLocked)
+  const [linkError, setLinkError] = useState(false)
+  const textParts = useMemo(() => splitNoteLinks(note.text), [note.text])
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -73,12 +77,13 @@ export const NoteTile = memo(function NoteTile({ note, scale, isSelected, isHidd
     [note.id, updateItemsBatch],
   )
 
-  // Auto-focus the textarea when the note is first created (empty text)
+  // New empty notes and explicit editing both focus the plain-text editor.
   useEffect(() => {
-    if (note.text === '' && !interactionLocked) {
+    if (isEditing && !interactionLocked) {
       textareaRef.current?.focus()
     }
-  }, [interactionLocked, note.text])
+    if (interactionLocked) setIsEditing(false)
+  }, [interactionLocked, isEditing])
 
   const fontPx = getNoteFontPx(note)
   const canDecreaseFont = fontPx > MIN_NOTE_FONT_PX
@@ -112,7 +117,7 @@ export const NoteTile = memo(function NoteTile({ note, scale, isSelected, isHidd
 
   useLayoutEffect(() => {
     adjustHeight()
-  }, [note.text, note.fontSize, note.fontSizeTier, note.fontFamily, note.width, note.height, adjustHeight])
+  }, [isEditing, note.text, note.fontSize, note.fontSizeTier, note.fontFamily, note.width, note.height, adjustHeight])
 
   useLayoutEffect(() => {
     const body = bodyRef.current
@@ -145,6 +150,41 @@ export const NoteTile = memo(function NoteTile({ note, scale, isSelected, isHidd
   const dragHandleClassName = 'note-root-drag-handle'
   const notePreviewText = note.text.trim() || 'Empty note'
   const showNavigationPreview = !!isFarZoomMode
+  const startEditing = useCallback(() => {
+    if (interactionLocked) return
+    selectOne(note.id)
+    setLinkError(false)
+    setIsEditing(true)
+  }, [interactionLocked, note.id, selectOne])
+  const openLink = async (url: string) => {
+    setLinkError(false)
+    try {
+      const opened = await window.electronAPI?.windowAPI?.openExternalLink?.(url)
+      if (!opened) setLinkError(true)
+    } catch {
+      setLinkError(true)
+    }
+  }
+  const renderText = () => textParts.map((part, index) => part.url ? (
+    <a
+      key={index}
+      href={part.url}
+      className="note-no-drag underline cursor-pointer"
+      style={{ textUnderlineOffset: '0.12em' }}
+      draggable={false}
+      onPointerDown={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+      onTouchStart={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        void openLink(part.url!)
+      }}
+    >
+      {part.text}
+    </a>
+  ) : <React.Fragment key={index}>{part.text}</React.Fragment>)
   const getFontStep = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     if (e.ctrlKey || e.metaKey) return NOTE_FONT_STEP_CTRL
     if (e.shiftKey) return NOTE_FONT_STEP_SHIFT
@@ -315,6 +355,20 @@ export const NoteTile = memo(function NoteTile({ note, scale, isSelected, isHidd
           </span>
           <div className="flex-1" />
           <button
+            disabled={interactionLocked || showNavigationPreview}
+            className="note-no-drag mr-1 h-5 w-5 flex items-center justify-center rounded hover:bg-white/10 disabled:opacity-40"
+            title="Редактировать заметку"
+            aria-label="Редактировать заметку"
+            style={{ color: noteMutedTextColor }}
+            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
+            onClick={(e) => { e.stopPropagation(); startEditing() }}
+            onDoubleClick={(e) => e.stopPropagation()}
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="m10.5 2.5 3 3-8 8-3.5.5.5-3.5zM9 4l3 3" />
+            </svg>
+          </button>
+          <button
             disabled={interactionLocked}
             className={[
               'note-no-drag h-5 min-w-[1.25rem] px-1 flex items-center justify-center rounded border text-[10px] font-semibold transition-opacity pointer-events-auto',
@@ -382,11 +436,23 @@ export const NoteTile = memo(function NoteTile({ note, scale, isSelected, isHidd
                   fontFamily: fontFamilyCss,
                 }}
               >
-                {notePreviewText}
+                {note.text.trim() ? renderText() : notePreviewText}
               </div>
             </div>
           )}
-          <textarea
+          {!showNavigationPreview && !isEditing && (
+            <div
+              className="note-no-drag w-full max-h-full overflow-y-auto whitespace-pre-wrap text-center leading-relaxed cursor-text"
+              data-note-text-view="true"
+              style={{ fontSize: `${fontPx}px`, fontFamily: fontFamilyCss, color: noteTextColor, overflowWrap: 'anywhere' }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+              onClick={(e) => { e.stopPropagation(); startEditing() }}
+            >
+              {note.text ? renderText() : 'Type a note…'}
+            </div>
+          )}
+          {isEditing && !showNavigationPreview && <textarea
             ref={textareaRef}
             readOnly={interactionLocked}
             className={[
@@ -399,6 +465,13 @@ export const NoteTile = memo(function NoteTile({ note, scale, isSelected, isHidd
               adjustHeight()
             }}
             onFocus={() => selectOne(note.id)}
+            onBlur={() => setIsEditing(false)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.stopPropagation()
+                e.currentTarget.blur()
+              }
+            }}
             onMouseDown={(e) => e.stopPropagation()}
             onDoubleClick={(e) => e.stopPropagation()}
             placeholder="Type a note…"
@@ -412,8 +485,11 @@ export const NoteTile = memo(function NoteTile({ note, scale, isSelected, isHidd
             }}
             rows={1}
             spellCheck={false}
-          />
+          />}
         </div>
+        {linkError && <div role="alert" className="note-no-drag px-2 pb-1 text-center text-[11px] text-amber-300">
+          Не удалось открыть ссылку через системный обработчик.
+        </div>}
       </div>
     </Rnd>
   )

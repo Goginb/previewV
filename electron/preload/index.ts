@@ -3,6 +3,7 @@ import { clipboard, contextBridge, ipcRenderer } from 'electron'
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
   windowAPI: {
+    openExternalLink: (url: string) => ipcRenderer.invoke('note:open-external-link', url),
     getRuntimeInfo: () => ipcRenderer.invoke('app:get-runtime-info'),
     getAlwaysOnTop: () => ipcRenderer.invoke('window:get-always-on-top'),
     getFullscreen: () => ipcRenderer.invoke('window:get-fullscreen'),
